@@ -1,24 +1,26 @@
 import asyncio
-import time
+
 from pymongo.errors import OperationFailure, PyMongoError
-from src.services.utils.load_model_configs import get_model_configurations
+
+from globals import logger
 from models.mongo_connection import db
-from src.services.utils.logger import logger
-from globals import *
+from src.services.utils.load_model_configs import get_model_configurations
 
 model_config_model = db["modelconfigurations"]
 model_config_document = {}
+
 
 async def init_model_configuration():
     """Initializes or refreshes the model configuration document."""
     global model_config_document
     try:
         new_document = await get_model_configurations()
-        model_config_document.clear() # Clear old config before updating
+        model_config_document.clear()  # Clear old config before updating
         model_config_document.update(new_document)
         logger.info("Model configurations refreshed successfully.")
     except Exception as e:
         logger.error(f"Error refreshing model configurations: {e}")
+
 
 async def _async_change_listener():
     """The core async change stream listener."""
@@ -31,10 +33,11 @@ async def _async_change_listener():
                 await init_model_configuration()
     except OperationFailure as e:
         logger.error(f"Change stream operation failed: {e}")
-        raise # Re-raise to be caught by the sync wrapper
+        raise  # Re-raise to be caught by the sync wrapper
     except Exception as e:
         logger.error(f"An unexpected error occurred in the async listener: {e}")
         raise
+
 
 async def background_listen_for_changes():
     """An asynchronous change stream listener with a retry loop, designed to run as a background task."""
@@ -45,6 +48,7 @@ async def background_listen_for_changes():
             logger.error(f"MongoDB connection error in change stream: {e}. Reconnecting in 5 seconds...")
             await asyncio.sleep(5)
         except Exception as e:
-            logger.error(f"An unexpected error occurred in background_listen_for_changes: {e}. Restarting in 10 seconds...")
+            logger.error(
+                f"An unexpected error occurred in background_listen_for_changes: {e}. Restarting in 10 seconds..."
+            )
             await asyncio.sleep(10)
-
