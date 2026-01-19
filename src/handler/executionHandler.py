@@ -50,7 +50,9 @@ def handle_exceptions(func):
             bridge_name = body.get('name')
             is_embed = body.get('is_embed')
             user_id = body.get('user_id')
-            await send_error_to_webhook(bridge_id, org_id, error_json, error_type='Error', bridge_name=bridge_name, is_embed=is_embed, user_id=user_id)
+            thread_id = body.get('thread_id')          
+            service = body.get('service')
+            await send_error_to_webhook(bridge_id, org_id, error_json, error_type='Error', bridge_name=bridge_name, is_embed=is_embed, user_id=user_id, thread_id=thread_id, service=service)
             return JSONResponse(
                 status_code=400,
                 content=json.loads(json.dumps(error_json))

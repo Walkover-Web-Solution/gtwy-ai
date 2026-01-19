@@ -7,7 +7,7 @@ from ....services.utils.apiservice import  fetch_images_b64
 from src.services.utils.ai_middleware_format import Response_formatter
 
 
-class Antrophic(BaseService):
+class Anthropic(BaseService):
     async def execute(self):
         historyParams = {}
         tools = {}

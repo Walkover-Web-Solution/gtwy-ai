@@ -7,7 +7,7 @@ from ....db_services import metrics_service
 from .utils import validate_tool_call, tool_call_formatter, sendResponse, make_code_mapping_by_service, process_data_and_run_tools
 from src.configs.serviceKeys import ServiceKeys
 from ..openAI.runModel import openai_response_model, openai_completion
-from ..anthrophic.antrophicModelRun import anthropic_runmodel
+from ..anthropic.anthropicModelRun import anthropic_runmodel
 from ..Mistral.mistral_model_run import mistral_model_run
 from ....configs.constant import service_name
 from ..groq.groqModelRun import groq_runmodel
@@ -58,12 +58,14 @@ class BaseService:
         self.apikey_object_id = params.get('apikey_object_id')
         self.apikey_status = params.get('apikey_status')
         self.image_data = params.get('images')
+        self.audio_data = params.get('audios')
         self.tool_call_count = params.get('tool_call_count')
         self.text = params.get('text')
         self.tool_id_and_name_mapping = params.get('tool_id_and_name_mapping')
         self.batch = params.get('batch')
         self.webhook = params.get('webhook')
         self.batch_variables = params.get('batch_variables')
+        self.processed_prompts = params.get('processed_prompts')
         self.name = params.get('name')
         self.org_name = params.get('org_name')
         self.send_error_to_webhook = params.get('send_error_to_webhook')
@@ -75,6 +77,7 @@ class BaseService:
         self.web_search_filters = params.get('web_search_filters')
         self.folder_id = params.get('folder_id')
         self.bridge_configurations = params.get('bridge_configurations')
+        self.owner_id = params.get('owner_id')
 
 
     def aiconfig(self):
@@ -247,8 +250,9 @@ class BaseService:
             'llm_urls' : [{'revised_prompt': img.get('revised_prompt'), 'permanent_url': img.get('url'), "type":"image"} for img in model_response.get('data', []) if img.get('url')] or [{'revised_prompt': model_response.get('data',[{}])[0].get('revised_prompt', None), 'permanent_url': model_response.get('data',[{}])[0].get('url', None)}] if model_response.get('data',[{}])[0].get('url') else [],
             'revised_prompt' : model_response.get('data',[{}])[0].get('revised_prompt', None),
             'user_urls': [
-                *({"url": u, "type": "image"} for u in (self.image_data or [])),
-                *({"url": u, "type": "pdf"} for u in (self.files or []))
+                *({'url': u, 'type': 'image'} for u in (self.image_data or [])),
+                *({'url': u, 'type': 'pdf'} for u in (self.files or [])),
+                *({'url': u, 'type': 'audio'} for u in (self.audio_data or []))
             ],
             'AiConfig' : self.customConfig,
             "firstAttemptError" : model_response.get('firstAttemptError') or '',

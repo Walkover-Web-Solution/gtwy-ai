@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from ..services.utils.rag_utils import extract_pdf_text, extract_csv_text, extract_docx_text
 import traceback
 from ..services.utils.rag_utils import get_csv_query_type
+from ..services.utils.apiservice import fetch
 
 rag_model = db["rag_datas"]
 rag_parent_model = db["rag_parent_datas"]
@@ -172,20 +173,44 @@ async def store_in_pinecone_and_mongo(embeddings, chunks, org_id, user_id, name,
 async def get_vectors_and_text(request):
     try:
         body = await request.json()
-        org_id = request.state.profile.get("org", {}).get("id", "")
         doc_id = body.get('doc_id')
         query = body.get('query')
         top_k = body.get('top_k', 2)
         score = body.get('score') or 0.1
         
-        if query is None and doc_id is None:
-            raise HTTPException(status_code=400, detail="Query and Doc_id required.")
+        if query is None or doc_id is None:
+            raise HTTPException(status_code=400, detail="Query and doc_id required.")
+        
+        # Fetch resource details from Hippocampus API
+        hippocampus_resource_url = f'http://hippocampus.gtwy.ai/resource/{doc_id}'
+        headers = {
+            'x-api-key': Config.HIPPOCAMPUS_API_KEY
+        }
+        
+        resource_response, _ = await fetch(
+            url=hippocampus_resource_url,
+            method="GET",
+            headers=headers
+        )
+        
+        # Extract owner_id and collection_id from response
+        owner_id = resource_response.get('ownerId')
+        collection_id = resource_response.get('collectionId')
+        
+        if not owner_id:
+            raise HTTPException(status_code=400, detail="Owner ID not found in resource response.")
+        
+        # Prepare resource_to_collection_mapping if collection_id exists
+        resource_to_collection_mapping = {}
+        if collection_id:
+            resource_to_collection_mapping[doc_id] = collection_id
+        
+        # Call get_text_from_vectorsQuery with fetched data
         text = await get_text_from_vectorsQuery({
-            'Document_id': doc_id, 
-            'query': query, 
-            'org_id': org_id,
+            'resource_id': doc_id, 
+            'query': query,
             'top_k': top_k
-        }, Flag = False, score = score)
+        }, Flag = False, score = score, owner_id = owner_id, resource_to_collection_mapping = resource_to_collection_mapping)
         
         # Check if the operation was successful based on status
         success = text.get('status') == 1
@@ -198,7 +223,7 @@ async def get_vectors_and_text(request):
         
     except Exception as error:
         print(f"Error in get_vectors_and_text: {error}")
-        raise HTTPException(status_code=400, detail=error)
+        raise HTTPException(status_code=400, detail=str(error))
 
 async def get_all_docs(request):
     try:
@@ -251,88 +276,90 @@ async def delete_doc(request):
         raise HTTPException(status_code=500, detail = error)
     
 
-async def get_text_from_vectorsQuery(args, Flag = True, score = 0.1):
+async def get_text_from_vectorsQuery(args, Flag = True, score = 0.1, owner_id = None, resource_to_collection_mapping = None):
     try:
-        doc_id = args.get('Document_id')
         query = args.get('query')
-        org_id = args.get('org_id')
         top_k = args.get('top_k', 3)
-        additional_query = {}
+        ownerId = owner_id
+        # Extract resourceId from args
+        resource_id = args.get('resource_id')
         
         if query is None:
             raise HTTPException(status_code=400, detail="Query is required.")
         
-        doc_data = await rag_parent_model.find_one({
-            '_id' : ObjectId(doc_id)
-        })
+        if not resource_id:
+            raise Exception("Resource ID not found in arguments.")
         
-        if not doc_data: 
-            raise Exception("Invalid document id provided.")
+        # Get collection_id from mapping using resource_id (optional - multiple resources can share one collection)
+        if not resource_to_collection_mapping:
+            resource_to_collection_mapping = {}
         
-        if doc_data['source']['fileFormat'] == 'csv': 
-            to_search_for = await get_csv_query_type(doc_data, query)
-            additional_query['chunkType'] = to_search_for
+        collection_id = resource_to_collection_mapping.get(resource_id)
         
-        embedding = OpenAIEmbeddings(api_key=Config.OPENAI_API_KEY, model="text-embedding-3-small").embed_documents([query])
+        # Prepare Hippocampus API request
+        hippocampus_url = 'http://hippocampus.gtwy.ai/search'
+        headers = {
+            'x-api-key': Config.HIPPOCAMPUS_API_KEY,
+            'Content-Type': 'application/json'
+        }
         
-        # Query Pinecone with timing
-        start_time = time.time()
-        query_response = index.query(
-            vector=embedding[0] if isinstance(embedding, list) and len(embedding) == 1 else list(map(float, embedding)),
-            namespace=org_id,
-            filter={ "docId": doc_id, **additional_query },
-            top_k = top_k  # Adjust the number of results as needed
+        # Build payload - include collectionId only if available
+        payload = {
+            'query': query,
+            'resourceId': resource_id,
+            'ownerId': ownerId
+        }
+        
+        if collection_id:
+            payload['collectionId'] = collection_id
+        
+        # Call Hippocampus API using async fetch
+        api_response, response_headers = await fetch(
+            url=hippocampus_url,
+            method="POST",
+            headers=headers,
+            json_body=payload
         )
         
-        # Filter results based on score threshold - only include results with score >= threshold
-        # Skip filtering if Flag is True
-        if Flag:
-            filtered_matches = query_response['matches']
-        else:
-            filtered_matches = []
-            
-            for result in query_response['matches']:
-                if result['score'] >= score:
-                    filtered_matches.append(result)
+        results = api_response.get('result', [])
         
-        query_response_ids = [result['id'] for result in filtered_matches]
+        # Apply top_k limit
+        results = results[:top_k]
         
-        # Create a dictionary to map id to score and position
-        id_to_score = {result['id']: result['score'] for result in filtered_matches}
-        id_to_position = {result['id']: pos for pos, result in enumerate(filtered_matches)}
+        # Filter results based on score threshold if Flag is False
+        if not Flag:
+            results = [result for result in results if result.get('score', 0) >= score]
         
-        
-        # Query MongoDB using query_response_ids
-        mongo_query = {"_id": {"$in": [ObjectId(id) for id in query_response_ids] }}
-        cursor = rag_model.find(mongo_query)
-        
-        mongo_results = await cursor.to_list(length=None)
-        mongo_results.sort(key=lambda x: id_to_position.get(str(x.get('_id')), float('inf')))
-        
+        # Extract text and build response
         text = ""
         results_with_scores = []
-        for result in mongo_results:
-            text += result.get('data', '')
-            result_id = str(result.get('_id'))
+        
+        for result in results:
+            payload_data = result.get('payload', {})
+            content = payload_data.get('content', '')
+            text += content + "\n"
+            
             result_data = {
-                'id': result_id,
-                'data': result.get('data', '')
+                'id': result.get('id'),
+                'data': content
             }
+            
             # Only add score if Flag is False
             if not Flag:
-                result_data['score'] = id_to_score.get(result_id, 0.0)
+                result_data['score'] = result.get('score', 0.0)
+            
             results_with_scores.append(result_data)
         
         # Build response metadata based on Flag
         metadata = {"type": "RAG"}
         if not Flag:
             metadata["results_with_scores"] = results_with_scores
-            metadata["similarity_scores"] = [{'id': result['id'], 'score': result['score']} for result in filtered_matches]
+            metadata["similarity_scores"] = [{'id': result['id'], 'score': result['score']} for result in results]
         else:
             metadata["results"] = [{'id': item['id'], 'data': item['data']} for item in results_with_scores]
         
         return {
-            'response': text,
+            'response': text.strip(),
             'metadata': metadata,
             'status': 1
         }

@@ -24,6 +24,7 @@ async def uploadDoc(file: Union[bytes, str, BinaryIO], folder: str = 'uploads', 
     Returns:
         str: GCP URL of uploaded file
     """
+    filename = None  # Initialize filename to avoid UnboundLocalError
     try:
         # Setup GCP credentials and client
         credentials_dict = json.loads(Config.GCP_CREDENTIALS)

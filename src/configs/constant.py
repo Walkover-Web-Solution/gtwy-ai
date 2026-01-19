@@ -72,3 +72,7 @@ new_agent_service = {
         "ai_ml": "gpt-oss-20b",
         "grok": "grok-4-fast"
 }
+
+inbuild_tools = {
+    "Gtwy_Web_Search":"Gtwy_Web_Search"
+}

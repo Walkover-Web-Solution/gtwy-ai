@@ -5,10 +5,11 @@ from src.configs.constant import service_name
 import json
 import uuid
 from ...cache_service import store_in_cache
-from src.services.commonServices.openAI.openai_run_batch import create_batch_file, process_batch_file
 from src.configs.constant import redis_keys
+from .groq_run_batch import create_batch_file, process_batch_file
 
-class OpenaiBatch(BaseService):
+
+class GroqBatch(BaseService):
     async def batch_execute(self):
         results = []
         message_mappings = []
@@ -27,29 +28,41 @@ class OpenaiBatch(BaseService):
                     "message": f"batch_variables array length ({len(batch_variables)}) must match batch array length ({len(self.batch)})"
                 }
         
-        # Assume "self.batch" is the list of messages we want to process
+        # Construct batch requests in OpenAI format (Groq is OpenAI-compatible)
         for idx, message in enumerate(self.batch):
-            # Copy all keys from self.customConfig into the body
-            body_data = self.customConfig
-            
             # Generate a unique ID for each request
             custom_id = str(uuid.uuid4())
 
-            # Add messages array with processed system prompt and user message
-            body_data["messages"] = [
-                {"role": "system", "content": self.processed_prompts[idx]},
-                {"role": "user", "content": message}
-            ]
-
-            # Construct one JSONL line for each message
+            # Construct OpenAI-compatible request
             request_obj = {
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": body_data
+                "body": {
+                    "model": self.model,
+                    "messages": []
+                }
             }
+            
+            # Add processed system message 
+            request_obj["body"]["messages"].append({
+                "role": "system",
+                "content": self.processed_prompts[idx]
+            })
+            
+            # Add user message
+            request_obj["body"]["messages"].append({
+                "role": "user",
+                "content": message
+            })
+            
+            # Add other config from customConfig (like temperature, max_tokens, etc.)
+            if self.customConfig:
+                for key, value in self.customConfig.items():
+                    if key not in ['messages', 'prompt', 'model']:
+                        request_obj["body"][key] = value
 
-            # Serialize to JSON string
+            # Serialize to JSON string (one line per request for JSONL)
             results.append(json.dumps(request_obj))
             
             # Store message mapping for response
@@ -64,31 +77,18 @@ class OpenaiBatch(BaseService):
             
             message_mappings.append(mapping_item)
 
+        # Upload batch file and create batch job using Groq's native library
         batch_input_file = await create_batch_file(results, self.apikey)
         batch_file = await process_batch_file(batch_input_file, self.apikey)
+        
         batch_id = batch_file.id
         batch_json = {
             "id": batch_file.id,
-            "completion_window": batch_file.completion_window,
-            "created_at": batch_file.created_at,
-            "endpoint": batch_file.endpoint,
-            "input_file_id": batch_file.input_file_id,
-            "object": batch_file.object,
             "status": batch_file.status,
-            "cancelled_at": batch_file.cancelled_at,
-            "cancelling_at": batch_file.cancelling_at,
-            "completed_at": batch_file.completed_at,
-            "error_file_id": batch_file.error_file_id,
-            "errors": batch_file.errors,
-            "expires_at": batch_file.expires_at,
-            "metadata": batch_file.metadata,
-            "request_counts": {
-                "completed": batch_file.request_counts.completed,
-                "failed": batch_file.request_counts.failed,
-                "total": batch_file.request_counts.total
-            },
+            "created_at": batch_file.created_at,
+            "model": self.model,
             "apikey": self.apikey,
-            "webhook" : self.webhook,
+            "webhook": self.webhook,
             "batch_variables": batch_variables,
             "custom_id_mapping": {item["custom_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service
@@ -97,7 +97,7 @@ class OpenaiBatch(BaseService):
         await store_in_cache(cache_key, batch_json, ttl = 86400)
         return {
             "success": True,
-            "message": "Response will be successfully sent to the webhook wihtin 24 hrs.",
+            "message": "Response will be successfully sent to the webhook within 24 hrs.",
             "batch_id": batch_id,
             "messages": message_mappings
         }

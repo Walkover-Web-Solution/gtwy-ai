@@ -98,6 +98,6 @@ pandas
 PyPDF2>=3.0.1
 asyncpg>=0.30.0
 atatus>=1.6.1
-google-genai==1.46.0
+google-genai==1.56.0
 Pillow>=10.0.0
 tiktoken>=0.7.0

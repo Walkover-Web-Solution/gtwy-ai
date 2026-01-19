@@ -11,10 +11,14 @@ import re
 from src.configs.model_configuration import model_config_document
 import jwt
 from ..commonServices.openAI.openai_batch import OpenaiBatch
+from ..commonServices.Google.gemini_batch import GeminiBatch
+from ..commonServices.anthropic.anthropic_batch import AnthropicBatch
+from ..commonServices.groq.groq_batch import GroqBatch
+from ..commonServices.Mistral.mistral_batch import MistralBatch
 from ..commonServices.openAI.openai_response import OpenaiResponse
 from ..commonServices.groq.groqCall import Groq
 from ..commonServices.grok.grokCall import Grok
-from ..commonServices.anthrophic.antrophicCall import Antrophic
+from ..commonServices.anthropic.anthropicCall import Anthropic
 from ..commonServices.openRouter.openRouter_call import OpenRouter
 from ..commonServices.Mistral.mistral_call import Mistral
 from ...configs.constant import service_name
@@ -230,7 +234,7 @@ class Helper:
         elif service == service_name['gemini']:
             class_obj = GeminiHandler(params)
         elif service == service_name['anthropic']:
-            class_obj = Antrophic(params)
+            class_obj = Anthropic(params)
         elif service == service_name['groq']:
             class_obj = Groq(params)
         elif service == service_name['grok']:
@@ -300,15 +304,12 @@ class Helper:
         return usage
     
     async def create_service_handler_for_batch(params, service):
+        # Currently only supports openai and anthropic
         class_obj = None
         if service == service_name['openai']:
             class_obj = OpenaiBatch(params)
-        # elif service == service_name['gemini']:
-        #     class_obj = GeminiHandler(params)
-        # elif service == service_name['anthropic']:
-        #     class_obj = Antrophic(params)
-        # elif service == service_name['groq']:
-        #     class_obj = Groq(params)
+        elif service == service_name['anthropic']:
+            class_obj = AnthropicBatch(params)
         else:
             raise ValueError(f"Unsupported batch service: {service}")
             
@@ -323,7 +324,19 @@ class Helper:
         return class_obj
     
     def add_doc_description_to_prompt(prompt, rag_data):
-        prompt += '\n Available Knowledge Base :- Here are the available documents to get data when needed call the function get_knowledge_base_data: \n' +  '\n'.join([f"name : {data.get('name')}, description : {data.get('description')},  doc_id : {data.get('_id')} \n" for data in rag_data])    
+        prompt += '\n Available Knowledge Base :- Here are the available documents to get data when needed call the function get_knowledge_base_data: \n'
+        
+        for idx, data in enumerate(rag_data, 1):
+            # Skip if data is not a dictionary
+            if not isinstance(data, dict):
+                continue
+                
+            resource_id = data.get('resource_id', '')
+            resource_description = data.get('description', 'No description available')
+            
+            prompt += f"{idx}. Resource ID: {resource_id}\n"
+            prompt += f"   Description: {resource_description}\n\n"
+        
         return prompt
     
     def append_tone_and_response_style_prompts(prompt, tone, response_style):

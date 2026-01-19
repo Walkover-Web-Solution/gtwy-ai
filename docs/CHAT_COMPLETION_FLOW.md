@@ -197,7 +197,7 @@ The `getConfiguration` function assembles:
 **Service Mapping:**
 - `openai` → `UnifiedOpenAICase`
 - `gemini` → `GeminiHandler`
-- `anthropic` → `Antrophic`
+- `anthropic` → `Anthropic`
 - `groq` → `Groq`
 - `openai_response` → `OpenaiResponse`
 - `open_router` → `OpenRouter`

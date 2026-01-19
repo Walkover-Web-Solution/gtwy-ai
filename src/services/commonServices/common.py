@@ -34,7 +34,6 @@ from src.services.utils.common_utils import (
     create_latency_object,
     create_history_params,
     add_files_to_parse_data,
-    orchestrator_agent_chat,
     process_background_tasks_for_playground,
     process_variable_state,
     handle_agent_transfer,
@@ -45,7 +44,6 @@ from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
 app = FastAPI()
 from src.services.utils.helper import Helper
-from src.services.commonServices.testcases import run_testcases as run_bridge_testcases
 from globals import *
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.configs.constant import redis_keys
@@ -178,7 +176,8 @@ async def chat(request_body):
 
         # Handle missing variables
         if missing_vars:
-            send_error(parsed_data['bridge_id'], parsed_data['org_id'], missing_vars, error_type='Variable', bridge_name=parsed_data.get('name'), is_embed=parsed_data.get('is_embed'), user_id=parsed_data.get('user_id'))
+            send_error(parsed_data['bridge_id'], parsed_data['org_id'], missing_vars, error_type='Variable', bridge_name=parsed_data.get('name'), is_embed=parsed_data.get('is_embed'), user_id=parsed_data.get('user_id'),thread_id=parsed_data.get('thread_id'),     
+        service=parsed_data.get('service') )
         
         # Step 8: Configure Custom Settings
         custom_config = await configure_custom_settings(
@@ -329,7 +328,8 @@ async def chat(request_body):
 
 
         if original_error:
-            send_error(parsed_data['bridge_id'], parsed_data['org_id'], original_error, error_type='retry_mechanism', bridge_name=parsed_data.get('name'), is_embed=parsed_data.get('is_embed'), user_id=parsed_data.get('user_id'))
+            send_error(parsed_data['bridge_id'], parsed_data['org_id'], original_error, error_type='retry_mechanism', bridge_name=parsed_data.get('name'), is_embed=parsed_data.get('is_embed'), user_id=parsed_data.get('user_id'), thread_id=parsed_data.get('thread_id'),      
+        service=parsed_data.get('service') )
         
         if parsed_data['configuration']['type'] == 'chat':
             if parsed_data['is_rich_text'] and parsed_data['bridgeType'] and parsed_data['reasoning_model'] == False:
@@ -413,6 +413,7 @@ async def chat(request_body):
             error_object = {
                 "success": False,
                 "error": combined_error_string,
+                "message_id": parsed_data.get('message_id')
             }
         else:
             # Single error case
@@ -420,6 +421,7 @@ async def chat(request_body):
             error_object = {
                 "success": False,
                 "error": error_string,
+                "message_id": parsed_data.get('message_id')
             }
         if parsed_data['is_playground'] and parsed_data['body']['bridge_configurations'].get('playground_response_format'):
             await sendResponse(parsed_data['body']['bridge_configurations']['playground_response_format'], error_object, success=False, variables=parsed_data.get('variables',{}))
@@ -514,7 +516,54 @@ async def batch(request_body):
         parsed_data = parse_request_body(request_body)
         if parsed_data['batch_webhook'] is None:
             raise ValueError("webhook is required")
-        #  add defualt varaibles in prompt eg : time and date
+        
+        # Validate batch_variables if provided
+        batch_variables = parsed_data.get('batch_variables')
+        if batch_variables is not None:
+            if not isinstance(batch_variables, list):
+                raise ValueError("batch_variables must be an array")
+            if len(batch_variables) != len(parsed_data['batch']):
+                raise ValueError(f"batch_variables array length ({len(batch_variables)}) must match batch array length ({len(parsed_data['batch'])})")
+        
+        # Step 2: Process prompts with variable replacement for each batch message
+        original_prompt = parsed_data['configuration'].get('prompt', '')
+        processed_prompts = []
+        all_missing_vars = {}
+        
+        if batch_variables is not None:
+            for idx, variables in enumerate(batch_variables):
+                # Replace variables in prompt for each message
+                # If a variable is not provided, the placeholder remains in the prompt
+                processed_prompt, missing_vars = Helper.replace_variables_in_prompt(
+                    original_prompt, 
+                    variables
+                )
+                processed_prompts.append(processed_prompt)
+                
+                # Collect missing variables from all batch items
+                if missing_vars:
+                    for key, value in missing_vars.items():
+                        if key not in all_missing_vars:
+                            all_missing_vars[key] = value
+        else:
+            # No batch_variables provided, use original prompt for all messages
+            for _ in parsed_data['batch']:
+                processed_prompts.append(original_prompt)
+        
+        # Send alert if there are any missing variables across all batch items
+        if all_missing_vars:
+            send_error(
+                parsed_data['bridge_id'], 
+                parsed_data['org_id'], 
+                all_missing_vars, 
+                error_type='Variable', 
+                bridge_name=parsed_data.get('name'), 
+                is_embed=parsed_data.get('is_embed'), 
+                user_id=parsed_data.get('user_id')
+            )
+        
+        # Store processed prompts in parsed_data
+        parsed_data['processed_prompts'] = processed_prompts
         
         # Step 3: Load Model Configuration
         model_config, custom_config, model_output_config = await load_model_configuration(
@@ -553,17 +602,6 @@ async def batch(request_body):
     except Exception as error:
         traceback.print_exc()
         raise ValueError(error)
-    
-    
-async def run_testcases(request_body):
-    try:
-        parsed_data = parse_request_body(request_body)
-        org_id = request_body['state']['profile']['org']['id']
-        result = await run_bridge_testcases(parsed_data, org_id, parsed_data['body']['bridge_id'], chat)
-        return JSONResponse(content={'success': True, 'response': {'testcases_result': dict(result)}})
-    except Exception as error:
-        logger.error(f'Error in running testcases, {str(error)}, {traceback.format_exc()}')
-        return JSONResponse(status_code=400, content={'success': False, 'error': str(error)})
     
 
 @handle_exceptions
@@ -613,11 +651,11 @@ async def image(request_body):
             raise ValueError(result)
 
         # Create latency object using utility function
+        if result.get('response') and result['response'].get('data'):
+            result['response']['data']['id'] = parsed_data['message_id']
+        await sendResponse(parsed_data['response_format'], result["response"], success=True, variables=parsed_data.get('variables',{}))
         latency = create_latency_object(timer, params)
         if not parsed_data['is_playground']:
-            if result.get('response') and result['response'].get('data'):
-                result['response']['data']['id'] = parsed_data['message_id']
-            await sendResponse(parsed_data['response_format'], result["response"], success=True, variables=parsed_data.get('variables',{}))
             # Update usage metrics for successful API calls
             update_usage_metrics(parsed_data, params, latency, result=result, success=True)
             # Process background tasks (handles both transfer and non-transfer cases)
@@ -636,13 +674,35 @@ async def image(request_body):
                     parsed_data['sub_thread_id'] = thread_info['sub_thread_id']
             
             # Create latency object and update usage metrics
-            latency = create_latency_object(timer, params) if 'params' in locals() and params else None
-            if latency:
-                update_usage_metrics(parsed_data, params, latency, error=error, success=False)
+            latency = create_latency_object(timer, params)
+            update_usage_metrics(parsed_data, params, latency, error=error, success=False)
             
             # Create history parameters
             parsed_data['historyParams'] = create_history_params(parsed_data, error, class_obj, thread_info if 'thread_info' in locals() else None)
-            await sendResponse(parsed_data['response_format'], result.get("modelResponse", str(error)), variables=parsed_data['variables']) if parsed_data['response_format']['type'] != 'default' else None
+            await sendResponse(parsed_data['response_format'], result.get("error", str(error)), variables=parsed_data['variables']) if parsed_data['response_format']['type'] != 'default' else None
             # Process background tasks for error handling
             await process_background_tasks_for_error(parsed_data, error)
-        raise ValueError(error)
+        # Check for a chained exception and create a structured error object
+        if error.__cause__:
+            # Combine both initial and fallback errors into a single string
+            combined_error_string = (
+                f"Initial Error: {str(error.__cause__)} (Type: {type(error.__cause__).__name__}). "
+                f"Fallback Error: {str(error)} (Type: {type(error).__name__}). "
+                f"For more support contact us at support@gtwy.ai"
+            )
+            error_object = {
+                "success": False,
+                "error": combined_error_string,
+                "message_id": parsed_data.get('message_id')
+            }
+        else:
+            # Single error case
+            error_string = f"{str(error)} (Type: {type(error).__name__}). For more support contact us at support@gtwy.ai"
+            error_object = {
+                "success": False,
+                "error": error_string,
+                "message_id": parsed_data.get('message_id')
+            }
+        if parsed_data['is_playground'] and parsed_data['body']['bridge_configurations'].get('playground_response_format'):
+            await sendResponse(parsed_data['body']['bridge_configurations']['playground_response_format'], error_object, success=False, variables=parsed_data.get('variables',{}))
+        raise ValueError(error_object)

@@ -49,8 +49,10 @@ async def add_configuration_data_to_body(request: Request):
             primary_config = bridge_configurations[target_bridge_id]
         else:
             primary_config = next(iter(bridge_configurations.values()))
-        if not isinstance(primary_config.get("images"), list):
+        if not isinstance(primary_config.get("images"), list) and not isinstance(body.get("images"), list):
             primary_config["images"] = []
+        if not isinstance(primary_config.get("files"), list) and not isinstance(body.get("files"), list):
+            primary_config["files"] = []
         body.update(primary_config)
         body['bridge_configurations'] = bridge_configurations
         service = body.get("service")

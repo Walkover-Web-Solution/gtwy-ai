@@ -23,19 +23,35 @@ class Mistral(BaseService):
                 historyParams['type'] = 'assistant'
         else:
             conversation = ConversationService.create_mistral_ai_conversation(self.configuration.get('conversation'), self.memory).get('messages', [])
+            
             if self.reasoning_model:
                 self.customConfig["messages"] =  conversation + ([{"role": "user", "content": self.user}] if self.user else []) 
             else:
-                if not self.image_data:
+                # Check if we have any multimodal content (images or audio)
+                has_multimodal = self.image_data or self.audio_data
+                
+                if not has_multimodal:
                     self.customConfig["messages"] = [ {"role": "system", "content": self.configuration['prompt']}] + conversation + ([{"role": "user", "content": self.user}] if self.user else []) 
                 else:
                     self.customConfig["messages"] = [{"role": "system", "content": self.configuration['prompt']}] + conversation
+                    user_content = []
+                    
+                    # Add images if present
+                    if self.image_data and isinstance(self.image_data, list):
+                        for image_url in self.image_data:
+                            user_content.append({"type": "image_url", "image_url": {"url": image_url}})
+                    
+                    # Add audio if present 
+                    if self.audio_data and isinstance(self.audio_data, list):
+                        for audio_url in self.audio_data:
+                            user_content.append({"type": "input_audio", "input_audio": audio_url})
+                    
+                    # Add user text at the end
                     if self.user:
-                        user_content = [{"type": "text", "text": self.user}]
-                        if isinstance(self.image_data, list):
-                            for image_url in self.image_data:
-                                user_content.append({"type": "image_url", "image_url": {"url": image_url}})
-                        self.customConfig["messages"].append({'role': 'user', 'content': user_content})
+                        user_content.append({"type": "text", "text": self.user})
+                    
+                    self.customConfig["messages"].append({'role': 'user', 'content': user_content})
+                
                 self.customConfig =self.service_formatter(self.customConfig, service_name['mistral'])
                 if 'tools' not in self.customConfig and 'parallel_tool_calls' in self.customConfig:
                     del self.customConfig['parallel_tool_calls']
