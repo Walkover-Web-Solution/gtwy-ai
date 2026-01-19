@@ -47,6 +47,7 @@ from src.services.utils.helper import Helper
 from globals import *
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.configs.constant import redis_keys
+from .baseService.utils import unknown_error_handler
 
 configurationModel = db["configurations"]
 
@@ -185,8 +186,21 @@ async def chat(request_body):
             parsed_data, custom_config, model_output_config, thread_info, timer, memory, send_error_to_webhook, bridge_configurations
         )
         # Step 10: json_schema service conversion
-        if 'response_type' in custom_config and custom_config['response_type'].get('type') == 'json_schema':
-            custom_config['response_type'] = restructure_json_schema(custom_config['response_type'], parsed_data['service'])
+        response_type = custom_config.get('response_type')
+        if isinstance(response_type, dict) and response_type.get('type') == 'json_schema':
+            if 'json_schema' in response_type:
+                custom_config['response_type'] = restructure_json_schema(response_type, parsed_data['service'])
+            else:
+                error_data = {
+                    "bridge_id": parsed_data.get('bridge_id'),
+                    "service": parsed_data.get('service'),
+                    "response_type": response_type,
+                    "error": "json schema key not found in response_type"
+                }
+                logger.warning(
+                    f"response_type missing json_schema before restructure: {error_data}"
+                )
+                await unknown_error_handler(error_data)
         
         
         # Execute with retry mechanism
@@ -281,8 +295,19 @@ async def chat(request_body):
                         parsed_data, fallback_custom_config, fallback_model_output_config, thread_info, timer, memory, send_error_to_webhook, bridge_configurations
                     )
                     # Step 9 : json_schema service conversion
-                    if 'response_type' in fallback_custom_config and fallback_custom_config['response_type'].get('type') == 'json_schema':
-                        fallback_custom_config['response_type'] = restructure_json_schema(fallback_custom_config['response_type'], parsed_data['service'])
+                    fallback_response_type = fallback_custom_config.get('response_type')
+                    if isinstance(fallback_response_type, dict) and fallback_response_type.get('type') == 'json_schema':
+                        if 'json_schema' in fallback_response_type:
+                            fallback_custom_config['response_type'] = restructure_json_schema(
+                                fallback_response_type,
+                                parsed_data['service'],
+                            )
+                        else:
+                            logger.warning(
+                                f"fallback response_type missing json_schema before restructure: "
+                                f"bridge_id={parsed_data.get('bridge_id')} service={parsed_data.get('service')} "
+                                f"response_type_keys={list(fallback_response_type.keys())}"
+                            )
                     
                     # Create new service handler for the fallback service
                     class_obj = await Helper.create_service_handler(params, parsed_data['service'])

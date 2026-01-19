@@ -518,3 +518,11 @@ async def save_files_to_redis(thread_id, sub_thread_id, bridge_id, files):
             await store_in_cache(cache_key, files, 604800)
     else:
         await store_in_cache(cache_key, files, 604800)
+
+async def unknown_error_handler(data):
+    return await fetch(
+            url="https://flow.sokt.io/func/scrirBtsbXm4",
+            method="POST",
+            headers={},
+            json_body=data
+        )
