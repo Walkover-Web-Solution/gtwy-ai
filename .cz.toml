@@ -1,0 +1,48 @@
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$version"
+update_changelog_on_bump = true
+version_files = [
+    "pyproject.toml:version"
+]
+
+[tool.commitizen.customize]
+message_template = "{{change_type}}:{% if scope %} {{scope}}:{% endif %} {{message}}"
+example = "feat: add new feature"
+schema = """
+<type>(<scope>): <subject>
+<BLANK LINE>
+<body>
+<BLANK LINE>
+<footer>
+"""
+schema_pattern = "^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\\(\\w+\\))?!?: .{1,100}"
+
+[[tool.commitizen.customize.questions]]
+type = "list"
+name = "change_type"
+message = "Select the type of change you are committing"
+choices = [
+    {value = "feat", name = "feat: A new feature"},
+    {value = "fix", name = "fix: A bug fix"},
+    {value = "docs", name = "docs: Documentation changes"},
+    {value = "style", name = "style: Code style changes (formatting, etc)"},
+    {value = "refactor", name = "refactor: Code refactoring"},
+    {value = "perf", name = "perf: Performance improvements"},
+    {value = "test", name = "test: Adding or updating tests"},
+    {value = "build", name = "build: Build system or dependencies"},
+    {value = "ci", name = "ci: CI/CD changes"},
+    {value = "chore", name = "chore: Other changes (maintenance)"},
+    {value = "revert", name = "revert: Revert a previous commit"}
+]
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "scope"
+message = "What is the scope of this change? (press enter to skip)"
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "message"
+message = "Write a short description of the change"
