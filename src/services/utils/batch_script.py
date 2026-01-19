@@ -1,20 +1,17 @@
-from ..cache_service import find_in_cache_with_prefix, delete_in_cache
-from openai import AsyncOpenAI
+from ..cache_service import find_in_cache_with_prefix, delete_in_cache, acquire_lock, release_lock
 from ..utils.send_error_webhook import create_response_format
 from ..commonServices.baseService.baseService import sendResponse
 import asyncio
-import json
-import httpx
-import certifi
-from .ai_middleware_format import  Batch_Response_formatter
+from .ai_middleware_format import process_batch_results
 from src.configs.constant import redis_keys
+from .batch_script_utils import get_batch_result_handler
 from globals import *
+
 
 async def repeat_function():
     while True:
         await check_batch_status()
         await asyncio.sleep(900)
-
 
 
 async def check_batch_status():
@@ -23,86 +20,73 @@ async def check_batch_status():
         batch_ids = await find_in_cache_with_prefix('batch_')
         if batch_ids is None:
             return
-        for id in batch_ids:
-            apikey = id.get('apikey')
-            webhook = id.get('webhook')
-            batch_id = id.get('id')
-            batch_variables = id.get('batch_variables')  # Retrieve batch_variables from cache
-            custom_id_mapping = id.get('custom_id_mapping', {})  # Get mapping of custom_id to index
+        
+        for batch_data in batch_ids:
+            apikey = batch_data.get('apikey')
+            webhook = batch_data.get('webhook')
+            batch_id = batch_data.get('id')
+            batch_variables = batch_data.get('batch_variables')
+            custom_id_mapping = batch_data.get('custom_id_mapping', {})
+            service = batch_data.get('service')
             
-            if webhook.get('url') is not None:
-                response_format = create_response_format(webhook.get('url'), webhook.get('headers'))
-            
-            # Create httpx client with proper production configuration
-            limits = httpx.Limits(
-                max_keepalive_connections=5,
-                max_connections=10,
-                keepalive_expiry=30.0
-            )
-            
-            http_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(60.0, connect=10.0),
-                transport=httpx.AsyncHTTPTransport(
-                    retries=3,
-                    verify=certifi.where()
-                ),
-                limits=limits,
-                follow_redirects=True
-            )
+            # Try to acquire lock for this batch
+            lock_acquired = await acquire_lock(batch_id)
+            if not lock_acquired:
+                logger.info(f"Batch {batch_id} is already being processed by another server, skipping...")
+                continue
             
             try:
-                openAI = AsyncOpenAI(api_key=apikey, http_client=http_client)
-                batch = await openAI.batches.retrieve(batch_id)
-                if batch.status == "completed":
-                    file = batch.output_file_id or batch.error_file_id
-                    file_response = None
-                    if file is not None:
-                        file_response = await openAI.files.content(file)
-                        file_content = await asyncio.to_thread(file_response.read)
-                        try:
-                            # Split the data by newline and parse each JSON object separately
-                            file_content = [json.loads(line) for line in file_content.decode('utf-8').splitlines() if line.strip()]
-                        except json.JSONDecodeError as e:
-                            print(f"JSON decoding error: {e}")
-                            file_content = None
-                        for index, content in enumerate(file_content):
-                            response = content.get("response", {})
-                            response_body = response.get("body", {})
-                            status_code = response.get("status_code", 200)
-                            custom_id = content.get("custom_id", None)
+                if webhook.get('url') is not None:
+                    response_format = create_response_format(webhook.get('url'), webhook.get('headers'))
+                
+                try:
+                    # Get the appropriate handler for this service
+                    batch_result_handler = get_batch_result_handler(service)
+                    
+                    # Call the service-specific handler
+                    results, is_completed = await batch_result_handler(batch_id, apikey)
+                    
+                    if is_completed:
+                        # Batch has reached a terminal state (completed, failed, expired, cancelled)
+                        if results:
+                            # Process and format the results (could be success or error results)
+                            formatted_results = await process_batch_results(
+                                results, service, batch_id, batch_variables, custom_id_mapping
+                            )
                             
-                            # Check if response contains an error (status_code >= 400 or error in body)
-                            if status_code >= 400 or "error" in response_body:
-                                # Handle error response
-                                formatted_content = {
-                                    "custom_id": custom_id,
-                                    "batch_id": batch_id,
-                                    "error": response_body.get("error", response_body),
-                                    "status_code": status_code
-                                }
-                            else:
-                                # Handle successful response
-                                formatted_content = await Batch_Response_formatter(response=response_body, service='openai_batch', tools={}, type='chat', images=None, batch_id=batch_id, custom_id=custom_id)
+                            # Check if all responses are errors
+                            has_success = any(
+                                item.get("status_code") is None or item.get("status_code", 200) < 400 
+                                for item in formatted_results
+                            )
                             
-                            # Add batch_variables to response if available
-                            if batch_variables is not None and custom_id in custom_id_mapping:
-                                variable_index = custom_id_mapping[custom_id]
-                                if variable_index < len(batch_variables):
-                                    formatted_content["variables"] = batch_variables[variable_index]
-                            
-                            file_content[index] = formatted_content
+                            await sendResponse(response_format, data=formatted_results, success=has_success)
+                        else:
+                            # No results but marked as completed - send generic error
+                            error_response = [{
+                                "batch_id": batch_id,
+                                "error": {
+                                    "message": "Batch completed but no results were returned",
+                                    "type": "no_results"
+                                },
+                                "status_code": 500
+                            }]
+                            await sendResponse(response_format, data=error_response, success=False)
                         
-                        # Check if all responses are errors
-                        has_success = any(item.get("status_code") is None or item.get("status_code", 200) < 400 for item in file_content)
+                        # Delete from cache after sending webhook
+                        cache_key = f"{redis_keys['batch_']}{batch_id}"
+                        await delete_in_cache(cache_key)
+                        logger.info(f"Batch {batch_id} completed and removed from cache")
+                    else:
+                        # Batch still in progress, will check again on next poll
+                        logger.info(f"Batch {batch_id} still in progress")
                         
-                        await sendResponse(response_format, data=file_content, success=has_success)
-                    cache_key = f"{redis_keys['batch_']}{batch_id}"
-                    await delete_in_cache(cache_key)
+                except Exception as error:
+                    logger.error(f"Error processing batch {batch_id}: {str(error)}")
             finally:
-                # Ensure http_client is properly closed
-                await http_client.aclose()
+                # Always release the lock, even if an error occurred
+                await release_lock(batch_id)
+
+
     except Exception as error:
         logger.error(f"An error occurred while checking the batch status: {str(error)}")
-        
-    
-    

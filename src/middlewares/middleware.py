@@ -93,6 +93,14 @@ async def jwt_middleware(request: Request):
                     request.state.embed = False
                 request.state.folder_id = check_token.get('extraDetails', {}).get('folder_id', None)
                 request.state.user_id = str(check_token['user'].get('id'))
+                # Set owner_id in profile to match interface middleware pattern
+                org_id = request.state.org_id
+                user_id = request.state.user_id
+                request.state.profile["owner_id"] = org_id
+                if request.state.embed:
+                    request.state.profile["owner_id"] = org_id + "_" + user_id
+                elif request.state.folder_id:
+                    request.state.profile["owner_id"] = org_id + "_" + request.state.folder_id + "_" + user_id
                 return 
             
             raise HTTPException(status_code=404, detail="unauthorized user")        

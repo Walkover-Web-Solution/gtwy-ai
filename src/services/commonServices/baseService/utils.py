@@ -12,9 +12,10 @@ from src.controllers.rag_controller import get_text_from_vectorsQuery
 from globals import *
 from src.db_services.ConfigurationServices import get_bridges_without_tools, update_bridge
 from src.services.utils.ai_call_util import call_gtwy_agent
+from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 from globals import *
 from src.services.cache_service import store_in_cache, find_in_cache, client, REDIS_PREFIX
-from src.configs.constant import redis_keys
+from src.configs.constant import redis_keys,inbuild_tools
 
 def clean_json(data):
     """Recursively remove keys with empty string, empty list, or empty dictionary."""
@@ -227,7 +228,14 @@ async def process_data_and_run_tools(codes_mapping, self):
             if not tool_data.get("response"):
                 # if function is present in db/NO response, create task for async processing
                 if self.tool_id_and_name_mapping[name].get('type') == 'RAG':
-                    task = get_text_from_vectorsQuery({**tool_data.get("args"), "org_id": self.org_id}, Flag = True) 
+                    # Get the resource_to_collection_mapping from tool_id_and_name_mapping
+                    resource_to_collection_mapping = self.tool_id_and_name_mapping[name].get('resource_to_collection_mapping', {})
+                    task = get_text_from_vectorsQuery(
+                        {**tool_data.get("args"), "org_id": self.org_id}, 
+                        Flag=True, 
+                        owner_id=self.owner_id,
+                        resource_to_collection_mapping=resource_to_collection_mapping
+                    ) 
                 elif self.tool_id_and_name_mapping[name].get('type') == 'AGENT':
                     agent_args = {
                         "org_id": self.org_id, 
@@ -252,6 +260,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                         agent_args["bridge_configurations"] = self.bridge_configurations
                     
                     task = call_gtwy_agent(agent_args)
+                elif self.tool_id_and_name_mapping[name].get('type') == inbuild_tools["Gtwy_Web_Search"]:
+                    task = call_firecrawl_scrape(tool_data.get("args"))
                 else: 
                     task = axios_work(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 tasks.append((tool_call_key, tool_data, task))
@@ -405,6 +415,11 @@ async def make_request_data(request: Request):
 async def make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info=None):
     suggestion_content = {'data': {'content': {}}}
     suggestion_content['data']['content'] = result.get('historyParams', {}).get('message')
+    
+    # Extract user and assistant messages for Hippocampus
+    user_message = parsed_data.get('user', '')
+    assistant_message = result.get('historyParams', {}).get('message', '')
+    
     data = {
         "save_sub_thread_id_and_name" : {
             "org_id" : parsed_data.get('org_id'),
@@ -456,6 +471,13 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
         "check_chatbot_suggestions" : {
             "bridgeType" : parsed_data.get('bridgeType'),
         },
+        "save_to_hippocampus" : {
+            "user_message" : user_message,
+            "assistant_message" : assistant_message,
+            "bridge_id" : parsed_data.get('bridge_id'),
+            "bridge_name" : parsed_data.get('name', ''),
+            "chatbot_auto_answers": parsed_data.get('chatbot_auto_answers')
+        },
         "type" : parsed_data.get('type'),
         "save_files_to_redis" : {
             "thread_id" : parsed_data.get('thread_id'),
@@ -496,5 +518,3 @@ async def save_files_to_redis(thread_id, sub_thread_id, bridge_id, files):
             await store_in_cache(cache_key, files, 604800)
     else:
         await store_in_cache(cache_key, files, 604800)
-
-

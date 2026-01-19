@@ -74,6 +74,24 @@ async def file_processing(request):
     
     file_content = await file.read()
     
+    # Define non-previewable file extensions that should be rejected
+    non_previewable_extensions = [
+        '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+        '.zip', '.rar', '.tar', '.gz', '.7z',
+        '.exe', '.dmg', '.apk', '.msi', '.deb', '.rpm',
+        '.bin', '.iso', '.dll'
+    ]
+    
+    # Check if file has a non-previewable extension
+    if any(file.filename.lower().endswith(ext) for ext in non_previewable_extensions):
+        raise HTTPException(
+            status_code=400, 
+            detail={
+                "success": False, 
+                "error": f"File type not supported. '{file.filename}' cannot be previewed in browser. Please upload images, PDFs, videos, or text files."
+            }
+        )
+
     # Check file type
     is_pdf = file.content_type == 'application/pdf' or file.filename.lower().endswith('.pdf')
     

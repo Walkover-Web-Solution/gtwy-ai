@@ -1,123 +1,111 @@
 import json
 import io
+from groq import AsyncGroq
 import httpx
 import certifi
-from openai import AsyncOpenAI
+import asyncio
+
 
 async def create_batch_file(data, apiKey):
+    """
+    Creates a JSONL file and uploads it to Groq's Files API.
+    
+    Args:
+        data: List of JSON strings (JSONL entries)
+        apiKey: Groq API key
+        
+    Returns:
+        Uploaded file object from Groq Files API
+    """
     try:
+        # Initialize Groq client
+        groq_client = AsyncGroq(api_key=apiKey)
+        
+        # Create JSONL file content
         file_content = "\n".join(data)
         filelike_obj = io.BytesIO(file_content.encode("utf-8"))
-        filelike_obj.name = "batch.jsonl"  # important for multipart metadata
+        filelike_obj.name = "batch.jsonl"
         filelike_obj.seek(0)
-
-        limits = httpx.Limits(
-            max_keepalive_connections=5,
-            max_connections=10,
-            keepalive_expiry=30.0
+        
+        # Upload the JSONL file to Groq Files API
+        batch_input_file = await groq_client.files.create(
+            file=filelike_obj,
+            purpose="batch"
         )
-
-        timeout = httpx.Timeout(60.0, connect=10.0)
-
-        http_client = httpx.AsyncClient(
-            timeout=timeout,
-            limits=limits,
-            follow_redirects=True,
-            verify=certifi.where(),
-            transport=httpx.AsyncHTTPTransport(retries=3),
-        )
-
-        try:
-            openAI = AsyncOpenAI(api_key=apiKey, http_client=http_client)
-            
-            batch_input_file = await openAI.files.create(
-                file=filelike_obj,
-                purpose="batch"
-            )
-            return batch_input_file
-        finally:
-            await http_client.aclose()
+        
+        print(f"Created Groq batch file: {batch_input_file.id}")
+        return batch_input_file
+        
     except Exception as e:
-        print("Error in OpenAI create_batch_file:", repr(e))
+        print("Error in Groq create_batch_file:", repr(e))
         print("Cause:", repr(getattr(e, "__cause__", None)))
         raise
 
+
 async def process_batch_file(batch_input_file, apiKey):
+    """
+    Creates a batch job using the uploaded file.
+    
+    Args:
+        batch_input_file: File object from create_batch_file
+        apiKey: Groq API key
+        
+    Returns:
+        Batch job object
+    """
     try:
+        # Initialize Groq client
+        groq_client = AsyncGroq(api_key=apiKey)
+        
         batch_input_file_id = batch_input_file.id
         
-        # Create httpx client with proper production configuration
-        limits = httpx.Limits(
-            max_keepalive_connections=5,
-            max_connections=10,
-            keepalive_expiry=30.0
+        # Create batch job with the uploaded file
+        result = await groq_client.batches.create(
+            input_file_id=batch_input_file_id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h"
         )
         
-        http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-            transport=httpx.AsyncHTTPTransport(
-                retries=3,
-                verify=certifi.where()
-            ),
-            limits=limits,
-            follow_redirects=True
-        )
+        print(f"Created Groq batch: {result.id}")
+        return result
         
-        try:
-            openAI = AsyncOpenAI(api_key=apiKey, http_client=http_client)
-            
-            result = await openAI.batches.create(
-                input_file_id=batch_input_file_id,
-                endpoint="/v1/chat/completions",
-                completion_window="24h"
-            )
-            print(result)
-            return result
-        finally:
-            await http_client.aclose()
     except Exception as e:
-        print(f"Error in OpenAI process_batch_file: {e}")
+        print(f"Error in Groq process_batch_file: {e}")
         raise
 
 
 async def retrieve_batch_status(batch_id, apiKey):
+    """
+    Retrieves the status of a batch job.
+    
+    Args:
+        batch_id: Batch job ID
+        apiKey: Groq API key
+        
+    Returns:
+        Batch job object with current status
+    """
     try:
-        # Create httpx client with proper production configuration
-        limits = httpx.Limits(
-            max_keepalive_connections=5,
-            max_connections=10,
-            keepalive_expiry=30.0
-        )
+        # Initialize Groq client
+        groq_client = AsyncGroq(api_key=apiKey)
         
-        http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-            transport=httpx.AsyncHTTPTransport(
-                retries=3,
-                verify=certifi.where()
-            ),
-            limits=limits,
-            follow_redirects=True
-        )
+        # Get batch status
+        batch = await groq_client.batches.retrieve(batch_id)
+        print(f"Groq batch status: {batch.status}")
+        return batch
         
-        try:
-            openAI = AsyncOpenAI(api_key=apiKey, http_client=http_client)
-            batch = await openAI.batches.retrieve(batch_id)
-            print(batch)
-            return batch
-        finally:
-            await http_client.aclose()
     except Exception as e:
-        print(f"Error in OpenAI retrieve_batch_status: {e}")
+        print(f"Error in Groq retrieve_batch_status: {e}")
         raise
 
 
 async def download_batch_file(file_id, apikey):
     """
-    Helper function to download and parse a batch result file.
+    Helper function to download and parse a Groq batch result file.
     
     Args:
         file_id: The file ID to download
-        apikey: OpenAI API key
+        apikey: Groq API key
         
     Returns:
         List of parsed JSON lines, or empty list if file doesn't exist or fails to parse
@@ -142,10 +130,9 @@ async def download_batch_file(file_id, apikey):
     )
     
     try:
-        import asyncio
-        openAI = AsyncOpenAI(api_key=apikey, http_client=http_client)
+        groq_client = AsyncGroq(api_key=apikey, http_client=http_client)
         
-        file_response = await openAI.files.content(file_id)
+        file_response = await groq_client.files.content(file_id)
         file_content = await asyncio.to_thread(file_response.read)
         
         try:
@@ -163,11 +150,11 @@ async def download_batch_file(file_id, apikey):
 
 async def handle_batch_results(batch_id, apikey):
     """
-    Handle OpenAI batch processing - retrieve status and process results.
+    Handle Groq batch processing - retrieve status and process results.
     
     Args:
         batch_id: Batch ID
-        apikey: OpenAI API key
+        apikey: Groq API key
         
     Returns:
         Tuple of (results, is_completed)
@@ -188,7 +175,6 @@ async def handle_batch_results(batch_id, apikey):
     error_file_id = batch.error_file_id
     
     # Download both output and error files in parallel
-    import asyncio
     output_results, error_results = await asyncio.gather(
         download_batch_file(output_file_id, apikey),
         download_batch_file(error_file_id, apikey)
@@ -224,7 +210,7 @@ async def handle_batch_results(batch_id, apikey):
     elif status == 'expired':
         error_info = [{
             "error": {
-                "message": "Batch expired - not completed within 24-hour window and no partial results available",
+                "message": "Batch expired - not completed within processing window and no partial results available",
                 "type": "batch_expired",
                 "batch_status": status
             },
@@ -251,4 +237,3 @@ async def handle_batch_results(batch_id, apikey):
         }]
     
     return error_info, True
-

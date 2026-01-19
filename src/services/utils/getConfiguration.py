@@ -6,7 +6,7 @@ from src.services.utils.common_utils import updateVariablesWithTimeZone
 from .getConfiguration_utils import (
     validate_bridge, get_bridge_data, setup_configuration, setup_tool_choice,
     setup_tools, setup_api_key, setup_pre_tools, add_rag_tool,
-    add_anthropic_json_schema, add_connected_agents
+    add_anthropic_json_schema, add_connected_agents, add_web_crawling_tool
 )
 from .update_and_check_cost import check_bridge_api_folder_limits
 
@@ -42,6 +42,9 @@ async def _prepare_configuration_response(configuration, service, bridge_id, api
 
     # Fetch bridge data
     result, bridge_data, resolved_bridge_id = await get_bridge_data(bridge_id, org_id, version_id)
+    chatbot = True if bridge_data.get('bridges', {}).get('bridgeType') == 'chatbot' else False
+    if not chatbot:
+        chatbot = True if bridge_data.get('bridgeType') == 'chatbot' else False
 
     # Limit checks
     limit_error = await check_bridge_api_folder_limits(result.get('bridges'), bridge_data, version_id)
@@ -109,14 +112,16 @@ async def _prepare_configuration_response(configuration, service, bridge_id, api
     pre_tools_data_for_later = None
     if bridge.get('pre_tools'):
         api_data = result.get('bridges', {}).get('pre_tools_data', [{}])[0]
-        api_data.pop('_id', None)
-        api_data.pop('bridge_ids', None)
-        api_data.pop('folder_id', None)
+        del api_data['_id']
+        if(api_data.get('bridge_ids')):
+            del api_data['bridge_ids']
+        if(api_data.get('folder_id')):
+            del api_data['folder_id']
         if api_data:
-            pre_tools_name = api_data.get('function_name', api_data.get('endpoint_name', ""))
+            pre_tools_name = api_data.get('script_id')
             pre_tools_data_for_later = api_data
 
-    rag_data = bridge.get('rag_data')
+    rag_data = bridge.get('doc_ids')
     gpt_memory_context = bridge.get('gpt_memory_context')
     gpt_memory = result.get('bridges', {}).get('gpt_memory')
 
@@ -127,6 +132,9 @@ async def _prepare_configuration_response(configuration, service, bridge_id, api
     )
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
+    
+    gtwy_web_search_filters = web_search_filters or result.get('bridges', {}).get('gtwy_web_search_filters') or {}
+    add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools or result.get('bridges', {}).get('built_in_tools'), gtwy_web_search_filters)
     add_anthropic_json_schema(service, configuration, tools)
 
     if rag_data:
@@ -168,7 +176,8 @@ async def _prepare_configuration_response(configuration, service, bridge_id, api
         "is_embed": result.get('bridges', {}).get("folder_type") == 'embed',
         "user_id": result.get("bridges", {}).get("user_id"),
         'folder_id': result.get('bridges', {}).get('folder_id'),
-        'web_search_filters': web_search_filters_value
+        'web_search_filters': web_search_filters_value,
+        'chatbot_auto_answers': bridge_data.get('bridges', {}).get('chatbot_auto_answers')
     }
 
     return None, base_config, result, resolved_bridge_id

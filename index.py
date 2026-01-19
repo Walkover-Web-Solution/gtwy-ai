@@ -5,8 +5,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import asyncio
-import atatus
-from atatus.contrib.starlette import create_client, Atatus
 from contextlib import asynccontextmanager
 from src.services.utils.batch_script import repeat_function
 from config import Config
@@ -21,17 +19,28 @@ from models.Timescale.connections import init_async_dbservice
 from src.configs.model_configuration import init_model_configuration, background_listen_for_changes
 from globals import *
 
+# Initialize Atatus only when properly configured in PRODUCTION
+atatus_client = None
+AtatusMiddleware = None
+if (Config.ENVIROMENT or "").upper() == 'PRODUCTION' and Config.ATATUS_LICENSE_KEY:
+    try:
+        import atatus
+        from atatus.contrib.starlette import create_client, Atatus as _Atatus
+        logger.info("Initializing Atatus client...")
+        atatus_client = create_client({
+            "APP_NAME": "Python - GTWY - Backend - PROD",
+            "LICENSE_KEY": Config.ATATUS_LICENSE_KEY,
+            "ANALYTICS": True,
+            "ANALYTICS_CAPTURE_OUTGOING": True,
+            "LOG_BODY": "response",
+            "INSTRUMENTATIONS": {
+                "httpx": False,
+            },
+        })
 
-atatus_client = atatus.get_client()
-if atatus_client is None and (Config.ENVIROMENT == 'PRODUCTION'):
-    logger.info("Initializing Atatus client...")
-    atatus_client = create_client({
-        'APP_NAME': 'Python - GTWY - Backend - PROD',
-        'LICENSE_KEY': Config.ATATUS_LICENSE_KEY,
-        'ANALYTICS': True,
-        'ANALYTICS_CAPTURE_OUTGOING': True,
-        'LOG_BODY': 'all'
-    })
+        AtatusMiddleware = _Atatus
+    except Exception as e:
+        logger.error(f"Failed to initialize Atatus: {e}")
 
     
 async def consume_messages_in_executor():
@@ -96,7 +105,8 @@ async def lifespan(app: FastAPI):
 # Initialize the FastAPI app
 app = FastAPI(debug=True, lifespan=lifespan)
 
-app.add_middleware(Atatus, client=atatus_client)
+if AtatusMiddleware and atatus_client:
+    app.add_middleware(AtatusMiddleware, client=atatus_client)
 
 # CORS middleware
 app.add_middleware(
@@ -111,7 +121,6 @@ app.add_middleware(
 # Healthcheck route
 @app.get("/healthcheck")
 async def healthcheck():
-    print("hello from healthcheck")
     return JSONResponse(status_code=200, content={
             "status": "OK running good... v1.2",
     })

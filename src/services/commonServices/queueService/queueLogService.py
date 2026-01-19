@@ -10,6 +10,7 @@ from src.services.commonServices.suggestion import chatbot_suggestions
 from src.services.commonServices.baseService.utils import total_token_calculation, save_files_to_redis  
 from src.controllers.conversationController import save_sub_thread_id_and_name
 from src.services.commonServices.queueService.baseQueue import BaseQueue
+from src.services.utils.hippocampus_utils import save_conversation_to_hippocampus
 
 
 class Queue2(BaseQueue):
@@ -33,6 +34,17 @@ class Queue2(BaseQueue):
         # If message type is 'image', only run save_sub_thread_id_and_name
         if messages.get('type') == 'image':
             return
+        
+        # Save conversation to Hippocampus for chatbot bridge types
+        hippocampus_data = messages.get('save_to_hippocampus', {})
+        if hippocampus_data.get('chatbot_auto_answers'):
+            await save_conversation_to_hippocampus(
+                user_message=hippocampus_data.get('user_message', ''),
+                assistant_message=hippocampus_data.get('assistant_message', ''),
+                agent_id=hippocampus_data.get('bridge_id', ''),
+                bridge_name=hippocampus_data.get('bridge_name', '')
+            )
+        
         # await create(**messages['metrics_service'])
         await validateResponse(**messages['validateResponse'])
         await total_token_calculation(**messages['total_token_calculation'])

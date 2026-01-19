@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, Request, HTTPException
-from fastapi.responses import JSONResponse
 import asyncio
 
-from src.services.commonServices.common import chat_multiple_agents, embedding, batch, run_testcases, image, orchestrator_chat
+from src.services.commonServices.common import chat_multiple_agents, embedding, batch, image
 from src.services.commonServices.baseService.utils import make_request_data
 from ...middlewares.middleware import jwt_middleware
 from ...middlewares.getDataUsingBridgeId import add_configuration_data_to_body
@@ -29,10 +28,6 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
     request.state.is_playground = False
     request.state.version = 2
     data_to_send = await make_request_data(request)
-    if db_config.get('orchestrator_id'):
-        result = await orchestrator_chat(data_to_send)
-        return result
-    
     response_format = data_to_send.get('body',{}).get('configuration', {}).get('response_format', {})
     if response_format and response_format.get('type') != 'default':
         try:
@@ -47,15 +42,11 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         # Handle different types of requests
         type = data_to_send.get("body",{}).get('configuration',{}).get('type')
         if type == 'embedding':
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(executor, lambda: asyncio.run(embedding(data_to_send)))
+            result = await embedding(data_to_send)
             return result
         if type == 'image':
-            loop = asyncio.get_event_loop()
             result = await image(data_to_send)
             return result
-        # Always use chat_multiple_agents - it handles both single and multiple agents
-        loop = asyncio.get_event_loop()
         result = await chat_multiple_agents(data_to_send)
         return result
 
@@ -83,9 +74,6 @@ async def playground_chat_completion_bridge(request: Request, db_config: dict = 
                         }
                     }
         data_to_send['body']['configuration']['response_format'] = response_format
-    if db_config.get('orchestrator_id'):
-        result = await orchestrator_chat(data_to_send)
-        return result
     # Check if response_format is present and publish to queue
     if not flag and response_format and response_format.get('type') != 'default':
         try:
@@ -102,8 +90,6 @@ async def playground_chat_completion_bridge(request: Request, db_config: dict = 
         if type == 'embedding':
                 result =  await embedding(data_to_send)
                 return result
-        # Always use chat_multiple_agents - it handles both single and multiple agents
-        loop = asyncio.get_event_loop()
         result = await chat_multiple_agents(data_to_send)
         return result
 

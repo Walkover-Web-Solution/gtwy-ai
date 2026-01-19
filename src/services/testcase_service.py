@@ -182,8 +182,10 @@ async def get_testcase_configuration(
     if not db_config.get("success"):
         raise TestcaseValidationError(db_config.get("error", "Failed to get configuration"))
     
-    return db_config
+    primary_bridge_id = db_config.get('primary_bridge_id')
+    bridge_configurations = db_config.get('bridge_configurations', {})
 
+    return bridge_configurations[primary_bridge_id]
 
 async def process_single_testcase(testcase: Dict[str, Any], db_config: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -197,6 +199,10 @@ async def process_single_testcase(testcase: Dict[str, Any], db_config: Dict[str,
         Dictionary containing testcase result
     """
     try:
+        # Deep copy the configuration to avoid race conditions in parallel execution
+        if 'configuration' in db_config:
+            db_config['configuration'] = db_config['configuration'].copy()
+
         # Set conversation in db_config
         db_config['configuration']['conversation'] = testcase.get('conversation', [])
         

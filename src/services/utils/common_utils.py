@@ -53,18 +53,22 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
         required_params = pre_tools_data.get('required_params', [])
         
         # Get variables_path mapping for the current agent
-        variables_path = current_config.get('variables_path', {}).get(pre_tools_data.get('function_name'))
+        script_id = pre_tools_data.get('script_id')
+        variables_path = current_config.get('variables_path', {}).get(script_id, {}) if script_id else {}
         
         # Build args from agent's own variables
         args = {}
         for param in required_params:
             # Check if there's a mapping in variables_path for this param
-            if param in variables_path:
+            if variables_path and param in variables_path:
                 # Get the mapped variable name
                 mapped_variable = variables_path[param]
                 # Use the mapped variable to get value from agent_variables
                 if mapped_variable in agent_variables:
                     args[param] = agent_variables[mapped_variable]
+            elif param in agent_variables:
+                # If no mapping exists, use param directly
+                args[param] = agent_variables[param]
         
         # Update the pre_tools args with agent-specific variables
         parsed_data['pre_tools']['args'] = args
@@ -160,7 +164,8 @@ def parse_request_body(request_body):
         "usage" : {},
         "type" : body.get('configuration',{}).get('type'),
         "apikey_object_id" : body.get('apikey_object_id'),
-        "images" : body.get('images'),
+        "audios" : [url.get('url') for url in body.get('user_urls', []) if isinstance(url, dict) and url.get('type') == 'audio' and url.get('url')],
+        "images" : body.get('images') or [url.get('url') for url in body.get('user_urls', []) if isinstance(url, dict) and url.get('type') == 'image' and url.get('url')],
         "tool_call_count": body.get('tool_call_count'),
         "tokens" : {},
         "memory" : "",
@@ -188,6 +193,8 @@ def parse_request_body(request_body):
         "transfer_request_id": body.get('transfer_request_id'),
         "orchestrator_flag": body.get('orchestrator_flag'),
         "batch_variables": body.get('batch_variables'),
+        "chatbot_auto_answers": body.get('chatbot_auto_answers'),
+        "owner_id" : state.get('profile', {}).get('owner_id') 
     }
 
 
@@ -230,10 +237,9 @@ async def handle_fine_tune_model(parsed_data, custom_config):
 
 async def handle_pre_tools(parsed_data):
     if parsed_data['pre_tools']:
-        if 'args' not in parsed_data['pre_tools']:
+        if parsed_data['pre_tools'].get('args') is None:
             parsed_data['pre_tools']['args'] = {}
-        if parsed_data.get('user'):
-            parsed_data['pre_tools']['args']['user'] = parsed_data['user']
+        parsed_data['pre_tools']['args']['user'] = parsed_data['user']
         pre_function_response = await axios_work(
             parsed_data['pre_tools'].get('args', {}),
             {
@@ -412,6 +418,7 @@ def build_service_params(parsed_data, custom_config, model_output_config, thread
         "token_calculator": token_calculator,
         "apikey_object_id" : parsed_data['apikey_object_id'],
         "images" : parsed_data['images'],
+        "audios" : parsed_data.get('audios'),
         "tool_call_count": parsed_data['tool_call_count'],
         "rag_data": parsed_data['rag_data'],
         "name" : parsed_data['name'],
@@ -423,7 +430,8 @@ def build_service_params(parsed_data, custom_config, model_output_config, thread
         "youtube_url" : parsed_data['youtube_url'],
         "web_search_filters" : parsed_data['web_search_filters'],
         "folder_id": parsed_data.get('folder_id'),
-        "bridge_configurations": bridge_configurations
+        "bridge_configurations": bridge_configurations,
+        "owner_id" : parsed_data.get('owner_id')
 
     }
 
@@ -561,7 +569,8 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "batch" : parsed_data['batch'],
         "webhook" : parsed_data['batch_webhook'],
         "folder_id": parsed_data.get('folder_id'),
-        "batch_variables": parsed_data['batch_variables']
+        "batch_variables": parsed_data['batch_variables'],
+        "processed_prompts": parsed_data.get('processed_prompts', [])
     }
 
 
@@ -602,9 +611,9 @@ def filter_missing_vars(missing_vars, variables_state):
 def get_service_by_model(model): 
     return next((s for s in model_config_document if model in model_config_document[s]), None)
 
-def send_error(bridge_id, org_id, error_message, error_type, bridge_name=None, is_embed=None, user_id=None):
+def send_error(bridge_id, org_id, error_message, error_type, bridge_name=None, is_embed=None, user_id=None, thread_id=None, service=None):
     asyncio.create_task(send_error_to_webhook(
-        bridge_id, org_id, error_message, error_type=error_type, bridge_name=bridge_name, is_embed=is_embed, user_id=user_id
+        bridge_id, org_id, error_message, error_type=error_type, bridge_name=bridge_name, is_embed=is_embed, user_id=user_id, thread_id=thread_id, service=service
     ))
 
 def restructure_json_schema(response_type, service):
@@ -787,7 +796,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
         "child_id": None,
         "prompt": parsed_data['configuration'].get('prompt'),
         "llm_urls": [],
-        "user_urls": ([{"url": u, "type": "image"} for u in parsed_data.get("images", [])] + [{"url": u, "type": "pdf"} for u in parsed_data.get("files", [])])
+        "user_urls": ([{"url": u, "type": "image"} for u in parsed_data.get("images", [])] + [{"url": u, "type": "pdf"} for u in parsed_data.get("files", [])] + [{"url": u, "type": "audio"} for u in parsed_data.get("audios", [])])
     }
 
 
@@ -797,451 +806,6 @@ async def add_files_to_parse_data(thread_id, sub_thread_id, bridge_id):
     if files:
         return json.loads(files)
     return []
-
-
-def add_child_agents_as_tools(agent_config, orchestrator_data):
-    """
-    Add child agents as tools to the agent configuration
-    
-    Args:
-        agent_config: Current agent configuration
-        orchestrator_data: Full orchestrator data with agents info
-    
-    Returns:
-        Updated agent configuration with child agent tools
-    """
-    agent_info = agent_config.get('agent_info', {})
-    child_agents = agent_info.get('childAgents', [])
-    
-    if not child_agents:
-        return agent_config
-    
-    # Initialize tools if not present
-    if 'tools' not in agent_config['configuration']:
-        agent_config['configuration']['tools'] = []
-    
-    # Add each child agent as a tool
-    for child_agent_id in child_agents:
-        child_info = orchestrator_data.get('agents', {}).get(child_agent_id, {})
-        if child_info:
-            name = f"call_{child_info.get('name', 'agent').replace(' ', '_').lower()}"
-            description = f"{child_info.get('description', 'Connected agent')})"
-            
-            tool = {
-                "type": "function",
-                "name": name,
-                "description": description,
-                "properties": {
-                    "user_query": {
-                        "description": "The query to send to the child agent",
-                        "type": "string",
-                        "enum": [],
-                        "required_params": [],
-                        "parameter": {}
-                    },
-                    "action_type": {
-                        "description": "transfer: directly return child agent response, conversation: get child response and continue processing",
-                        "type": "string",
-                        "enum": ["transfer", "conversation"],
-                        "required_params": [],
-                        "parameter": {}
-                    }
-                },
-                "required": ["user_query", "action_type"]
-            }
-            
-            agent_config['configuration']['tools'].append(tool)
-            
-            # Add to tool mapping
-            if 'tool_id_and_name_mapping' not in agent_config:
-                agent_config['tool_id_and_name_mapping'] = {}
-            
-            agent_config['tool_id_and_name_mapping'][name] = {
-                "type": "AGENT",
-                "agent_id": child_agent_id
-            }
-    
-    return agent_config
-
-def update_orchestration_prompt(agent_config):
-    """
-    Update agent prompt to include orchestration instructions
-    
-    Args:
-        agent_config: Agent configuration to update
-    
-    Returns:
-        Updated agent configuration with orchestration prompt
-    """
-    original_prompt = agent_config['configuration'].get('prompt', '')
-    
-    orchestration_instructions = """
-
-You are an orchestrator agent with access to child agents through function calls. You have two interaction modes:
-
-1. **TRANSFER**: Use when you want to directly transfer the user's query to a child agent and return their response immediately.
-2. **CONVERSATION**: Use when you want to get information from a child agent and then provide your own response based on that information.
-
-When calling child agents:
-- Use "transfer" action_type to directly return the child agent's response
-- Use "conversation" action_type to get child agent's response and continue processing
-
-If you don't need any child agents, respond directly to the user's query.
-"""
-    
-    agent_config['configuration']['prompt'] = original_prompt + orchestration_instructions
-    return agent_config
-
-async def orchestrator_agent_chat(agent_config, body=None, user=None):
-    """
-    Process individual agent configuration with same flow as chat function
-    
-    Args:
-        agent_config: Agent configuration from orchestrator data
-        request_body_data: Original request body data for context
-    
-    Returns:
-        Chat response for the agent
-    """
-    result = {}
-    class_obj = {}
-    orchestrator_data = body.get('orchestrator_data')
-    try:
-        # Add child agents as tools if orchestrator_data is provided
-        if orchestrator_data:
-            agent_config = add_child_agents_as_tools(agent_config, orchestrator_data)
-            agent_config = update_orchestration_prompt(agent_config)
-        
-        # Add user query to variables if provided
-        if user:
-            if 'variables' not in agent_config:
-                agent_config['variables'] = {}
-            agent_config['variables']['user_query'] = user
-        
-        # Initialize orchestrator data collection session
-        thread_id = body.get('thread_id')
-        org_id = body.get('org_id')
-        # Pick orchestrator_id with proper fallbacks
-        orchestrator_id =  body.get('orchestrator_id')
-        
-        # Use thread_id as primary session key, fallback to a global session key
-        session_key = thread_id if thread_id else f"global_orchestrator_{org_id}"
-        if session_key and org_id:
-            if not orchestrator_collector.get_session_data(session_key):
-                orchestrator_collector.initialize_session(session_key, org_id, orchestrator_id)
-    
-        request_data = {
-            "body": {
-                "configuration": agent_config.get("configuration", {}),
-                "model": agent_config.get("configuration", {}).get("model"),
-                "service": agent_config.get("service"),
-                "apikey": agent_config.get("apikey"),
-                "bridge_id": agent_config.get("bridge_id"),
-                "version_id": agent_config.get("version_id"),
-                "org_id": body.get("org_id"),
-                "pre_tools": agent_config.get("pre_tools"),
-                "org_name" : agent_config.get("org_name"),
-                "name" : agent_config.get("name"),
-                "variables": agent_config.get("variables", {}),
-                "variables_path": agent_config.get("variables_path", {}),
-                "rag_data": agent_config.get("rag_data", []),
-                "actions": agent_config.get("actions", []),
-                "files": [],
-                "message": user,
-                "thread_id": body.get('thread_id'),
-                "sub_thread_id": body.get('sub_thread_id') or body.get('thread_id'),
-                "message_id": f"orchestrator_{agent_config.get('bridge_id', 'unknown')}",
-                "user": user,
-                "tool_id_and_name_mapping": agent_config.get('tool_id_and_name_mapping', {}),
-                "apikey_object_id": agent_config.get("apikey_object_id"),
-                "gpt_memory": agent_config.get("gpt_memory"),
-                "gpt_memory_context": agent_config.get("gpt_memory_context"),
-                "tool_call_count": agent_config.get("tool_call_count"),
-                "RTLayer": agent_config.get("RTLayer"),
-                "user_reference": agent_config.get("user_reference"),
-
-            },
-            "state": {
-                "profile": {
-                    "org": {
-                        "id": body.get("org_id", "")
-                    }
-                },
-                "timer":body.get('state', {}).get("timer", []),
-                "isPlayground": False
-            },
-            "path_params": {}
-        }
-        
-        # Step 1: Parse and validate request body (directly pass the data)
-        parsed_data = parse_request_body(request_data)
-
-        parsed_data['configuration']['prompt'] = add_default_template(parsed_data.get('configuration', {}).get('prompt', ''))
-        parsed_data['variables'] = add_user_in_varaibles(parsed_data['variables'], parsed_data['user'])
-        
-        # Step 2: Initialize Timer
-        timer = initialize_timer(parsed_data['state'])
-        
-        # Step 3: Load Model Configuration
-        model_config, custom_config, model_output_config = await load_model_configuration(
-            parsed_data['model'], parsed_data['configuration'], parsed_data['service'],
-        )
-        
-        # Step 4: Handle Fine Tune Model
-        await handle_fine_tune_model(parsed_data, custom_config)
-
-        # Step 5: Handle Pre-Tools Execution
-        await handle_pre_tools(parsed_data)
-
-        # Step 6: Manage Threads
-        thread_info = await manage_threads(parsed_data)
-        
-        # Add Files from cache if Present
-        if len(parsed_data['files']) == 0:
-            parsed_data['files'] = await add_files_to_parse_data(parsed_data['thread_id'], parsed_data['sub_thread_id'], parsed_data['bridge_id'])
-
-        # Step 7: Prepare Prompt, Variables and Memory
-        memory, missing_vars = await prepare_prompt(parsed_data, thread_info, model_config, custom_config)
-        
-        missing_vars = filter_missing_vars(missing_vars, parsed_data['variables_state'])
-
-        # Handle missing variables
-        if missing_vars:
-            send_error(parsed_data['bridge_id'], parsed_data['org_id'], missing_vars, error_type='Variable', bridge_name=parsed_data.get('name'), is_embed=parsed_data.get('is_embed'), user_id=parsed_data.get('user_id'))
-        
-        # Step 8: Configure Custom Settings
-        custom_config = await configure_custom_settings(
-            model_config['configuration'], custom_config, parsed_data['service']
-        )
-        
-        # Step 9: Execute Service Handler
-        params = build_service_params(
-            parsed_data, custom_config, model_output_config, thread_info, timer, memory, send_error_to_webhook
-        )
-        
-        # Step 10: json_schema service conversion
-        if 'response_type' in custom_config and custom_config['response_type'].get('type') == 'json_schema':
-            custom_config['response_type'] = restructure_json_schema(custom_config['response_type'], parsed_data['service'])
-        
-        class_obj = await Helper.create_service_handler(params, parsed_data['service'])
-        result = await class_obj.execute()
-            
-        if not result["success"]:
-            raise ValueError(result)
-        
-        if result['modelResponse'].get('firstAttemptError'):
-            send_error(parsed_data['bridge_id'], parsed_data['org_id'], result['modelResponse']['firstAttemptError'], error_type='retry_mechanism', bridge_name=parsed_data.get('name'), is_embed=parsed_data.get('is_embed'), user_id=parsed_data.get('user_id'))
-        
-        if parsed_data['configuration']['type'] == 'chat':
-            if parsed_data['is_rich_text'] and parsed_data['bridgeType'] and parsed_data['reasoning_model'] == False:
-                try:
-                    await process_chatbot_response(result, params, parsed_data, model_output_config, timer, params['execution_time_logs'])
-                except Exception as e:
-                    raise RuntimeError(f"error in chatbot : {e}")
-                    
-        parsed_data['alert_flag'] = result['modelResponse'].get('alert_flag', False)    
-        if not parsed_data['is_playground']:
-            result['response']['usage'] = params['token_calculator'].get_total_usage()
-            
-        if parsed_data.get('type') != 'image':
-            parsed_data['tokens'] = Helper.calculate_usage(parsed_data['model'],result["response"],parsed_data['service'])
-            
-        # Create latency object using utility function
-        latency = create_latency_object(timer, params)
-        
-        if not parsed_data['is_playground']:
-            if result.get('response') and result['response'].get('data'):
-                result['response']['data']['message_id'] = parsed_data['message_id']
-            await sendResponse(parsed_data['response_format'], result["response"], success=True, variables=parsed_data.get('variables',{}))
-            # Update usage metrics for successful API calls
-            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
-            await process_background_tasks(parsed_data, result, params, thread_info)
-        
-
-        # Collect orchestrator data before processing result
-        bridge_id = agent_config.get('bridge_id')
-        if bridge_id and result.get('success'):
-            # Extract data from result and parsed_data
-            orchestrator_data_to_store = {
-                'model_name': parsed_data.get('model'),
-                'user': user,
-                'response': result.get('response', {}).get('data', {}).get('content', ''),
-                'tool_call_data': result.get('response', {}).get('data', {}).get('tool_data', ''),
-                'latency': latency if 'latency' in locals() else None,
-                'tokens': parsed_data.get('tokens'),
-                'error': {'status': False, 'message': None},
-                'variables': parsed_data.get('variables', {}),
-                'user_urls': parsed_data.get('files', []) if parsed_data.get('files') else [],
-                'ai_config': params.get('custom_config', {})
-            }
-            
-            # Add data to collector using consistent session_key
-            session_key = thread_id if thread_id else f"global_orchestrator_{org_id}"
-            if not orchestrator_collector.get_session_data(session_key):
-                # Initialize session if not already done
-                orchestrator_collector.initialize_session(session_key, org_id, orchestrator_id)
-            orchestrator_collector.add_bridge_data(session_key, bridge_id, orchestrator_data_to_store)
-        # Check if there are tool calls that need orchestration
-        if result.get('transfer_agent_config'):
-            return await handle_orchestration_tool_calls(
-                result, agent_config, body, user
-            )
-        current_agent_id = agent_config.get('bridge_id')
-        cache_key = f"orchestrator_{parsed_data['thread_id']}_{parsed_data['sub_thread_id']}"
-        await store_in_cache(cache_key, current_agent_id)
-        
-        return JSONResponse(status_code=200, content={"success": True, "response": result["response"]})
-        
-    except (Exception, ValueError, BadRequestException) as error:
-        if not isinstance(error, BadRequestException):
-            logger.error(f'Error in orchestrator_agent_chat: %s, {str(error)}, {traceback.format_exc()}')
-        
-        # Collect error data for orchestrator history
-        if 'bridge_id' in locals() and bridge_id:
-            error_data = {
-                'model_name': parsed_data.get('model') if 'parsed_data' in locals() else None,
-                'user': user,
-                'error': {'status': True, 'message': str(error)},
-                'variables': parsed_data.get('variables', {}) if 'parsed_data' in locals() else {},
-                'latency': latency if 'latency' in locals() else None,
-                'tokens': None,
-                'tool_call_data': None,
-                'user_urls': [],
-                'ai_config': params.get('custom_config', {})
-            }
-            org_id = body.get('org_id') if 'body' in locals() else 'unknown'
-            session_key = thread_id if 'thread_id' in locals() and thread_id else f"global_orchestrator_{org_id}"
-            if not orchestrator_collector.get_session_data(session_key):
-                # Initialize session if not already done
-                final_orchestrator_id = bridge_id or 'error_orchestrator'  # Use bridge_id as fallback
-                orchestrator_collector.initialize_session(session_key, org_id, final_orchestrator_id)
-            orchestrator_collector.add_bridge_data(session_key, bridge_id, error_data)
-        
-        if not parsed_data['is_playground']:
-            # Create latency object and update usage metrics
-            latency = create_latency_object(timer, params)
-            update_usage_metrics(parsed_data, params, latency, error=error, success=False)
-            
-            # Create history parameters
-            parsed_data['historyParams'] = create_history_params(parsed_data, error, class_obj)
-            await sendResponse(parsed_data['response_format'], result.get("modelResponse", str(error)), variables=parsed_data['variables']) if parsed_data['response_format']['type'] != 'default' else None
-            # Process background tasks for error handling
-            await process_background_tasks_for_error(parsed_data, error)
-        
-        # Add support contact information to error message
-        error_message = f"{str(error)}. For more support contact us at support@gtwy.ai"
-        print(f"Error in orchestrator_agent_chat: {error_message}")
-        raise ValueError(error_message)
-
-
-async def handle_orchestration_tool_calls(result, current_agent_config, orchestrator_data, user_query):
-    """
-    Handle tool calls for orchestration (child agent calls) or transfer_agent_config
-    
-    Args:
-        result: Current agent's response with tool calls or transfer_agent_config
-        current_agent_config: Current agent configuration
-        orchestrator_data: Full orchestrator data
-        user_query: Original user query
-    
-    Returns:
-        Final response after orchestration
-    """
-    # Check if we have transfer_agent_config (new transfer object)
-    if result.get('transfer_agent_config'):
-        transfer_config = result.get('transfer_agent_config')
-        
-        # Extract data from transfer_agent_config object
-        child_agent_id = transfer_config.get('agent_id')
-        action_type = transfer_config.get('action_type', 'transfer')
-        child_query = transfer_config.get('user_query', user_query)
-        
-        print(f"Transfer detected - calling child agent {child_agent_id} with action: {action_type}")
-        
-        # Get child agent configuration
-        child_agent_config = orchestrator_data.get('agent_configurations', {}).get(child_agent_id)
-        if not child_agent_config:
-            print(f"Child agent configuration not found for {child_agent_id}")
-            return result
-        
-        # Call child agent directly with transfer
-        child_response = await orchestrator_agent_chat(
-            child_agent_config, orchestrator_data, child_query
-        )
-        
-        # For transfer action, return child agent response immediately
-        print(f"Transferring to child agent {child_agent_id}")
-        return child_response
-    
-    # Handle legacy tool_calls format
-    tool_calls = result.get('response', {}).get('data', {}).get('tool_calls', [])
-    
-    for tool_call in tool_calls:
-        function_name = tool_call.get('function', {}).get('name', '')
-        function_args = json.loads(tool_call.get('function', {}).get('arguments', '{}'))
-        
-        # Check if this is an agent tool call
-        tool_mapping = current_agent_config.get('tool_id_and_name_mapping', {})
-        if function_name in tool_mapping and tool_mapping[function_name].get('type') == 'AGENT':
-            child_agent_id = tool_mapping[function_name]['agent_id']
-            action_type = function_args.get('action_type', 'conversation')
-            child_query = function_args.get('user_query', user_query)
-            
-            print(f"Calling child agent {child_agent_id} with action: {action_type}")
-            
-            # Get child agent configuration
-            child_agent_config = orchestrator_data.get('agent_configurations', {}).get(child_agent_id)
-            if not child_agent_config:
-                continue
-            
-            # Call child agent
-            child_response = await orchestrator_agent_chat(
-                child_agent_config, orchestrator_data, child_query
-            )
-            
-            # Handle response based on action type
-            if action_type == 'transfer':
-                # Direct transfer - return child agent response immediately
-                print(f"Transferring to child agent {child_agent_id}")
-                return child_response
-            
-            elif action_type == 'conversation':
-                # Conversation mode - continue with current agent using child response
-                print(f"Got response from child agent {child_agent_id}, continuing conversation")
-                
-                # Extract child response content
-                child_content = ""
-                if hasattr(child_response, 'body'):
-                    child_data = await child_response.body
-                    child_json = json.loads(child_data)
-                    child_content = child_json.get('response', {}).get('data', {}).get('message', '')
-                else:
-                    child_content = str(child_response)
-                
-                # Update current agent's conversation with child response
-                conversation_prompt = f"""
-Child agent response: {child_content}
-
-Based on the child agent's response above, please provide your final answer to the user's original query: {user_query}
-"""
-                
-                # Create new agent call with child response context
-                updated_agent_config = current_agent_config.copy()
-                updated_agent_config['configuration']['prompt'] = conversation_prompt
-                
-                # Remove tools to prevent recursive calls
-                if 'tools' in updated_agent_config['configuration']:
-                    del updated_agent_config['configuration']['tools']
-                
-                # Call current agent again with child response context
-                final_response = await orchestrator_agent_chat(
-                    updated_agent_config, orchestrator_data, user_query
-                )
-                
-                return final_response
-    
-    # If no agent tool calls found, return original response
-    return JSONResponse(status_code=200, content={"success": True, "response": result["response"]})
 
 async def process_background_tasks_for_playground(result, parsed_data):
     from src.controllers.testcase_controller import handle_playground_testcase

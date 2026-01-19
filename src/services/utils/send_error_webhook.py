@@ -4,7 +4,7 @@ from .helper import Helper
 from src.services.proxy.Proxyservice import get_user_org_mapping
 from globals import *
 
-async def send_error_to_webhook(bridge_id, org_id, error_log, error_type, bridge_name=None, is_embed=None, user_id=None):
+async def send_error_to_webhook(bridge_id, org_id, error_log, error_type, bridge_name=None, is_embed=None, user_id=None,thread_id=None, service=None):
     """
     Sends error logs to a webhook if the specified conditions are met.
 
@@ -66,6 +66,9 @@ async def send_error_to_webhook(bridge_id, org_id, error_log, error_type, bridge
                     "bridge_id": bridge_id,
                     "org_id": org_id,
                     "user_id": user_id,
+                    "thread_id": thread_id,        
+                    "service": service,
+
                 }
                 
                 # Add bridge_name and is_embed to payload if available

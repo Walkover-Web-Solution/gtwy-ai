@@ -117,4 +117,42 @@ def make_json_serializable(data):
     except (TypeError, OverflowError):
         return str(data)
 
-__all__ = ['delete_in_cache', 'store_in_cache', 'find_in_cache', 'find_in_cache_and_expire', 'store_in_cache_permanent_until_read', 'verify_ttl', 'clear_cache']
+async def acquire_lock(lock_key: str, ttl: int = 600) -> bool:
+    """
+    Acquire a distributed lock using Redis SET NX EX pattern.
+    
+    Args:
+        lock_key: Unique identifier for the lock
+        ttl: Time-to-live in seconds (default: 600 seconds = 10 minutes)
+        
+    Returns:
+        True if lock was acquired, False otherwise
+    """
+    try:
+        full_key = f"{REDIS_PREFIX}lock_{lock_key}"
+        # SET NX EX: Set if Not eXists with EXpiration
+        result = await client.set(full_key, "locked", nx=True, ex=ttl)
+        return result is not None
+    except Exception as e:
+        logger.error(f"Error acquiring lock for {lock_key}: {str(e)}")
+        return False
+
+async def release_lock(lock_key: str) -> bool:
+    """
+    Release a distributed lock.
+    
+    Args:
+        lock_key: Unique identifier for the lock
+        
+    Returns:
+        True if lock was released, False otherwise
+    """
+    try:
+        full_key = f"{REDIS_PREFIX}lock_{lock_key}"
+        result = await client.delete(full_key)
+        return result > 0
+    except Exception as e:
+        logger.error(f"Error releasing lock for {lock_key}: {str(e)}")
+        return False
+
+__all__ = ['delete_in_cache', 'store_in_cache', 'find_in_cache', 'find_in_cache_and_expire', 'store_in_cache_permanent_until_read', 'verify_ttl', 'clear_cache', 'acquire_lock', 'release_lock']

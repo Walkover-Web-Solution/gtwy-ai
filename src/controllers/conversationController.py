@@ -40,8 +40,13 @@ async def savehistory_consolidated(conversation_data):
         Integer ID of created record or None if failed
     """
     try:
-        # Send data through RT layer with same structure as DB
+        # Send data through RT layer with sensitive data removed (first)
         if conversation_data.get('bridge_id'):
+            # Remove apikey from fallback_model if it exists
+            if conversation_data.get('fallback_model') and isinstance(conversation_data['fallback_model'], dict):
+                if 'apikey' in conversation_data['fallback_model']:
+                    del conversation_data['fallback_model']['apikey']
+            
             # Send to RT layer
             org_id = str(conversation_data.get('org_id', '')) if conversation_data.get('org_id') else ''
             response_format_copy = {
@@ -52,11 +57,10 @@ async def savehistory_consolidated(conversation_data):
                 },
                 'type': 'RTLayer'
             }
-            
-            # Send conversation data with same keys as DB
+            # Send conversation data with same keys as DB (but without apikey)
             await sendResponse(response_format_copy, conversation_data, True)
         
-        # Save to database
+        # Save to database after sending response (with apikey intact)
         result = await chatbotDbService.createConversationLog(conversation_data)
         return result
     except Exception as error:

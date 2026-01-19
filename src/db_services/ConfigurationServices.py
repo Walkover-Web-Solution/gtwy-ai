@@ -270,42 +270,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             }
         }
     },
-    # Stage 6: Lookup 'rag_parent_datas' using 'doc_ids'
-    {
-        '$lookup': {
-            'from': 'rag_parent_datas',
-            'let': {
-                'doc_ids': {
-                    '$map': {
-                        'input': { '$ifNull': ['$doc_ids', []] },
-                        'as': 'doc_id',
-                        'in': { '$toObjectId': '$$doc_id' }
-                    }
-                }
-            },
-            'pipeline': [
-                {
-                    '$match': {
-                        '$expr': { '$or': [{ '$in': ['$_id', '$$doc_ids']}, { '$in': ['$source.nesting.parentDocId', '$$doc_ids']}] }
-                    }
-                },
-                {
-                    '$addFields': {
-                        '_id': { '$toString': '$_id' },
-                        'source.nesting.parentDocId': { 
-                            '$cond': {
-                                'if': { '$ne': ['$source.nesting.parentDocId', None] },
-                                'then': { '$toString': '$source.nesting.parentDocId' },
-                                'else': None
-                            }
-                        }
-                    }
-                }
-            ],
-            'as': 'rag_data'
-        }
-    },
-    # Stage 7: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in 'pre_tools'
+    # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in 'pre_tools'
     {
         '$lookup': {
             'from': 'apicalls',
@@ -337,7 +302,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             'as': 'pre_tools_data'
         }
     },
-    # Stage 8: Extract bridge_ids from connected_agents if it exists
+    # Stage 7: Extract bridge_ids from connected_agents if it exists
     {
         '$addFields': {
             'connected_agents_bridge_ids': {
@@ -366,7 +331,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             }
         }
     },
-    # Stage 9: Lookup connected_agent_details from configurations collection
+    # Stage 8: Lookup connected_agent_details from configurations collection
     {
         '$lookup': {
             'from': 'configurations',
@@ -406,7 +371,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             'as': 'agent_details_docs'
         }
     },
-    # Stage 10: Create connected_agent_details object with bridge_id as key
+    # Stage 9: Create connected_agent_details object with bridge_id as key
     {
         '$addFields': {
             'connected_agent_details': {
@@ -429,7 +394,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             }
         }
     },
-    # Stage 11: Remove temporary fields to clean up the output
+    # Stage 10: Remove temporary fields to clean up the output
     {
         '$project': {
             'apikeys_array': 0,
@@ -596,7 +561,6 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 bridge_data['apikey_object_id'] = folder_result[0]['apikey_object_id']
             else:
                 bridge_data['folder_apikeys'] = {}
-                bridge_data['apikey_object_id'] = None
 
             if folder_result and folder_result[0].get('type'):
                 bridge_data['folder_type'] = folder_result[0]['type']
