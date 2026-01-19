@@ -108,7 +108,7 @@ class BaseService:
             tools[function_response['name']] = function_response['content']
         
             match service:
-                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'gemini' | 'ai_ml':
+                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'ai_ml':
                     assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
                     configuration['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]})
                     tool_calls_id = assistant_tool_calls['id']
@@ -135,6 +135,39 @@ class BaseService:
                                                  "tool_use_id": function_response['tool_call_id'],
                                                  "content": function_response['content']}
                     configuration['messages'][-1]['content'].append(ordered_json)
+                case 'gemini':
+                    from google.genai import types
+
+                    function_call_part = None
+                    for part in response.get('candidates', [{}])[0].get('content', {}).get('parts', []):
+                        if isinstance(part, dict) and part.get('function_call'):
+                            if part['function_call'].get('name') == function_response['name']:
+                                function_call_part = part['function_call']
+                                break
+                    
+                    configuration['contents'].append({
+                        'role': 'model',
+                        'parts': [{'function_call': function_call_part}]
+                    })
+
+                    if isinstance(function_response['content'], str):
+                        try:
+                            function_response['content'] = json.loads(function_response['content'])
+                        except:
+                            pass
+                    
+                    if isinstance(function_response['content'], list):
+                        function_response['content'] = {"result": function_response['content']}
+
+                    configuration['contents'].append({
+                        'role': 'user',
+                        'parts': [{
+                            'function_response': {
+                                'name': function_response['name'],
+                                'response':  function_response['content']
+                            }
+                        }]
+                    })
                 case  _:
                     pass
         return configuration, tools
@@ -215,7 +248,6 @@ class BaseService:
             service_name['ai_ml'],
             service_name['openai_completion']
         ]:
-
             if funcModelResponse and self.service != service_name['openai']:
                 _.set_(model_response, self.modelOutputConfig['message'], _.get(funcModelResponse, self.modelOutputConfig['message']))
                 if self.service in [service_name['openai_completion'], service_name['groq'], service_name['grok'], service_name['open_router'], service_name['gemini'], service_name['ai_ml']]:
@@ -287,6 +319,24 @@ class BaseService:
                 # Only transform if reasoning has 'key' and 'type' structure
                 if isinstance(new_config['reasoning'], dict) and 'key' in new_config['reasoning'] and 'type' in new_config['reasoning']:
                     new_config['reasoning'] = { new_config['reasoning']['key']: new_config['reasoning']['type'] }
+
+            if service == service_name['gemini']:
+                from google.genai import types
+                tools_config = new_config.get('tools')
+
+                config_params = {
+                    'temperature': new_config.get('temperature'),
+                    'top_p': new_config.get('top_p'),
+                    'top_k': new_config.get('top_k'),
+                    'max_output_tokens': new_config.get('max_output_tokens'),
+                    'stop_sequences': new_config.get('stop_sequences'),
+                    'system_instruction': configuration.get('prompt'), # Access original config for prompt
+                    'tools': tools_config if tools_config else None
+                }
+                config_params = {k: v for k, v in config_params.items() if v is not None}
+                
+                new_config['config'] = types.GenerateContentConfig(**config_params)
+
             return new_config
         except Exception as e:
             logger.error(f"An error occurred: {str(e)}")

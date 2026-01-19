@@ -50,12 +50,12 @@ class TokenCalculator:
                 usage["reasoningTokens"] = _get_usage_value('reasoning_tokens')
             
             case 'gemini':
-                usage["inputTokens"] = model_response['usage']['prompt_tokens']
-                usage["outputTokens"] = model_response['usage']['completion_tokens']
-                usage["totalTokens"] = model_response['usage']['total_tokens']
-                # Gemini doesn't have cached/reasoning tokens
-                usage["cachedTokens"] = 0
-                usage["reasoningTokens"] = 0
+                usage_metadata = model_response.get('usage_metadata', {}) or {}
+                usage["inputTokens"] = usage_metadata.get('prompt_token_count', 0)
+                usage["outputTokens"] = usage_metadata.get('candidates_token_count', 0)
+                usage["totalTokens"] = usage_metadata.get('total_token_count', 0)
+                usage["cachedTokens"] = usage_metadata.get('cached_content_token_count', 0)
+                usage["reasoningTokens"] = usage_metadata.get('thoughts_token_count', 0) 
             
             case 'openai':
                 usage["inputTokens"] = model_response['usage']['input_tokens']

@@ -16,6 +16,7 @@ from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 from globals import *
 from src.services.cache_service import store_in_cache, find_in_cache, client, REDIS_PREFIX
 from src.configs.constant import redis_keys,inbuild_tools
+from google.genai import types
 
 def clean_json(data):
     """Recursively remove keys with empty string, empty list, or empty dictionary."""
@@ -28,7 +29,7 @@ def clean_json(data):
 
 def validate_tool_call(service, response):
     match service: # TODO: Fix validation process.
-        case  'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'gemini'| 'ai_ml':
+        case  'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'ai_ml':
             tool_calls = response.get('choices', [])[0].get('message', {}).get("tool_calls", [])
             return len(tool_calls) > 0 if tool_calls is not None else False
         case 'openai':
@@ -39,6 +40,12 @@ def validate_tool_call(service, response):
                     response['content'][0]['text'] = json.dumps(item.get('input'))
                     return False
             return response.get('stop_reason') == 'tool_use'
+        case 'gemini':
+            candidates = response.get('candidates', [])
+            if not candidates:
+                return False
+            parts = candidates[0].get('content', {}).get('parts', [])
+            return any(isinstance(part, dict) and part.get('function_call') is not None for part in parts)
         case _:
             return False
 
@@ -110,7 +117,7 @@ def transform_required_params_to_required(properties, variables={}, variables_pa
     return transformed_properties
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict: # changes
-    if service == service_name['openai_completion'] or service == service_name['open_router'] or service == service_name['mistral'] or service == service_name['gemini'] or service == service_name['ai_ml']:
+    if service == service_name['openai_completion'] or service == service_name['open_router'] or service == service_name['mistral'] or service == service_name['ai_ml']:
         data_to_send =  [
             {
                 'type': 'function',
@@ -128,6 +135,25 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             } for transformed_tool in configuration.get('tools', [])
         ]
         return data_to_send
+    
+    elif service == service_name['gemini']:
+        gemini_tools = []
+        function_declarations = [
+            {
+                "name": transformed_tool['name'],
+                "description": transformed_tool['description'],
+                "parameters": {
+                    "type": "object",
+                    "properties": clean_json(transform_required_params_to_required(transformed_tool.get('properties', {}), variables=variables, variables_path=variables_path, function_name=transformed_tool['name'], parentValue={'required': transformed_tool.get('required', [])})),
+                    "required": transformed_tool.get('required'),
+                }
+            } for transformed_tool in configuration.get('tools', [])
+        ]
+        if function_declarations:
+            from google.genai import types
+            gemini_tools.append(types.Tool(function_declarations=function_declarations)) 
+        
+        return gemini_tools 
     elif service == service_name['openai']:
         data_to_send =  [
             {
@@ -325,7 +351,7 @@ def make_code_mapping_by_service(responses, service):
     codes_mapping = {}
     function_list = []
     match service:
-        case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'gemini' | 'ai_ml':
+        case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'ai_ml':
 
             for tool_call in responses['choices'][0]['message']['tool_calls']:
                 name = tool_call['function']['name']
@@ -343,6 +369,20 @@ def make_code_mapping_by_service(responses, service):
                     "error": error
                 }
                 function_list.append(name)
+        
+        case 'gemini':
+            for part in responses['candidates'][0]["content"]["parts"]:
+                if part['function_call']:
+                    name = part["function_call"]["name"]
+                    args = part['function_call']['args']
+                        
+                    codes_mapping[part['function_call']['id']] = {
+                        'name': name,
+                        'args': args,
+                        "error": False
+                    }
+                    function_list.append(name)
+            
         case 'openai':
 
             for tool_call in [output for output in responses['output'] if output.get('type') == 'function_call']:
