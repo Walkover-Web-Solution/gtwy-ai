@@ -92,7 +92,11 @@ class MistralBatch(BaseService):
             "batch_variables": batch_variables,
             "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service,
-            "uploaded_file_id": uploaded_file.id
+            "uploaded_file_id": uploaded_file.id,
+            "org_id": self.org_id,
+            "bridge_id": self.bridge_id,
+            "version_id": getattr(self, 'version_id', ''),
+            "thread_id": self.thread_id
         }
         cache_key = f"{redis_keys['batch_']}{batch_job.id}"
         await store_in_cache(cache_key, batch_json, ttl = 86400)

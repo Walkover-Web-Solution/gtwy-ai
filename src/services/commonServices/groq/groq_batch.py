@@ -92,7 +92,12 @@ class GroqBatch(BaseService):
             "webhook": self.webhook,
             "batch_variables": batch_variables,
             "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
-            "service": self.service
+            "service": self.service,
+            "model": self.model,
+            "org_id": self.org_id,
+            "bridge_id": self.bridge_id,
+            "version_id": getattr(self, 'version_id', ''),
+            "thread_id": self.thread_id
         }
         cache_key = f"{redis_keys['batch_']}{batch_file.id}"
         await store_in_cache(cache_key, batch_json, ttl = 86400)
