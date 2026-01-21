@@ -67,13 +67,13 @@ async def updateConversationLog(log_id, update_data):
         session.close()
 
 
-async def updateConversationLogByBatchData(batch_id, custom_id, update_data):
+async def updateConversationLogByBatchData(batch_id, message_id, update_data):
     """
-    Update a conversation log entry by batch_id and custom_id
+    Update a conversation log entry by batch_id and message_id
     
     Args:
         batch_id: The batch ID from provider
-        custom_id: The custom ID for this specific message
+        message_id: The message ID for this specific message
         update_data: Dictionary containing fields to update
         
     Returns:
@@ -81,14 +81,14 @@ async def updateConversationLogByBatchData(batch_id, custom_id, update_data):
     """
     session = pg['session']()
     try:
-        # Find the log by querying the batch_data JSON column
-        # PostgreSQL JSON query: batch_data->>'batch_id' = batch_id AND batch_data->>'custom_id' = custom_id
+        # Find the log by batch_id (JSON column) and message_id (regular column)
+        # Use text() for PostgreSQL JSON operator ->>'
         stmt = (
             update(ConversationLog)
             .where(
                 and_(
-                    ConversationLog.batch_data['batch_id'].astext == batch_id,
-                    ConversationLog.batch_data['custom_id'].astext == custom_id
+                    text("batch_data->>'batch_id' = :batch_id").bindparams(batch_id=batch_id),
+                    ConversationLog.message_id == message_id
                 )
             )
             .values(**update_data)
@@ -97,10 +97,10 @@ async def updateConversationLogByBatchData(batch_id, custom_id, update_data):
         session.commit()
         
         if result.rowcount > 0:
-            logger.info(f"Updated conversation log for batch_id={batch_id}, custom_id={custom_id}")
+            logger.info(f"Updated conversation log for batch_id={batch_id}, message_id={message_id}")
             return True
         else:
-            logger.warning(f"No conversation log found for batch_id={batch_id}, custom_id={custom_id}")
+            logger.warning(f"No conversation log found for batch_id={batch_id}, message_id={message_id}")
             return False
     except Exception as err:
         logger.error(f"Error in updating conversation log by batch data: {str(err)}")

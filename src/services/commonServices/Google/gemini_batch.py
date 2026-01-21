@@ -30,8 +30,9 @@ class GeminiBatch(BaseService):
         
         # Construct batch requests in Gemini JSONL format
         for idx, message in enumerate(self.batch):
-            # Generate a unique key for each request
-            custom_id = str(uuid.uuid4())
+            # Generate a unique message_id for each message
+            # This will be sent as key to Gemini API (required by their format)
+            message_id = str(uuid.uuid4())
 
             # Construct Gemini native format request
             request_content = {
@@ -60,9 +61,9 @@ class GeminiBatch(BaseService):
                     if key not in ['messages', 'prompt', 'model']:
                         request_content['config'][key] = value
 
-            # Create JSONL entry with key and request
+            # Create JSONL entry with message_id sent as key (required by Gemini API)
             batch_entry = {
-                "key": custom_id,
+                "key": message_id,
                 "request": request_content
             }
             batch_requests.append(json.dumps(batch_entry))
@@ -70,7 +71,7 @@ class GeminiBatch(BaseService):
             # Store message mapping for response
             mapping_item = {
                 "message": message,
-                "custom_id": custom_id
+                "message_id": message_id
             }
             
             # Add batch_variables to mapping if provided
@@ -92,7 +93,7 @@ class GeminiBatch(BaseService):
             "apikey": self.apikey,
             "webhook": self.webhook,
             "batch_variables": batch_variables,
-            "custom_id_mapping": {item["custom_id"]: idx for idx, item in enumerate(message_mappings)},
+            "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service,
             "uploaded_file": uploaded_file.name
         }

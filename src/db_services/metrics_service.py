@@ -384,13 +384,13 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
     try:
         for idx, message_info in enumerate(messages):
             user_message = message_info.get("message", "")
-            custom_id = message_info.get("custom_id", "")
+            message_id = message_info.get("message_id", "")
             variables = message_info.get("variables", {}) if batch_variables else {}
             
             # Create conversation log entry for this batch message
             conversation_log_data = {
                 "user": user_message,
-                "llm_message": "under process",  # Default message while processing
+                "llm_message": "Your message has been queued for batch processing. You will receive the response shortly.",
                 "chatbot_message": None,
                 "bridge_id": parsed_data.get('bridge_id'),
                 "org_id": parsed_data.get('org_id'),
@@ -400,11 +400,11 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
                 "model": parsed_data.get('model'),
                 "status": False,  # Not completed yet
                 "variables": variables,
+                "message_id": message_id,  # Save message_id to the database
                 "prompt": {"system": processed_prompts[idx]} if idx < len(processed_prompts) else None,
                 "batch_data": {
                     "status": "queued",
-                    "batch_id": batch_id,
-                    "custom_id": custom_id
+                    "batch_id": batch_id
                 }
             }
             

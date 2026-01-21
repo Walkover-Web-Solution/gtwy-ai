@@ -30,8 +30,9 @@ class AnthropicBatch(BaseService):
         
         # Construct batch requests in Anthropic format
         for idx, message in enumerate(self.batch):
-            # Generate a unique custom_id for each request
-            custom_id = str(uuid.uuid4())
+            # Generate a unique message_id for each message
+            # This will be sent as custom_id to Anthropic API (required by their format)
+            message_id = str(uuid.uuid4())
 
             # Construct Anthropic message format
             request_params = {
@@ -55,9 +56,9 @@ class AnthropicBatch(BaseService):
                     if key in self.customConfig:
                         request_params[key] = self.customConfig[key]
 
-            # Create batch request entry with custom_id and params
+            # Create batch request entry with message_id sent as custom_id (required by Anthropic API)
             batch_entry = {
-                "custom_id": custom_id,
+                "custom_id": message_id,
                 "params": request_params
             }
             batch_requests.append(batch_entry)
@@ -65,7 +66,7 @@ class AnthropicBatch(BaseService):
             # Store message mapping for response
             mapping_item = {
                 "message": message,
-                "custom_id": custom_id
+                "message_id": message_id
             }
             
             # Add batch_variables to mapping if provided
@@ -93,7 +94,7 @@ class AnthropicBatch(BaseService):
             "apikey": self.apikey,
             "webhook": self.webhook,
             "batch_variables": batch_variables,
-            "custom_id_mapping": {item["custom_id"]: idx for idx, item in enumerate(message_mappings)},
+            "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service,
             "model": self.model
         }

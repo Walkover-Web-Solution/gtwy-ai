@@ -12,7 +12,7 @@ from src.db_services.conversationDbService import updateConversationLogByBatchDa
 async def repeat_function():
     while True:
         await check_batch_status()
-        await asyncio.sleep(900)
+        await asyncio.sleep(90)
 
 
 async def check_batch_status():
@@ -27,7 +27,7 @@ async def check_batch_status():
             webhook = batch_data.get('webhook')
             batch_id = batch_data.get('id')
             batch_variables = batch_data.get('batch_variables')
-            custom_id_mapping = batch_data.get('custom_id_mapping', {})
+            message_id_mapping = batch_data.get('message_id_mapping', {})
             service = batch_data.get('service')
             
             # Try to acquire lock for this batch
@@ -53,15 +53,15 @@ async def check_batch_status():
                         if results:
                             # Process and format the results (could be success or error results)
                             formatted_results = await process_batch_results(
-                                results, service, batch_id, batch_variables, custom_id_mapping
+                                results, service, batch_id, batch_variables, message_id_mapping
                             )
                             
                             # Update conversation logs with the results
                             for formatted_result in formatted_results:
-                                custom_id = formatted_result.get('custom_id')
+                                message_id = formatted_result.get('message_id')
                                 
-                                if not custom_id:
-                                    # Skip if no custom_id (might be a batch-level error)
+                                if not message_id:
+                                    # Skip if no message_id (might be a batch-level error)
                                     continue
                                 
                                 # Extract data from formatted result
@@ -72,16 +72,29 @@ async def check_batch_status():
                                 
                                 # Determine status and message
                                 is_success = status_code is None or status_code < 400
-                                llm_message = data.get('content') if is_success else None
-                                chatbot_message = data.get('content') if is_success else None
-                                error_message = error.get('message') if error else None
+                                
+                                if is_success:
+                                    # Success case: Store LLM response
+                                    llm_message = data.get('content')
+                                    chatbot_message = data.get('content')
+                                    error_message = None
+                                else:
+                                    # Error case: Store error in error column
+                                    llm_message = None
+                                    chatbot_message = None
+                                    if isinstance(error, dict):
+                                        error_message = error.get('message', str(error))
+                                    elif error:
+                                        error_message = str(error)
+                                    else:
+                                        error_message = "Unknown error occurred"
                                 
                                 # Prepare update data
                                 update_data = {
-                                    'llm_message': llm_message or error_message or "under process",
+                                    'llm_message': llm_message,  # Only actual LLM response, not error
                                     'chatbot_message': chatbot_message,
                                     'status': is_success,
-                                    'error': error_message,
+                                    'error': error_message,  # Error stored separately in error column
                                     'finish_reason': data.get('finish_reason'),
                                     'tokens': {
                                         'input': usage.get('input_tokens'),
@@ -90,13 +103,12 @@ async def check_batch_status():
                                     } if usage else None,
                                     'batch_data': {
                                         'status': 'completed',
-                                        'batch_id': batch_id,
-                                        'custom_id': custom_id
+                                        'batch_id': batch_id
                                     }
                                 }
                                 
-                                # Update the conversation log by batch_id and custom_id
-                                await updateConversationLogByBatchData(batch_id, custom_id, update_data)
+                                # Update the conversation log by batch_id and message_id
+                                await updateConversationLogByBatchData(batch_id, message_id, update_data)
                             
                             # Check if all responses are errors
                             has_success = any(
@@ -107,7 +119,7 @@ async def check_batch_status():
                             await sendResponse(response_format, data=formatted_results, success=has_success)
                         else:
                             # No results but marked as completed - send generic error
-                            # We cannot update specific logs here as we don't have custom_ids
+                            # We cannot update specific logs here as we don't have message_ids
                             # Logs will remain with "under process" status
                             
                             error_response = [{

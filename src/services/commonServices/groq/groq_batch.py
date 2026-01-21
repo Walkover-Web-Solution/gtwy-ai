@@ -30,12 +30,13 @@ class GroqBatch(BaseService):
         
         # Construct batch requests in OpenAI format (Groq is OpenAI-compatible)
         for idx, message in enumerate(self.batch):
-            # Generate a unique ID for each request
-            custom_id = str(uuid.uuid4())
+            # Generate a unique message_id for each message
+            # This will be sent as custom_id to Groq API (required by their format)
+            message_id = str(uuid.uuid4())
 
-            # Construct OpenAI-compatible request
+            # Construct OpenAI-compatible request with message_id as custom_id
             request_obj = {
-                "custom_id": custom_id,
+                "custom_id": message_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
                 "body": {
@@ -68,7 +69,7 @@ class GroqBatch(BaseService):
             # Store message mapping for response
             mapping_item = {
                 "message": message,
-                "custom_id": custom_id
+                "message_id": message_id
             }
             
             # Add batch_variables to mapping if provided
@@ -90,7 +91,7 @@ class GroqBatch(BaseService):
             "apikey": self.apikey,
             "webhook": self.webhook,
             "batch_variables": batch_variables,
-            "custom_id_mapping": {item["custom_id"]: idx for idx, item in enumerate(message_mappings)},
+            "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service
         }
         cache_key = f"{redis_keys['batch_']}{batch_file.id}"
