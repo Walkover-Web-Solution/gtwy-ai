@@ -50,7 +50,8 @@ async def grok_runmodel(configuration, api_key, execution_time_logs, bridge_id, 
             org_name=org_name,
             service=service,
             count=count,
-            token_calculator=token_calculator
+            token_calculator=token_calculator,
+            api_key=api_key
         )
     except Exception as error:
         execution_time_logs.append({"step": f"{service} Processing time for call :- {count + 1}", "time_taken": timer.stop("API chat completion")})

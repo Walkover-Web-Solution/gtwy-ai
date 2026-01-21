@@ -183,7 +183,8 @@ async def anthropic_runmodel(configuration, apikey, execution_time_logs, bridge_
             org_name=org_name,
             service = service,
             count = count,
-            token_calculator = token_calculator
+            token_calculator = token_calculator,
+            api_key = apikey
         )
 
     except Exception as e:

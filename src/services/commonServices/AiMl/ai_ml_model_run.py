@@ -33,7 +33,8 @@ async def ai_ml_model_run(configuration, apiKey, execution_time_logs, bridge_id,
             org_name = org_name,
             service = service,
             count = count,
-            token_calculator = token_calculator
+            token_calculator = token_calculator,
+            api_key = apiKey
         )
 
     except Exception as error:
