@@ -2,8 +2,10 @@ import asyncio
 
 from pymongo.errors import OperationFailure, PyMongoError
 
+from config import Config
 from globals import logger
 from models.mongo_connection import db
+from src.services.commonServices.baseService.utils import send_message
 from src.services.utils.load_model_configs import get_model_configurations
 
 model_config_model = db["modelconfigurations"]
@@ -26,11 +28,22 @@ async def _async_change_listener():
     """The core async change stream listener."""
     pipeline = [{"$match": {"operationType": {"$in": ["insert", "update", "replace", "delete"]}}}]
     try:
-        async with model_config_model.watch(pipeline) as stream:
+        async with model_config_model.watch(pipeline, full_document="updateLookup") as stream:
             logger.info("MongoDB change stream is now listening for model configuration changes.")
             async for change in stream:
                 logger.info(f"Change detected in model configurations: {change['operationType']}")
                 await init_model_configuration()
+                await send_message(
+                    cred={"apikey": Config.RTLAYER_AUTH, "ttl": 1, "channel": "*"},
+                    data={
+                        "event": "model_config_updated",
+                        "operation": change["operationType"],
+                        "model_name": change.get("fullDocument", {}).get("model_name"),
+                        "service": change.get("fullDocument", {}).get("service"),
+                        "timestamp": str(change.get("clusterTime", "")),
+                    },
+                )
+                logger.info("Model configuration change detected and sent to RTLayer successfully.")
     except OperationFailure as e:
         logger.error(f"Change stream operation failed: {e}")
         raise  # Re-raise to be caught by the sync wrapper
