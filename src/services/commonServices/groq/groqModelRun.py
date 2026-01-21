@@ -34,8 +34,7 @@ async def groq_runmodel(configuration, apiKey, execution_time_logs, bridge_id, t
             org_name = org_name ,
             service = service,
             count = count,
-            token_calculator = token_calculator,
-            api_key = apiKey
+            token_calculator = token_calculator
         )
 
     except Exception as e:

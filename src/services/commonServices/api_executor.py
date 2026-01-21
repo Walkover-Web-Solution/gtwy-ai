@@ -17,8 +17,7 @@ async def execute_api_call(
     org_name= "",
     service = "",
     count = 0,
-    token_calculator = None,
-    api_key = None
+    token_calculator = None
 ):
     try:
         # Start timer
@@ -41,7 +40,7 @@ async def execute_api_call(
             
             # Send alert if required (even on failure)
             if alert_on_retry:
-                alert_data = {
+                await send_alert(data={
                     "org_name" : org_name,
                     "bridge_name" : name,
                     "configuration": configuration,
@@ -50,17 +49,7 @@ async def execute_api_call(
                     "org_id": org_id,
                     "message": "API call failed - no retry attempted",
                     "error" : result.get('error')
-                }
-                
-                # Add masked API key for specific agent
-                if bridge_id == '68184c06318d3e5410e8dd7a' and api_key:
-                    if len(api_key) > 8:
-                        masked_key = f"{api_key[:4]}...{api_key[-4:]}"
-                    else:
-                        masked_key = "***"
-                    alert_data["masked_api_key"] = masked_key
-                
-                await send_alert(data=alert_data)
+                })
             
             return result
 

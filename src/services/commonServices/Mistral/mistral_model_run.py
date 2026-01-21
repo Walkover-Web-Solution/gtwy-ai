@@ -35,8 +35,7 @@ async def mistral_model_run(configuration, apiKey, execution_time_logs, bridge_i
             org_name = org_name,
             service = service,
             count = count,
-            token_calculator = token_calculator,
-            api_key = apiKey
+            token_calculator = token_calculator
         )
 
     except Exception as error:
