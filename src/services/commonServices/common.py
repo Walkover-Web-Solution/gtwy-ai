@@ -243,12 +243,15 @@ async def chat(request_body):
 
                 # Store current agent's history data before transferring
                 current_history_data = {
-                    "bridge_id": parsed_data["bridge_id"],
-                    "history_params": result.get("historyParams"),
-                    "dataset": [parsed_data["usage"]],
-                    "version_id": current_version_id,
-                    "thread_info": thread_info,
-                    "parent_id": parsed_data.get("parent_bridge_id", ""),
+                    'bridge_id': parsed_data['bridge_id'],
+                    'history_params': result.get('historyParams'),
+                    'dataset': [parsed_data['usage']],
+                    'version_id': current_version_id,
+                    'thread_info': thread_info,
+                    'parent_id': parsed_data.get('parent_bridge_id', ''),
+                    'parsed_data': parsed_data,
+                    'result': result,
+                    'params': params
                 }
                 TRANSFER_HISTORY[transfer_request_id].append(current_history_data)
 

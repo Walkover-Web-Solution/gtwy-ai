@@ -94,7 +94,7 @@ async def add_tool_call_data_in_history(chats):
     return processed_chats
 
 
-async def save_sub_thread_id_and_name(thread_id, sub_thread_id, org_id, thread_flag, response_format, bridge_id, user):
+async def save_sub_thread_id_and_name(thread_id, sub_thread_id, org_id, thread_flag, response_format, bridge_id, user, orchestrator_flag=None):
     try:
         # Create Redis cache key for the combination
         cache_key = f"sub_thread_{org_id}_{bridge_id}_{thread_id}_{sub_thread_id}"
@@ -110,11 +110,9 @@ async def save_sub_thread_id_and_name(thread_id, sub_thread_id, org_id, thread_f
         message = "generate description"
         current_time = datetime.now()
         if thread_flag:
-            display_name = await call_ai_middleware(
-                message, bridge_ids["generate_description"], response_type="text", variables=variables
-            )
-        await save_sub_thread_id(org_id, thread_id, sub_thread_id, display_name, bridge_id, current_time)
-
+            display_name = await call_ai_middleware(message, bridge_ids['generate_description'], response_type='text', variables=variables)
+        await save_sub_thread_id(org_id, thread_id, sub_thread_id, display_name, bridge_id, current_time, orchestrator_flag)
+        
         # Store in Redis cache for 48 hours (172800 seconds)
         cache_data = {
             "org_id": org_id,

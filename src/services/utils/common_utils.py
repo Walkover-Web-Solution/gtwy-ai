@@ -497,12 +497,15 @@ async def process_background_tasks(
 
         # Add current agent's history
         current_history_data = {
-            "bridge_id": parsed_data["bridge_id"],
-            "history_params": result.get("historyParams"),
-            "dataset": [parsed_data["usage"]],
-            "version_id": final_version_id,
-            "thread_info": thread_info,
-            "parent_id": parsed_data.get("parent_bridge_id", ""),
+            'bridge_id': parsed_data['bridge_id'],
+            'history_params': result.get('historyParams'),
+            'dataset': [parsed_data['usage']],
+            'version_id': final_version_id,
+            'thread_info': thread_info,
+            'parent_id': parsed_data.get('parent_bridge_id', ''),
+            'parsed_data': parsed_data,
+            'result': result,
+            'params': params
         }
         TRANSFER_HISTORY[transfer_request_id].append(current_history_data)
 
@@ -542,15 +545,33 @@ async def process_background_tasks(
                         history_entry["history_params"]["prompt"] = agent_config.get("prompt")
 
                 # Save history to database
-                asyncio.create_task(
-                    create(
-                        history_entry["dataset"],
-                        history_entry["history_params"],
-                        history_entry["version_id"],
-                        history_entry["thread_info"],
-                    )
-                )
-
+                asyncio.create_task(create(
+                    history_entry['dataset'],
+                    history_entry['history_params'],
+                    history_entry['version_id'],
+                    history_entry['thread_info']
+                ))
+        
+        # Publish queue messages for all agents in the transfer chain
+        # Run specific functions for each agent in the chain
+        for history_entry in transfer_chain:
+            agent_parsed_data = history_entry['parsed_data']
+            agent_result = history_entry['result']
+            agent_params = history_entry['params']
+            agent_thread_info = history_entry['thread_info']
+            
+            # Prepare data for queue message
+            data = await make_request_data_and_publish_sub_queue(
+                agent_parsed_data, 
+                agent_result, 
+                agent_params, 
+                agent_thread_info
+            )
+            data = make_json_serializable(data)
+            
+            # Publish message for this agent
+            await sub_queue_obj.publish_message(data)
+        
         # Clean up transfer history
         del TRANSFER_HISTORY[transfer_request_id]
     else:
@@ -561,41 +582,25 @@ async def process_background_tasks(
             result["historyParams"]["child_id"] = None
 
         # Save single history entry
-        asyncio.create_task(
-            create([parsed_data["usage"]], result["historyParams"], parsed_data["version_id"], thread_info)
-        )
-
-    # Publish to queue (for both transfer and non-transfer cases)
-    data = await make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info)
-    data = make_json_serializable(data)
-    await sub_queue_obj.publish_message(data)
+        asyncio.create_task(create(
+            [parsed_data['usage']], 
+            result["historyParams"], 
+            parsed_data['version_id'], 
+            thread_info
+        ))
+        
+        # Publish to queue (for both transfer and non-transfer cases)
+        data = await make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info)
+        data = make_json_serializable(data)
+        await sub_queue_obj.publish_message(data)
 
 
 async def process_background_tasks_for_error(parsed_data, error):
     # Combine the tasks into a single asyncio.gather call
     tasks = [
-        send_alert(
-            data={
-                "org_name": parsed_data["org_name"],
-                "bridge_name": parsed_data["name"],
-                "configuration": parsed_data["configuration"],
-                "error": str(error),
-                "message_id": parsed_data["message_id"],
-                "bridge_id": parsed_data["bridge_id"],
-                "message": "Exception for the code",
-                "org_id": parsed_data["org_id"],
-            }
-        ),
-        create([parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]),
-        save_sub_thread_id_and_name(
-            parsed_data["thread_id"],
-            parsed_data["sub_thread_id"],
-            parsed_data["org_id"],
-            parsed_data["thread_flag"],
-            parsed_data["response_format"],
-            parsed_data["bridge_id"],
-            parsed_data["user"],
-        ),
+        send_alert(data={"org_name" : parsed_data['org_name'], "bridge_name" : parsed_data['name'], "configuration": parsed_data['configuration'], "error": str(error), "message_id": parsed_data['message_id'], "bridge_id": parsed_data['bridge_id'], "message": "Exception for the code", "org_id": parsed_data['org_id']}),
+        create([parsed_data['usage']],parsed_data['historyParams'] , parsed_data['version_id']),
+        save_sub_thread_id_and_name(parsed_data['thread_id'], parsed_data['sub_thread_id'], parsed_data['org_id'], parsed_data['thread_flag'], parsed_data['response_format'], parsed_data['bridge_id'], parsed_data['user'], parsed_data.get('orchestrator_flag'))
     ]
     # Filter out None values
     await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)

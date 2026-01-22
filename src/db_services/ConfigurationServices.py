@@ -583,9 +583,7 @@ async def update_bridge(bridge_id=None, update_fields=None, version_id=None):
     return {"success": True, "result": updated_bridge}
 
 
-async def save_sub_thread_id(
-    org_id, thread_id, sub_thread_id, display_name, bridge_id, current_time
-):  # bridge_id is now a required parameter
+async def save_sub_thread_id(org_id, thread_id, sub_thread_id, display_name, bridge_id,current_time): # bridge_id is now a required parameter
     try:
         # Build update data with both $set and $setOnInsert in single operation
         update_data = {
@@ -600,8 +598,8 @@ async def save_sub_thread_id(
 
         # Add display_name to $set if provided
         if display_name is not None and isinstance(display_name, str):
-            update_data["$set"]["display_name"] = display_name
-
+            update_data['$set']['display_name'] = display_name
+       
         result = await threadsModel.find_one_and_update(
             {"org_id": org_id, "thread_id": thread_id, "sub_thread_id": sub_thread_id, "bridge_id": bridge_id},
             update_data,

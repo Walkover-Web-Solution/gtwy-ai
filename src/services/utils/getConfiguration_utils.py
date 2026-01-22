@@ -371,31 +371,27 @@ def add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_f
     is_orchestrator = orchestrator_flag or result.get("bridges", {}).get("orchestrator", False)
 
     for bridge_name, bridge_info in connected_agents.items():
-        bridge_id_value = bridge_info.get("bridge_id", "")
-        version_id_value = bridge_info.get("version_id", "")
-
+        bridge_id_value = bridge_info.get('bridge_id', '')
+        version_id_value = bridge_info.get('version_id', '')
+        description = bridge_info.get('description') or connected_agent_details.get(bridge_id_value, {}).get('description', '')
         # If version_id is present, use connected_agents data, otherwise use connected_agent_details
         if version_id_value:
             # Use data from connected_agents when version_id is present
-            description = bridge_info.get("description", "")
-            variables = bridge_info.get("variables", {})
-            fields = variables.get("fields", {})
-            required_params = variables.get("required_params", [])
+            variables = bridge_info.get('variables', {})
+            fields = variables.get('fields', {})
+            required_params = variables.get('required_params', [])
         else:
             # Use data from connected_agent_details when version_id is not present
             agent_details = connected_agent_details.get(bridge_id_value)
             if agent_details and agent_details is not None:
-                description = agent_details.get("description", bridge_info.get("description", ""))
-                variables = agent_details.get("agent_variables", {})
-                fields = variables.get("fields", {})
-                required_params = variables.get("required_params", [])
+                variables = agent_details.get('agent_variables', {})
+                fields = variables.get('fields', {})
+                required_params = variables.get('required_params', [])
             else:
-                # Final fallback to connected_agents data
-                description = bridge_info.get("description", "")
-                variables = bridge_info.get("variables", {})
-                fields = variables.get("fields", {})
-                required_params = variables.get("required_params", [])
-
+                variables = bridge_info.get('variables', {})
+                fields = variables.get('fields', {})
+                required_params = variables.get('required_params', [])
+        
         name = makeFunctionName(bridge_name)
 
         # Build properties dictionary
