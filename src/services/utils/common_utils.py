@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import src.db_services.ConfigurationServices as ConfigurationService
@@ -25,6 +25,8 @@ from src.services.utils.update_and_check_cost import update_cost, update_last_us
 from ...controllers.conversationController import getThread
 from ..commonServices.baseService.utils import sendResponse
 from .helper import Helper
+
+UTC = timezone.utc
 
 
 def setup_agent_pre_tools(parsed_data, bridge_configurations):
