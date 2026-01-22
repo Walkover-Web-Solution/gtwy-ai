@@ -63,6 +63,21 @@ async def check_batch_status():
                                 results, service, batch_id, batch_variables, message_id_mapping
                             )
                             
+                            # Check if all responses are errors
+                            has_success = any(
+                                item.get("status_code") is None or item.get("status_code", 200) < 400 
+                                for item in formatted_results
+                            )
+                            
+                            webhook_response = None
+                            webhook_error = None
+                            if webhook.get('url') is not None:
+                                try:
+                                    webhook_response = await sendResponse(response_format, data=formatted_results, success=has_success)
+                                except Exception as webhook_err:
+                                    webhook_error = str(webhook_err)
+                                    logger.error(f"Error sending webhook for batch {batch_id}: {webhook_error}")
+                            
                             # Initialize TokenCalculator for batch cost calculation with 50% discount
                             token_calculator = TokenCalculator(service, {})
                             
@@ -126,7 +141,11 @@ async def check_batch_status():
                                     } if usage else None,
                                     'batch_data': {
                                         'status': 'completed',
-                                        'batch_id': batch_id
+                                        'batch_id': batch_id,
+                                        'webhook_response': webhook_response,
+                                        'webhook_error': webhook_error,  # Store webhook error if any
+                                        'webhook_url': webhook.get('url'),
+                                        'webhook_headers': webhook.get('headers')
                                     }
                                 }
                                 
@@ -174,14 +193,6 @@ async def check_batch_status():
                                     logger.info(f"Saved {len(metrics_data)} metrics for batch {batch_id}")
                                 except Exception as metrics_error:
                                     logger.error(f"Error saving metrics for batch {batch_id}: {str(metrics_error)}")
-                            
-                            # Check if all responses are errors
-                            has_success = any(
-                                item.get("status_code") is None or item.get("status_code", 200) < 400 
-                                for item in formatted_results
-                            )
-                            
-                            await sendResponse(response_format, data=formatted_results, success=has_success)
                         else:
                             # No results but marked as completed - send generic error
                             # We cannot update specific logs here as we don't have message_ids
@@ -195,7 +206,12 @@ async def check_batch_status():
                                 },
                                 "status_code": 500
                             }]
-                            await sendResponse(response_format, data=error_response, success=False)
+                            
+                            if webhook.get('url') is not None:
+                                try:
+                                    await sendResponse(response_format, data=error_response, success=False)
+                                except Exception as webhook_err:
+                                    logger.error(f"Error sending webhook for batch {batch_id} (no results case): {str(webhook_err)}")
                         
                         # Delete from cache after sending webhook
                         cache_key = f"{redis_keys['batch_']}{batch_id}"
