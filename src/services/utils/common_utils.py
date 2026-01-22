@@ -251,7 +251,7 @@ async def handle_pre_tools(parsed_data):
         else:
             parsed_data['variables']['pre_function'] = pre_function_response.get('response')
 
-async def manage_threads(parsed_data):
+async def manage_threads(parsed_data,request_body):
     thread_id = parsed_data['thread_id']
     sub_thread_id = parsed_data['sub_thread_id']
     bridge_id = parsed_data['bridge_id']
@@ -282,7 +282,10 @@ async def manage_threads(parsed_data):
         parsed_data['sub_thread_id'] = sub_thread_id
         parsed_data['gpt_memory'] = False
         result = []
-    
+
+        if not request_body.get("body", {}).get("thread_id"):
+            request_body["body"]["thread_id"] = thread_id
+         
     # cache_key = f"{bridge_id}_{thread_id}_{sub_thread_id}"
     # if len(parsed_data['files']) == 0:
     #     cached_files = await find_in_cache(cache_key)
