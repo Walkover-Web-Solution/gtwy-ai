@@ -476,8 +476,13 @@ async def chat(request_body):
             await sendResponse(
                 parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"]
             ) if parsed_data["response_format"]["type"] != "default" else None
-            # Process background tasks for error handling
-            await process_background_tasks_for_error(parsed_data, error)
+            # Process background tasks for error handling (includes transfer chain handling)
+            await process_background_tasks_for_error(
+                parsed_data, 
+                error, 
+                transfer_request_id=parsed_data.get('transfer_request_id'),
+                bridge_configurations=bridge_configurations
+            )
         # Check for a chained exception and create a structured error object
         if error.__cause__:
             # Combine both initial and fallback errors into a single string
@@ -739,8 +744,13 @@ async def image(request_body):
             await sendResponse(
                 parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"]
             ) if parsed_data["response_format"]["type"] != "default" else None
-            # Process background tasks for error handling
-            await process_background_tasks_for_error(parsed_data, error)
+            # Process background tasks for error handling (includes transfer chain handling)
+            await process_background_tasks_for_error(
+                parsed_data, 
+                error,
+                transfer_request_id=parsed_data.get('transfer_request_id'),
+                bridge_configurations=bridge_configurations
+            )
         # Check for a chained exception and create a structured error object
         if error.__cause__:
             # Combine both initial and fallback errors into a single string

@@ -595,12 +595,120 @@ async def process_background_tasks(
         await sub_queue_obj.publish_message(data)
 
 
-async def process_background_tasks_for_error(parsed_data, error):
-    # Combine the tasks into a single asyncio.gather call
+async def process_background_tasks_for_error(parsed_data, error, transfer_request_id=None, bridge_configurations=None):
+    """
+    Process background tasks for error handling.
+    If this is part of a transfer chain, save history for all agents in the chain.
+    
+    Args:
+        parsed_data: Parsed request data for the current agent
+        error: The error that occurred
+        transfer_request_id: Optional transfer request ID for tracking transfer chains
+        bridge_configurations: Optional bridge configurations for all agents
+    """
+    # Check if orchestrator_flag is enabled
+    orchestrator_flag = parsed_data.get('orchestrator_flag') or parsed_data.get('body', {}).get('orchestrator_flag')
+    
+    # Check if this is part of a transfer chain
+    is_transfer_chain = transfer_request_id and transfer_request_id in TRANSFER_HISTORY and len(TRANSFER_HISTORY[transfer_request_id]) > 0
+    
+    if is_transfer_chain:
+        # This agent failed during a transfer chain
+        # We need to save history for all previous agents AND the current failed agent
+        bridge_configs = bridge_configurations or {}
+        
+        # Get the correct version_id for the current (failed) agent
+        current_version_id = bridge_configs.get(parsed_data['bridge_id'], {}).get('version_id', parsed_data['version_id'])
+        
+        # Add current agent's error history to the transfer chain
+        current_history_data = {
+            'bridge_id': parsed_data['bridge_id'],
+            'history_params': parsed_data.get('historyParams'),
+            'dataset': [parsed_data['usage']],
+            'version_id': current_version_id,
+            'thread_info': {
+                'thread_id': parsed_data.get('thread_id'),
+                'sub_thread_id': parsed_data.get('sub_thread_id')
+            },
+            'parent_id': parsed_data.get('parent_bridge_id', '')
+        }
+        TRANSFER_HISTORY[transfer_request_id].append(current_history_data)
+        
+        # Get all agents in the transfer chain
+        transfer_chain = TRANSFER_HISTORY[transfer_request_id]
+        
+        # If orchestrator_flag is true, save all agents in a single orchestrator entry
+        if orchestrator_flag:
+            # Update history_params with prompts from bridge_configurations
+            for idx, history_entry in enumerate(transfer_chain):
+                if history_entry['history_params']:
+                    agent_bridge_id = history_entry['bridge_id']
+                    if bridge_configs and agent_bridge_id in bridge_configs:
+                        agent_config = bridge_configs[agent_bridge_id].get('configuration', {})
+                        history_entry['history_params']['prompt'] = agent_config.get('prompt')
+            
+            # Save all agents in a single orchestrator entry (including the failed one)
+            asyncio.create_task(create_orchestrator(transfer_chain, transfer_chain[-1]['thread_info']))
+        else:
+            # Regular transfer chain - save each agent separately
+            for idx, history_entry in enumerate(transfer_chain):
+                # Update parent_id and child_id in history_params based on chain position
+                if history_entry['history_params']:
+                    # Set parent_id from the previous entry's bridge_id
+                    history_entry['history_params']['parent_id'] = history_entry.get('parent_id', '')
+                    
+                    # Set child_id from the next entry's bridge_id (None if last in chain)
+                    if idx < len(transfer_chain) - 1:
+                        history_entry['history_params']['child_id'] = transfer_chain[idx + 1]['bridge_id']
+                    else:
+                        history_entry['history_params']['child_id'] = None
+                    
+                    # Add prompt from bridge_configurations if available
+                    agent_bridge_id = history_entry['bridge_id']
+                    if bridge_configs and agent_bridge_id in bridge_configs:
+                        agent_config = bridge_configs[agent_bridge_id].get('configuration', {})
+                        history_entry['history_params']['prompt'] = agent_config.get('prompt')
+                
+                # Save history to database (including error history for the last agent)
+                asyncio.create_task(create(
+                    history_entry['dataset'],
+                    history_entry['history_params'],
+                    history_entry['version_id'],
+                    history_entry['thread_info']
+                ))
+        
+        # Clean up transfer history
+        del TRANSFER_HISTORY[transfer_request_id]
+    else:
+        # Regular flow (no transfer) - save single error history
+        asyncio.create_task(create(
+            [parsed_data['usage']],
+            parsed_data['historyParams'],
+            parsed_data['version_id']
+        ))
+    
+    # Send alert and save sub_thread_id for all cases
     tasks = [
-        send_alert(data={"org_name" : parsed_data['org_name'], "bridge_name" : parsed_data['name'], "configuration": parsed_data['configuration'], "error": str(error), "message_id": parsed_data['message_id'], "bridge_id": parsed_data['bridge_id'], "message": "Exception for the code", "org_id": parsed_data['org_id']}),
-        create([parsed_data['usage']],parsed_data['historyParams'] , parsed_data['version_id']),
-        save_sub_thread_id_and_name(parsed_data['thread_id'], parsed_data['sub_thread_id'], parsed_data['org_id'], parsed_data['thread_flag'], parsed_data['response_format'], parsed_data['bridge_id'], parsed_data['user'], parsed_data.get('orchestrator_flag'))
+        send_alert(data={
+            "org_name": parsed_data['org_name'],
+            "bridge_name": parsed_data['name'],
+            "configuration": parsed_data['configuration'],
+            "error": str(error),
+            "message_id": parsed_data['message_id'],
+            "bridge_id": parsed_data['bridge_id'],
+            "message": "Exception for the code",
+            "org_id": parsed_data['org_id']
+        }),
+        save_sub_thread_id_and_name(
+            parsed_data['thread_id'],
+            parsed_data['sub_thread_id'],
+            parsed_data['org_id'],
+            parsed_data['thread_flag'],
+            parsed_data['response_format'],
+            parsed_data['bridge_id'],
+            parsed_data['user'],
+            parsed_data.get('orchestrator_flag')
+        )
     ]
     # Filter out None values
     await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)
