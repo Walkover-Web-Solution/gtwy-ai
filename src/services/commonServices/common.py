@@ -159,6 +159,11 @@ async def chat(request_body):
 
         # Step 5: Manage Threads
         thread_info = await manage_threads(parsed_data)
+
+        if not request_body.get("body", {}).get("thread_id"):
+            request_body["body"]["thread_id"] = parsed_data["thread_id"]
+            request_body["body"]["service"] = parsed_data["service"] 
+
         # add Files from cache is Present
         if len(parsed_data['files']) == 0:
             parsed_data['files'] = await add_files_to_parse_data(parsed_data['thread_id'], parsed_data['sub_thread_id'], parsed_data['bridge_id'])
