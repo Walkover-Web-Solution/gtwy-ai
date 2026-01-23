@@ -34,7 +34,7 @@ async def _async_change_listener():
                 logger.info(f"Change detected in model configurations: {change['operationType']}")
                 await init_model_configuration()
                 await send_message(
-                    cred={"apikey": Config.RTLAYER_AUTH, "ttl": 1, "channel": "*"},
+                    cred={"apikey": Config.RTLAYER_AUTH, "ttl": 1, "channel": "global_model_updates"},
                     data={
                         "event": "model_config_updated",
                         "operation": change["operationType"],
