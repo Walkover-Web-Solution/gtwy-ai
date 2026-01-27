@@ -54,7 +54,7 @@ This document provides a comprehensive flow of the Completion API from request i
 **Input Parameters:**
 - `configuration`: Base configuration to merge
 - `service`: AI service name
-- `bridge_id`: Bridge identifier
+- `bridge_id` / `agent_id`: Bridge or agent identifier (any of these keys supported)
 - `apikey`: API key for service
 - `template_id`: Optional template ID
 - `variables`: Variables for prompt replacement
@@ -65,9 +65,9 @@ This document provides a comprehensive flow of the Completion API from request i
 - `built_in_tools`: Built-in tools to include
 - `guardrails`: Content guardrails configuration
 - `web_search_filters`: Allowed domains for built-in web search
-- `orchestrator_flag`: Whether to store multi-agent transfers as a single orchestrator entry
+- `orchestrator_flag`: Whether to store multi-agent transfers as a single orchestrator entry. Also used to give the power of transfer query to agent if required by adding the `action_type` parameter to the tool properties (with options: "transfer" to directly return child agent response, or "conversation" to get child response and continue processing)
 
-#### Bridge Data Retrieval
+#### Bridge/Agent Data Retrieval
 - **File**: `src/services/utils/getConfiguration_utils.py`
 - **Function**: `get_bridge_data`
 - **Database Service**: `src/db_services/ConfigurationServices.py`
@@ -78,7 +78,6 @@ This document provides a comprehensive flow of the Completion API from request i
   - `bridges` (main configuration)
   - `apicalls` (tools/functions)
   - `apikeycredentials` (API keys)
-  - `rag_parent_datas` (RAG documents)
   - `pre_tools` (pre-tool scripts)
   - `connected_agent_details` (agent overrides)
 - Folder-level API key resolution when `folder_id` exists
@@ -94,9 +93,6 @@ This document provides a comprehensive flow of the Completion API from request i
 - Memory settings and context
 - Connected agent metadata and overrides
 - Folder API keys/limits when present
-
-#### Configuration Assembly
-The `getConfiguration` function assembles:
 
 **Core Configuration:**
 - `prompt`: System prompt with tone and response style
@@ -331,23 +327,6 @@ The `getConfiguration` function assembles:
 - **Queue System**: Non-default response formats processed asynchronously
 - **Background Tasks**: Metrics and logging handled via a sub-queue consumer
 - **Thread Pool**: Executor for CPU-intensive operations
-
-## Security Considerations
-
-### Authentication
-- JWT token validation required
-- Organization-level access control
-- API key validation per service
-
-### Rate Limiting
-- Per-bridge rate limiting (100 points)
-- Per-thread rate limiting (20 points)
-- Configurable rate limit windows
-
-### Data Isolation
-- Organization-level data segregation
-- Bridge-level permission validation
-- Secure API key storage and retrieval
 
 ## 6. Service Execution (OpenAI Example)
 
