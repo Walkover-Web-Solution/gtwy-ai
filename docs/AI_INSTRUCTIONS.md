@@ -3,14 +3,38 @@
 This document provides comprehensive guidelines for writing new code in the GTWY AI middleware repository. Follow these conventions to maintain consistency and code quality.
 
 ## Table of Contents
-1. [Project Structure](#project-structure)
-2. [File Naming Conventions](#file-naming-conventions)
-3. [Code Organization](#code-organization)
-4. [Coding Standards](#coding-standards)
-5. [Error Handling](#error-handling)
-6. [Database Operations](#database-operations)
-7. [Testing Guidelines](#testing-guidelines)
-8. [Best Practices](#best-practices)
+1. [AI Coding Mental Model](#ai-coding-mental-model)
+2. [Project Structure](#project-structure)
+3. [File Naming Conventions](#file-naming-conventions)
+4. [Code Organization](#code-organization)
+5. [Coding Standards](#coding-standards)
+6. [Error Handling](#error-handling)
+7. [Best Practices](#best-practices)
+
+---
+
+## AI Coding Mental Model
+
+**Act as a system designer.**
+
+### Core Principles
+
+**Never guess.**
+- If intent, constraints, or compatibility with the system are unclear, ask questions before acting.
+- Understand requirements fully before implementing.
+- Clarify ambiguous specifications.
+
+**The system comes first.**
+- Architecture, design decisions, and existing guidelines define what is allowed.
+- Resolve conceptual conflicts before writing code.
+- Follow established patterns and conventions.
+- Respect the existing codebase structure.
+
+**Understanding is shared memory.**
+- When understanding changes, update code and its documentation together so the system stays coherent.
+- Keep documentation synchronized with implementation.
+- Update related files when making changes.
+- Maintain consistency across the codebase.
 
 ---
 
