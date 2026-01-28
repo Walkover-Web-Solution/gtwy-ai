@@ -576,18 +576,47 @@ async def process_background_tasks(
         del TRANSFER_HISTORY[transfer_request_id]
     else:
         # Regular flow (no transfer or first agent that didn't transfer)
-        # Always set parent_id and child_id in history_params for consistency
-        if result.get("historyParams"):
-            result["historyParams"]["parent_id"] = parsed_data.get("parent_bridge_id", "")
-            result["historyParams"]["child_id"] = None
+        # Check if orchestrator_flag is enabled for single agent case
+        if orchestrator_flag:
+            # Even for single agent, save to orchestrator table if flag is true
+            bridge_configs = bridge_configurations or {}
+            
+            # Prepare single agent data in orchestrator format
+            single_agent_data = {
+                'bridge_id': parsed_data['bridge_id'],
+                'history_params': result.get('historyParams'),
+                'dataset': [parsed_data['usage']],
+                'version_id': parsed_data['version_id'],
+                'thread_info': thread_info,
+                'parent_id': parsed_data.get('parent_bridge_id', '')
+            }
+            
+            # Update history_params with prompt from bridge_configurations if available
+            if single_agent_data['history_params']:
+                single_agent_data['history_params']['parent_id'] = parsed_data.get('parent_bridge_id', '')
+                single_agent_data['history_params']['child_id'] = None
+                
+                # Add prompt from bridge_configurations if available
+                if bridge_configs and parsed_data['bridge_id'] in bridge_configs:
+                    agent_config = bridge_configs[parsed_data['bridge_id']].get('configuration', {})
+                    single_agent_data['history_params']['prompt'] = agent_config.get('prompt')
+            
+            # Save to orchestrator table (even though it's a single agent)
+            asyncio.create_task(create_orchestrator([single_agent_data], thread_info))
+        else:
+            # Regular save to conversation_logs table
+            # Always set parent_id and child_id in history_params for consistency
+            if result.get("historyParams"):
+                result["historyParams"]["parent_id"] = parsed_data.get("parent_bridge_id", "")
+                result["historyParams"]["child_id"] = None
 
-        # Save single history entry
-        asyncio.create_task(create(
-            [parsed_data['usage']], 
-            result["historyParams"], 
-            parsed_data['version_id'], 
-            thread_info
-        ))
+            # Save single history entry
+            asyncio.create_task(create(
+                [parsed_data['usage']], 
+                result["historyParams"], 
+                parsed_data['version_id'], 
+                thread_info
+            ))
         
         # Publish to queue (for both transfer and non-transfer cases)
         data = await make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info)
@@ -681,11 +710,43 @@ async def process_background_tasks_for_error(parsed_data, error, transfer_reques
         del TRANSFER_HISTORY[transfer_request_id]
     else:
         # Regular flow (no transfer) - save single error history
-        asyncio.create_task(create(
-            [parsed_data['usage']],
-            parsed_data['historyParams'],
-            parsed_data['version_id']
-        ))
+        # Check if orchestrator_flag is enabled for single agent error case
+        if orchestrator_flag:
+            # Even for single agent error, save to orchestrator table if flag is true
+            bridge_configs = bridge_configurations or {}
+            
+            # Prepare single agent error data in orchestrator format
+            single_agent_error_data = {
+                'bridge_id': parsed_data['bridge_id'],
+                'history_params': parsed_data.get('historyParams'),
+                'dataset': [parsed_data['usage']],
+                'version_id': parsed_data['version_id'],
+                'thread_info': {
+                    'thread_id': parsed_data.get('thread_id'),
+                    'sub_thread_id': parsed_data.get('sub_thread_id')
+                },
+                'parent_id': parsed_data.get('parent_bridge_id', '')
+            }
+            
+            # Update history_params with prompt from bridge_configurations if available
+            if single_agent_error_data['history_params']:
+                single_agent_error_data['history_params']['parent_id'] = parsed_data.get('parent_bridge_id', '')
+                single_agent_error_data['history_params']['child_id'] = None
+                
+                # Add prompt from bridge_configurations if available
+                if bridge_configs and parsed_data['bridge_id'] in bridge_configs:
+                    agent_config = bridge_configs[parsed_data['bridge_id']].get('configuration', {})
+                    single_agent_error_data['history_params']['prompt'] = agent_config.get('prompt')
+            
+            # Save to orchestrator table (even though it's a single agent with error)
+            asyncio.create_task(create_orchestrator([single_agent_error_data], single_agent_error_data['thread_info']))
+        else:
+            # Regular save to conversation_logs table
+            asyncio.create_task(create(
+                [parsed_data['usage']],
+                parsed_data['historyParams'],
+                parsed_data['version_id']
+            ))
     
     # Send alert and save sub_thread_id for all cases
     tasks = [
