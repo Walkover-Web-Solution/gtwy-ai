@@ -190,10 +190,10 @@ async def get_vectors_and_text(request):
         # Extract parameters from body
         collection_id = body.get("collection_id")
         owner_id = body.get("owner_id")
-        doc_id = body.get("doc_id") or body.get("resource_id")
+        resource_id = body.get("doc_id") or body.get("resource_id")
 
-        # Validation: Either (collection_id AND owner_id) OR doc_id must be provided
-        if not ((collection_id and owner_id) or doc_id):
+        # Validation: Either (collection_id AND owner_id) OR resource_id must be provided
+        if not ((collection_id and owner_id) or resource_id):
             raise HTTPException(
                 status_code=400,
                 detail="Either (collection_id and owner_id) or (doc_id/resource_id) must be provided.",
@@ -204,10 +204,10 @@ async def get_vectors_and_text(request):
             # Use placeholder for collection-only query
             resource_id = "collection_only_query"
             resource_to_collection_mapping = {resource_id: collection_id}
-        # Case 2: doc_id/resource_id is provided, need to fetch resource details
+        # Case 2: resource_id is provided, need to fetch resource details
         else:
             # Fetch resource details from Hippocampus API
-            hippocampus_resource_url = f"http://hippocampus.gtwy.ai/resource/{doc_id}"
+            hippocampus_resource_url = f"http://hippocampus.gtwy.ai/resource/{resource_id}"
             headers = {"x-api-key": Config.HIPPOCAMPUS_API_KEY}
 
             resource_response, _ = await fetch(url=hippocampus_resource_url, method="GET", headers=headers)
@@ -220,7 +220,6 @@ async def get_vectors_and_text(request):
                 raise HTTPException(status_code=400, detail="Owner ID not found in resource response.")
 
             # Prepare resource_to_collection_mapping if collection_id exists
-            resource_id = doc_id
             resource_to_collection_mapping = {}
             if collection_id:
                 resource_to_collection_mapping[resource_id] = collection_id
