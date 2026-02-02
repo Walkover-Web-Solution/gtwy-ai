@@ -187,82 +187,47 @@ async def get_vectors_and_text(request):
         if query is None:
             raise HTTPException(status_code=400, detail="Query is required.")
 
-        # Case 1: If collection_id and owner_id are provided directly in body
-        collection_id_from_body = body.get("collection_id")
-        owner_id_from_body = body.get("owner_id")
-
-        if collection_id_from_body and owner_id_from_body:
-            # Direct call to search API with collection_id and owner_id
-            hippocampus_url = "http://hippocampus.gtwy.ai/search"
-            headers = {"x-api-key": Config.HIPPOCAMPUS_API_KEY, "Content-Type": "application/json"}
-
-            payload = {"query": query, "collectionId": collection_id_from_body, "ownerId": owner_id_from_body}
-
-            # Call Hippocampus API using async fetch
-            api_response, _ = await fetch(url=hippocampus_url, method="POST", headers=headers, json_body=payload)
-
-            results = api_response.get("result", [])
-
-            # Apply top_k limit
-            results = results[:top_k]
-
-            # Filter results based on score threshold
-            results = [result for result in results if result.get("score", 0) >= score]
-
-            # Extract text and build response
-            text = ""
-            results_with_scores = []
-
-            for result in results:
-                payload_data = result.get("payload", {})
-                content = payload_data.get("content", "")
-                text += content + "\n"
-
-                result_data = {"id": result.get("id"), "data": content, "score": result.get("score", 0.0)}
-
-                results_with_scores.append(result_data)
-
-            # Build response metadata
-            metadata = {
-                "type": "RAG",
-                "results_with_scores": results_with_scores,
-                "similarity_scores": [{"id": result["id"], "score": result["score"]} for result in results_with_scores],
-            }
-
-            return JSONResponse(
-                status_code=200, content={"success": True, "text": text.strip(), "metadata": metadata}
-            )
-
-        # Case 2: If resource_id or doc_id is provided
+        # Extract parameters from body
+        collection_id = body.get("collection_id")
+        owner_id = body.get("owner_id")
         doc_id = body.get("doc_id") or body.get("resource_id")
 
-        if not doc_id:
+        # Validation: Either (collection_id AND owner_id) OR doc_id must be provided
+        if not ((collection_id and owner_id) or doc_id):
             raise HTTPException(
                 status_code=400,
                 detail="Either (collection_id and owner_id) or (doc_id/resource_id) must be provided.",
             )
 
-        # Fetch resource details from Hippocampus API
-        hippocampus_resource_url = f"http://hippocampus.gtwy.ai/resource/{doc_id}"
-        headers = {"x-api-key": Config.HIPPOCAMPUS_API_KEY}
+        # Case 1: collection_id and owner_id are provided directly
+        if collection_id and owner_id:
+            # Use placeholder for collection-only query
+            resource_id = "collection_only_query"
+            resource_to_collection_mapping = {resource_id: collection_id}
+        # Case 2: doc_id/resource_id is provided, need to fetch resource details
+        else:
+            # Fetch resource details from Hippocampus API
+            hippocampus_resource_url = f"http://hippocampus.gtwy.ai/resource/{doc_id}"
+            headers = {"x-api-key": Config.HIPPOCAMPUS_API_KEY}
 
-        resource_response, _ = await fetch(url=hippocampus_resource_url, method="GET", headers=headers)
+            resource_response, _ = await fetch(url=hippocampus_resource_url, method="GET", headers=headers)
 
-        # Extract owner_id and collection_id from response
-        owner_id = resource_response.get("ownerId")
-        collection_id = resource_response.get("collectionId")
+            # Extract owner_id and collection_id from response
+            owner_id = resource_response.get("ownerId")
+            collection_id = resource_response.get("collectionId")
 
-        if not owner_id:
-            raise HTTPException(status_code=400, detail="Owner ID not found in resource response.")
+            if not owner_id:
+                raise HTTPException(status_code=400, detail="Owner ID not found in resource response.")
 
-        # Prepare resource_to_collection_mapping if collection_id exists
-        resource_to_collection_mapping = {}
-        if collection_id:
-            resource_to_collection_mapping[doc_id] = collection_id
+            # Prepare resource_to_collection_mapping if collection_id exists
+            resource_id = doc_id
+            resource_to_collection_mapping = {}
+            if collection_id:
+                resource_to_collection_mapping[resource_id] = collection_id
 
-        # Call get_text_from_vectorsQuery with fetched data
+        # Call get_text_from_vectorsQuery once with the prepared data
         text = await get_text_from_vectorsQuery(
-            {"resource_id": doc_id, "query": query, "top_k": top_k},
+            {"resource_id": resource_id, "query": query, "top_k": top_k},
             Flag=False,
             score=score,
             owner_id=owner_id,
@@ -339,9 +304,6 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
         if query is None:
             raise HTTPException(status_code=400, detail="Query is required.")
 
-        if not resource_id:
-            raise Exception("Resource ID not found in arguments.")
-
         # Get collection_id from mapping using resource_id (optional - multiple resources can share one collection)
         if not resource_to_collection_mapping:
             resource_to_collection_mapping = {}
@@ -352,11 +314,26 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
         hippocampus_url = "http://hippocampus.gtwy.ai/search"
         headers = {"x-api-key": Config.HIPPOCAMPUS_API_KEY, "Content-Type": "application/json"}
 
-        # Build payload - include collectionId only if available
-        payload = {"query": query, "resourceId": resource_id, "ownerId": ownerId}
+        # Build payload - handle three cases:
+        # Case 1: Only collection_id (when resource_id is placeholder like "collection_only_query")
+        # Case 2: resource_id with optional collection_id
+        # Case 3: resource_id only
+        payload = {"query": query, "ownerId": ownerId}
 
-        if collection_id:
+        # Check if this is a collection-only query (placeholder resource_id)
+        is_collection_only_query = resource_id and resource_id == "collection_only_query" and collection_id
+
+        if is_collection_only_query:
+            # Only collection_id, no resource_id in payload
             payload["collectionId"] = collection_id
+        elif resource_id:
+            # Real resource_id is provided
+            payload["resourceId"] = resource_id
+            if collection_id:
+                payload["collectionId"] = collection_id
+        else:
+            # Neither collection_id nor resource_id
+            raise Exception("Either Resource ID or Collection ID must be provided.")
 
         # Call Hippocampus API using async fetch
         api_response, response_headers = await fetch(
