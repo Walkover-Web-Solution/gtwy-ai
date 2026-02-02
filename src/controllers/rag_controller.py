@@ -180,13 +180,67 @@ async def store_in_pinecone_and_mongo(embeddings, chunks, org_id, user_id, name,
 async def get_vectors_and_text(request):
     try:
         body = await request.json()
-        doc_id = body.get("doc_id")
         query = body.get("query")
         top_k = body.get("top_k", 2)
         score = body.get("score") or 0.1
 
-        if query is None or doc_id is None:
-            raise HTTPException(status_code=400, detail="Query and doc_id required.")
+        if query is None:
+            raise HTTPException(status_code=400, detail="Query is required.")
+
+        # Case 1: If collection_id and owner_id are provided directly in body
+        collection_id_from_body = body.get("collection_id")
+        owner_id_from_body = body.get("owner_id")
+
+        if collection_id_from_body and owner_id_from_body:
+            # Direct call to search API with collection_id and owner_id
+            hippocampus_url = "http://hippocampus.gtwy.ai/search"
+            headers = {"x-api-key": Config.HIPPOCAMPUS_API_KEY, "Content-Type": "application/json"}
+
+            payload = {"query": query, "collectionId": collection_id_from_body, "ownerId": owner_id_from_body}
+
+            # Call Hippocampus API using async fetch
+            api_response, _ = await fetch(url=hippocampus_url, method="POST", headers=headers, json_body=payload)
+
+            results = api_response.get("result", [])
+
+            # Apply top_k limit
+            results = results[:top_k]
+
+            # Filter results based on score threshold
+            results = [result for result in results if result.get("score", 0) >= score]
+
+            # Extract text and build response
+            text = ""
+            results_with_scores = []
+
+            for result in results:
+                payload_data = result.get("payload", {})
+                content = payload_data.get("content", "")
+                text += content + "\n"
+
+                result_data = {"id": result.get("id"), "data": content, "score": result.get("score", 0.0)}
+
+                results_with_scores.append(result_data)
+
+            # Build response metadata
+            metadata = {
+                "type": "RAG",
+                "results_with_scores": results_with_scores,
+                "similarity_scores": [{"id": result["id"], "score": result["score"]} for result in results_with_scores],
+            }
+
+            return JSONResponse(
+                status_code=200, content={"success": True, "text": text.strip(), "metadata": metadata}
+            )
+
+        # Case 2: If resource_id or doc_id is provided
+        doc_id = body.get("doc_id") or body.get("resource_id")
+
+        if not doc_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Either (collection_id and owner_id) or (doc_id/resource_id) must be provided.",
+            )
 
         # Fetch resource details from Hippocampus API
         hippocampus_resource_url = f"http://hippocampus.gtwy.ai/resource/{doc_id}"
