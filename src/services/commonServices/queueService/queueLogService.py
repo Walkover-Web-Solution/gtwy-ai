@@ -9,6 +9,7 @@ from src.services.utils.ai_middleware_format import validateResponse
 from src.services.utils.gpt_memory import handle_gpt_memory
 from src.services.utils.hippocampus_utils import save_conversation_to_hippocampus
 from src.services.utils.logger import logger
+from src.services.utils.send_error_webhook import send_error_to_webhook
 
 
 class Queue2(BaseQueue):
@@ -51,6 +52,10 @@ class Queue2(BaseQueue):
         if messages["check_chatbot_suggestions"]["bridgeType"]:
             await chatbot_suggestions(**messages["chatbot_suggestions"])
         await save_files_to_redis(**messages["save_files_to_redis"])
+        
+        # Send broadcast response to webhook if configured
+        if messages.get("broadcast_response_webhook"):
+            await send_error_to_webhook(**messages["broadcast_response_webhook"])
 
     async def consume_messages(self):
         try:

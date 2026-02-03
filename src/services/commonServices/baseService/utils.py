@@ -543,6 +543,19 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "bridge_id": parsed_data.get("bridge_id"),
             "files": parsed_data.get("files"),
         },
+        "broadcast_response_webhook": {
+            "bridge_id": parsed_data.get("bridge_id"),
+            "org_id": parsed_data.get("org_id"),
+            "response": result.get("response", {}),
+            "user_question": parsed_data.get("user", ""),
+            "variables": parsed_data.get("variables", {}),
+            "error_type": "broadcast_response",
+            "bridge_name": parsed_data.get("name"),
+            "is_embed": parsed_data.get("is_embed"),
+            "user_id": parsed_data.get("userId"),
+            "thread_id": parsed_data.get("thread_id"),
+            "service": parsed_data.get("service"),
+        },
     }
 
     return data
