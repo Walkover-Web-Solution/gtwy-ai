@@ -139,7 +139,6 @@ app.include_router(image_process_routes, prefix="/image/processing" )
 app.include_router(image_process_routes, prefix="/files" )
 app.include_router(rag_routes,prefix="/rag")
 
-
 if __name__ == "__main__":
     PORT = int(Config.PORT)
     uvicorn.run(app, host="0.0.0.0", port=PORT)
