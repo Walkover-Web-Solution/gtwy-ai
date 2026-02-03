@@ -9,22 +9,28 @@ from .helper import Helper
 async def send_error_to_webhook(
     bridge_id,
     org_id,
-    error_log,
-    error_type,
+    error_log=None,  # Keep for backward compatibility with existing error calls
+    error_type=None,
     bridge_name=None,
     is_embed=None,
     user_id=None,
     thread_id=None,
     service=None,
+    response=None,  # New parameter for broadcast_response
+    user_question=None,  # New parameter for broadcast_response
+    variables=None,  # New parameter for broadcast_response
 ):
     """
-    Sends error logs to a webhook if the specified conditions are met.
+    Sends error logs or broadcast responses to a webhook if the specified conditions are met.
 
     Args:
         bridge_id (str): Identifier for the bridge.
         org_id (str): Identifier for the organization.
-        error_log (dict): Error log details.
-        error_type (str): Type of the error (e.g., 'Variable', 'Error', 'metrix_limit_reached').
+        error_log (dict/str): Error log details (backward compatibility).
+        error_type (str): Type of the alert (e.g., 'Variable', 'Error', 'metrix_limit_reached', 'broadcast_response').
+        response (dict): Response data for broadcast_response type.
+        user_question (str): User's question/input.
+        variables (dict): Variables associated with the request.
 
     Returns:
         None
@@ -49,15 +55,19 @@ async def send_error_to_webhook(
         )
 
         # Generate the appropriate payload based on the error type
-
+        # Use response parameter for broadcast_response, error_log for other types
+        data_source = response if error_type == "broadcast_response" else error_log
+        
         if error_type == "Variable":
-            details_payload = create_missing_vars(error_log)
+            details_payload = create_missing_vars(data_source if data_source else {})
         elif error_type == "metrix_limit_reached":
-            details_payload = metrix_limit_reached(error_log)
+            details_payload = metrix_limit_reached(data_source if data_source else 0)
         elif error_type == "retry_mechanism":
-            details_payload = create_retry_mechanism_payload(error_log)
+            details_payload = create_retry_mechanism_payload(data_source if data_source else "")
+        elif error_type == "broadcast_response":
+            details_payload = create_broadcast_response_payload(data_source if data_source else {})
         else:
-            details_payload = create_error_payload(error_log)
+            details_payload = create_error_payload(data_source if data_source else {})
 
         # Iterate through webhook configurations and send responses
         for entry in webhook_data:
@@ -65,9 +75,13 @@ async def send_error_to_webhook(
             bridges = entry.get("bridges", [])
 
             if error_type in entry.get("alertType", []) and (bridge_id in bridges or "all" in bridges):
-                if error_type == "metrix_limit_reached" and entry.get("limit", 500) == error_log:
+                # Use the appropriate data source for comparison
+                comparison_value = response if error_type == "broadcast_response" else error_log
+                if error_type == "metrix_limit_reached" and entry.get("limit", 500) == (comparison_value if comparison_value else 0):
                     continue
-                webhook_url = webhook_config["url"]
+                
+                # Use user_url if present, otherwise use url from webhookConfiguration
+                webhook_url = entry.get("user_url") or webhook_config["url"]
                 headers = webhook_config.get("headers", {})
 
                 # Prepare details for the webhook
@@ -95,7 +109,17 @@ async def send_error_to_webhook(
 
                 # Send the response
                 response_format = create_response_format(webhook_url, headers)
-                await sendResponse(response_format, data=payload)
+                
+                # For broadcast_response, send with success=True and include user question and variables
+                if error_type == "broadcast_response":
+                    broadcast_data = {
+                        "response": response if response else {},
+                        "user_question": user_question if user_question else "",
+                        "variables": variables if variables else {},
+                    }
+                    await sendResponse(response_format, data=broadcast_data, success=True, variables=variables if variables else {})
+                else:
+                    await sendResponse(response_format, data=payload)
 
     except Exception as error:
         logger.error(f"Error in send_error_to_webhook: %s, {str(error)}")
@@ -115,6 +139,10 @@ def create_error_payload(details):
 
 def create_retry_mechanism_payload(details):
     return {"alert": "Retry Mechanism Started due to error.", "error_message": details}
+
+
+def create_broadcast_response_payload(details):
+    return {"alert": "Broadcast Response", "response": details}
 
 
 def create_response_format(url, headers):
