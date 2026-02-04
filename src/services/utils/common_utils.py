@@ -396,6 +396,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
                     "https://flow.sokt.io/func/scriCJLHynCG", "POST", None, None, {"threadID": id}
                 )
                 parsed_data["memory"] = response
+                memory = response
         configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(configuration["prompt"], variables)
 
         if template:
