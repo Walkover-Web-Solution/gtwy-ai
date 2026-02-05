@@ -514,13 +514,13 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "configuration": params.get("configuration", {}),
             "org_id": parsed_data.get("org_id"),
         },
-        "handle_gpt_memory": {
-            "id": parsed_data.get("id"),
-            "user": parsed_data.get("user"),
-            "assistant": result.get("modelResponse"),
-            "purpose": parsed_data.get("memory"),
-            "gpt_memory_context": parsed_data.get("gpt_memory_context"),
-            "org_id": parsed_data.get("org_id"),
+        "handle_gpt_memory" : {
+            "id" : parsed_data.get('id'),
+            "user" : parsed_data.get('user'),
+            "assistant" : result.get('response'),
+            "purpose" : parsed_data.get('memory'),
+            "gpt_memory_context" : parsed_data.get('gpt_memory_context'),
+            "org_id" : parsed_data.get('org_id')
         },
         "check_handle_gpt_memory": {
             "gpt_memory": parsed_data.get("gpt_memory"),
