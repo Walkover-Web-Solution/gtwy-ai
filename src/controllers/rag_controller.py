@@ -187,6 +187,10 @@ async def get_vectors_and_text(request):
         if query is None:
             raise HTTPException(status_code=400, detail="Query is required.")
 
+        # Validate minScore range (0.1 to 1)
+        if score < 0.1 or score > 1:
+            raise HTTPException(status_code=400, detail="minScore must be between 0.1 and 1.")
+
         # Extract parameters from body
         collection_id = body.get("collection_id")
         owner_id = body.get("owner_id")
@@ -226,7 +230,7 @@ async def get_vectors_and_text(request):
 
         # Call get_text_from_vectorsQuery once with the prepared data
         text = await get_text_from_vectorsQuery(
-            {"resource_id": resource_id, "query": query, "top_k": top_k},
+            {"resource_id": resource_id, "query": query, "top_k": top_k, "minScore": score},
             Flag=False,
             score=score,
             owner_id=owner_id,
@@ -296,12 +300,17 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
     try:
         query = args.get("query")
         top_k = args.get("top_k", 3)
+        min_score = args.get("minScore", score)  # Use minScore from args, fallback to score parameter
         ownerId = owner_id
         # Extract resourceId from args
         resource_id = args.get("resource_id")
 
         if query is None:
             raise HTTPException(status_code=400, detail="Query is required.")
+
+        # Validate minScore range (0.1 to 1)
+        if min_score < 0.1 or min_score > 1:
+            raise HTTPException(status_code=400, detail="minScore must be between 0.1 and 1.")
 
         # Get collection_id from mapping using resource_id (optional - multiple resources can share one collection)
         if not resource_to_collection_mapping:
@@ -317,7 +326,7 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
         # Case 1: Only collection_id (when resource_id is placeholder like "collection_only_query")
         # Case 2: resource_id with optional collection_id
         # Case 3: resource_id only
-        payload = {"query": query, "ownerId": ownerId}
+        payload = {"query": query, "ownerId": ownerId, "minScore": min_score}
 
         # Check if this is a collection-only query (placeholder resource_id)
         is_collection_only_query = resource_id and resource_id == "collection_only_query" and collection_id
@@ -338,42 +347,7 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
         api_response, response_headers = await fetch(
             url=hippocampus_url, method="POST", headers=headers, json_body=payload
         )
-
-        results = api_response.get("result", [])
-
-        # Apply top_k limit
-        results = results[:top_k]
-
-        # Filter results based on score threshold if Flag is False
-        if not Flag:
-            results = [result for result in results if result.get("score", 0) >= score]
-
-        # Extract text and build response
-        text = ""
-        results_with_scores = []
-
-        for result in results:
-            payload_data = result.get("payload", {})
-            content = payload_data.get("content", "")
-            text += content + "\n"
-
-            result_data = {"id": result.get("id"), "data": content}
-
-            # Only add score if Flag is False
-            if not Flag:
-                result_data["score"] = result.get("score", 0.0)
-
-            results_with_scores.append(result_data)
-
-        # Build response metadata based on Flag
-        metadata = {"type": "RAG"}
-        if not Flag:
-            metadata["results_with_scores"] = results_with_scores
-            metadata["similarity_scores"] = [{"id": result["id"], "score": result["score"]} for result in results]
-        else:
-            metadata["results"] = [{"id": item["id"], "data": item["data"]} for item in results_with_scores]
-
-        return {"response": text.strip(), "metadata": metadata, "status": 1}
+        return {"response": api_response, "metadata": {"type": "RAG"}, "status": 1}
 
     except Exception as error:
         return {
