@@ -240,8 +240,20 @@ async def get_vectors_and_text(request):
         # Check if the operation was successful based on status
         success = text.get("status") == 1
         status_code = 200 if success else 400
+        
+        # Extract results and merged text
+        api_response = text.get("response", {})
+        results = api_response.get("result", [])
+        merged_text = text.get("merged_text", "")
 
-        return JSONResponse(status_code=status_code, content={"success": success, "text": text["response"]})
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": success,
+                "text": merged_text,
+                "results": results
+            }
+        )
 
     except Exception as error:
         print(f"Error in get_vectors_and_text: {error}")
@@ -326,7 +338,7 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
         # Case 1: Only collection_id (when resource_id is placeholder like "collection_only_query")
         # Case 2: resource_id with optional collection_id
         # Case 3: resource_id only
-        payload = {"query": query, "ownerId": ownerId, "minScore": min_score}
+        payload = {"query": query, "ownerId": ownerId, "minScore": min_score, "top_k": top_k}
 
         # Check if this is a collection-only query (placeholder resource_id)
         is_collection_only_query = resource_id and resource_id == "collection_only_query" and collection_id
@@ -347,7 +359,33 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
         api_response, response_headers = await fetch(
             url=hippocampus_url, method="POST", headers=headers, json_body=payload
         )
-        return {"response": api_response, "metadata": {"type": "RAG"}, "status": 1}
+        
+        # Extract and merge text content from all chunks
+        results = api_response.get("result", [])
+        merged_text = ""
+        for result in results:
+            payload_data = result.get("payload", {})
+            content = payload_data.get("content", "")
+            merged_text += content + "\n"
+        
+        # Return different format based on Flag
+        # Flag=True: Called from utils.py - return merged_text in response
+        # Flag=False: Called from rag_controller.py - return full api_response and merged_text separately
+        if Flag:
+            # When called from utils.py (Flag=True)
+            return {
+                "response": merged_text.strip(),
+                "metadata": {"type": "RAG"},
+                "status": 1
+            }
+        else:
+            # When called from rag_controller.py (Flag=False)
+            return {
+                "response": api_response,
+                "merged_text": merged_text.strip(),
+                "metadata": {"type": "RAG"},
+                "status": 1
+            }
 
     except Exception as error:
         return {
