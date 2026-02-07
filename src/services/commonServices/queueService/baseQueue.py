@@ -1,9 +1,12 @@
 import asyncio
 import json
-from aio_pika import connect_robust, Message, DeliveryMode, RobustConnection
+
+from aio_pika import DeliveryMode, Message, RobustConnection, connect_robust
 from aio_pika.abc import AbstractIncomingMessage
+
 from config import Config
 from src.services.utils.logger import logger
+
 
 # Singleton Connection Manager
 class ConnectionManager:
@@ -39,10 +42,11 @@ class ConnectionManager:
         self.connection = None
         self.channels = {}
 
+
 # Base Queue Class with Shared Functionality
 class BaseQueue:
     def __init__(self, queue_name, failed_queue_suffix="-Failed"):
-        if not hasattr(self, 'initialized'):
+        if not hasattr(self, "initialized"):
             self.queue_name = queue_name
             self.failed_queue_name = f"{self.queue_name}{failed_queue_suffix}"
             self.prefetch_count = Config.PREFETCH_COUNT or 50
@@ -87,7 +91,10 @@ class BaseQueue:
                 self.channel = await self.connection_manager.get_channel(self.queue_name)
 
             # Additional check to ensure connection is still alive
-            if hasattr(self.connection_manager.connection, 'is_open') and not self.connection_manager.connection.is_open:
+            if (
+                hasattr(self.connection_manager.connection, "is_open")
+                and not self.connection_manager.connection.is_open
+            ):
                 self.connection_manager.connection = await self.connection_manager.get_connection()
                 self.channel = await self.connection_manager.get_channel(self.queue_name)
 
@@ -111,7 +118,7 @@ class BaseQueue:
                     Message(
                         body=message_body.encode(),
                         delivery_mode=DeliveryMode.PERSISTENT,
-                        headers={'retry_count': attempt + 1}
+                        headers={"retry_count": attempt + 1},
                     ),
                     routing_key=target_queue,
                 )
@@ -124,7 +131,7 @@ class BaseQueue:
 
                 if attempt < max_retries - 1:
                     # Exponential backoff
-                    delay = retry_delay * (2 ** attempt)
+                    delay = retry_delay * (2**attempt)
                     logger.info(f"Retrying in {delay} seconds...")
                     await asyncio.sleep(delay)
 
@@ -140,12 +147,8 @@ class BaseQueue:
             except json.JSONDecodeError as e:
                 logger.error(f"Message decode error: {e}")
                 await self.publish_message(
-                    {'error': 'Failed to decode message', 'original': message.body.decode()},
-                    self.failed_queue_name
+                    {"error": "Failed to decode message", "original": message.body.decode()}, self.failed_queue_name
                 )
             except Exception as e:
                 logger.error(f"Processing error: {e}")
-                await self.publish_message(
-                    {'error': str(e), 'original': message_data},
-                    self.failed_queue_name
-                )
+                await self.publish_message({"error": str(e), "original": message_data}, self.failed_queue_name)
