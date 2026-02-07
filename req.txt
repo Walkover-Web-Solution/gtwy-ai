@@ -101,3 +101,6 @@ atatus>=1.6.1
 google-genai==1.56.0
 Pillow>=10.0.0
 tiktoken>=0.7.0
+pre-commit>=3.5.0
+ruff>=0.1.0
+commitizen>=3.29.0
