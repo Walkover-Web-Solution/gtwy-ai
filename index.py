@@ -19,33 +19,6 @@ from src.services.commonServices.queueService.queueLogService import sub_queue_o
 from src.services.commonServices.queueService.queueService import queue_obj
 from src.services.utils.batch_script import repeat_function
 
-# Initialize Atatus only when properly configured in PRODUCTION
-atatus_client = None
-AtatusMiddleware = None
-if (Config.ENVIROMENT or "").upper() == "PRODUCTION" and Config.ATATUS_LICENSE_KEY:
-    try:
-        from atatus.contrib.starlette import Atatus as _Atatus
-        from atatus.contrib.starlette import create_client
-
-        logger.info("Initializing Atatus client...")
-        atatus_client = create_client(
-            {
-                "APP_NAME": "Python - GTWY - Backend - PROD",
-                "LICENSE_KEY": Config.ATATUS_LICENSE_KEY,
-                "ANALYTICS": True,
-                "ANALYTICS_CAPTURE_OUTGOING": True,
-                "LOG_BODY": "response",
-                "INSTRUMENTATIONS": {
-                    "httpx": False,
-                },
-            }
-        )
-
-        AtatusMiddleware = _Atatus
-    except Exception as e:
-        logger.error(f"Failed to initialize Atatus: {e}")
-
-
 async def consume_messages_in_executor():
     await queue_obj.consume_messages()
 
@@ -110,9 +83,6 @@ async def lifespan(app: FastAPI):
 
 # Initialize the FastAPI app
 app = FastAPI(debug=True, lifespan=lifespan)
-
-if AtatusMiddleware and atatus_client:
-    app.add_middleware(AtatusMiddleware, client=atatus_client)
 
 # CORS middleware
 app.add_middleware(

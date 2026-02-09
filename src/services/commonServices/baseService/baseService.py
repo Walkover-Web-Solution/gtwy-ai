@@ -85,7 +85,7 @@ class BaseService:
         self.web_search_filters = params.get("web_search_filters")
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
-        self.owner_id = params.get("owner_id")        self.owner_id = params.get('owner_id')
+        self.owner_id = params.get("owner_id")
 
 
     def aiconfig(self):
