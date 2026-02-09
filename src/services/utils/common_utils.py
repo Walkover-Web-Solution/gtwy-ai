@@ -238,7 +238,7 @@ def add_default_template(prompt):
     return prompt
 
 
-def add_user_in_varaibles(variables, user):
+def add_user_in_variables(variables, user):
     variables["_user_message"] = user
     return variables
 
