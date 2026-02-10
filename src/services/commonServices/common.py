@@ -14,7 +14,7 @@ from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
-    add_user_in_varaibles,
+    add_user_in_variables,
     apply_prompt_wrapper,
     build_service_params,
     build_service_params_for_batch,
@@ -152,7 +152,7 @@ async def chat(request_body):
         parsed_data["configuration"]["prompt"] = add_default_template(
             parsed_data.get("configuration", {}).get("prompt", "")
         )
-        parsed_data["variables"] = add_user_in_varaibles(parsed_data["variables"], parsed_data["user"])
+        parsed_data["variables"] = add_user_in_variables(parsed_data["variables"], parsed_data["user"])
         # Step 2: Initialize Timer
         timer = initialize_timer(parsed_data["state"])
 

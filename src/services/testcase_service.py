@@ -55,6 +55,7 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
     testcase_id = body.get("testcase_id")
     testcases_flag = body.get("testcases", False)
     testcase_data = body.get("testcase_data")
+    variables = body.get("variables", {})
 
     return {
         "bridge_id": bridge_id,
@@ -62,6 +63,7 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
         "testcase_id": testcase_id,
         "testcases_flag": testcases_flag,
         "testcase_data": testcase_data,
+        "variables": variables
     }
 
 
@@ -139,7 +141,7 @@ async def fetch_testcases_from_request(
 
 
 async def get_testcase_configuration(
-    org_id: str, version_id: str, bridge_id: str | None, testcases_flag: bool, testcase_data: dict[str, Any] | None
+    org_id: str, version_id: str, bridge_id: str | None, testcases_flag: bool, testcase_data: dict[str, Any] | None, variables: dict[str, Any] | None
 ) -> dict[str, Any]:
     """
     Get configuration for testcase execution
@@ -166,7 +168,7 @@ async def get_testcase_configuration(
         config_bridge_id,
         None,
         None,
-        {},
+        variables,
         org_id,
         None,
         version_id=version_id,
@@ -309,6 +311,7 @@ async def execute_testcases(body: dict[str, Any], org_id: str) -> dict[str, Any]
         request_data["bridge_id"],
         request_data["testcases_flag"],
         request_data["testcase_data"],
+        request_data["variables"]
     )
 
     # Run testcases in parallel
