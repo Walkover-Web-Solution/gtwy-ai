@@ -8,7 +8,7 @@ This document provides a comprehensive flow of the Completion API from request i
 ### Route Definition
 - **Endpoint**: `/api/v2/model/chat/completion`
 - **Method**: POST
-- **File**: `index.py` (Line 167)
+- **File**: `index.py`
 - **Router**: `v2_router` with prefix `/api/v2/model`
 
 ### Route Handler
@@ -34,10 +34,11 @@ This document provides a comprehensive flow of the Completion API from request i
 - **Purpose**: Enriches request body with configuration data
 
 **Key Operations:**
-- Extracts `bridge_id`, `org_id`, `version_id` from request
-- Calls `getConfiguration()` to fetch complete configuration
+- Resolves `bridge_id`/`agent_id`, `org_id`, `version_id` from request/body/path params
+- Calls `getConfiguration()` to fetch complete configuration for one or more agents
 - Validates model and service existence
 - Validates organization permissions for custom models
+- Ensures request has `user` or `images` or `batch`
 
 **Required Fields:**
 - `user` message (mandatory unless images provided)
@@ -53,7 +54,7 @@ This document provides a comprehensive flow of the Completion API from request i
 **Input Parameters:**
 - `configuration`: Base configuration to merge
 - `service`: AI service name
-- `bridge_id`: Bridge identifier
+- `bridge_id` / `agent_id`: Bridge or agent identifier (any of these keys supported)
 - `apikey`: API key for service
 - `template_id`: Optional template ID
 - `variables`: Variables for prompt replacement
@@ -62,8 +63,11 @@ This document provides a comprehensive flow of the Completion API from request i
 - `version_id`: Version ID for bridge
 - `extra_tools`: Additional tools to include. Each tool supports optional `headers` and `toolAndVariablePath` (or `tool_and_variable_path`) to map tool input fields to values pulled from the request `variables`, preventing those fields from being surfaced to the model.
 - `built_in_tools`: Built-in tools to include
+- `guardrails`: Content guardrails configuration
+- `web_search_filters`: Allowed domains for built-in web search
+- `orchestrator_flag`: Whether to store multi-agent transfers as a single orchestrator entry. Also used to give the power of transfer query to agent if required by adding the `action_type` parameter to the tool properties (with options: "transfer" to directly return child agent response, or "conversation" to get child response and continue processing)
 
-#### Bridge Data Retrieval
+#### Bridge/Agent Data Retrieval
 - **File**: `src/services/utils/getConfiguration_utils.py`
 - **Function**: `get_bridge_data`
 - **Database Service**: `src/db_services/ConfigurationServices.py`
@@ -74,7 +78,9 @@ This document provides a comprehensive flow of the Completion API from request i
   - `bridges` (main configuration)
   - `apicalls` (tools/functions)
   - `apikeycredentials` (API keys)
-  - `rag_parent_datas` (RAG documents)
+  - `pre_tools` (pre-tool scripts)
+  - `connected_agent_details` (agent overrides)
+- Folder-level API key resolution when `folder_id` exists
 - Redis caching for performance optimization
 - Converts ObjectIds to strings for JSON serialization
 
@@ -85,9 +91,8 @@ This document provides a comprehensive flow of the Completion API from request i
 - RAG (Retrieval Augmented Generation) data
 - Pre-tools configuration
 - Memory settings and context
-
-#### Configuration Assembly
-The `getConfiguration` function assembles:
+- Connected agent metadata and overrides
+- Folder API keys/limits when present
 
 **Core Configuration:**
 - `prompt`: System prompt with tone and response style
@@ -105,22 +110,34 @@ The `getConfiguration` function assembles:
 - `rag_data`: Document data for RAG
 - `gpt_memory`: Memory settings
 - `tool_call_count`: Maximum tool calls allowed
+- `built_in_tools`: Built-in tool flags (e.g., web search)
+- `web_search_filters`: Domain allowlist for web search
+- `guardrails`: Guardrails config for content filtering
+- `fall_back`: Fallback service/model config
+- `pre_tools_data`: Pre-tool metadata used later to populate args per agent
 
 **Output Structure:**
 ```json
 {
   "success": true,
-  "configuration": { /* merged configuration */ },
-  "service": "openai",
-  "apikey": "sk-...",
-  "pre_tools": { "name": "tool_name", "args": {} },
-  "variables": { /* processed variables */ },
-  "rag_data": [ /* document data */ ],
-  "tools": [ /* available tools */ ],
-  "tool_id_and_name_mapping": { /* tool mappings */ },
-  "gpt_memory": true,
-  "version_id": "version_123",
-  "bridge_id": "bridge_456"
+  "primary_bridge_id": "bridge_456",
+  "bridge_configurations": {
+    "bridge_456": {
+      "configuration": { /* merged configuration */ },
+      "service": "openai",
+      "apikey": "sk-...",
+      "pre_tools": { "name": "tool_name", "args": {} },
+      "pre_tools_data": { /* pre-tool metadata */ },
+      "variables": { /* processed variables */ },
+      "rag_data": [ /* document data */ ],
+      "tool_id_and_name_mapping": { /* tool mappings */ },
+      "gpt_memory": true,
+      "version_id": "version_123",
+      "bridge_id": "bridge_456",
+      "built_in_tools": [ "web_search" ],
+      "guardrails": { /* guardrails config */ }
+    }
+  }
 }
 ```
 
@@ -128,62 +145,73 @@ The `getConfiguration` function assembles:
 
 #### Response Format Check
 - **Queue Processing**: If `response_format.type != 'default'`
-  - Publishes message to queue for async processing
+  - Publishes message to queue for async processing (`queue_obj.publish_message`)
   - Returns immediate acknowledgment
 - **Synchronous Processing**: For default response format
-  - Continues to chat function
+  - Continues to chat flow
 
 #### Type-Based Routing
 - **Embedding Type**: Routes to `embedding()` function
-- **Chat Type**: Routes to `chat()` function (main flow)
+- **Chat Type**: Routes to `chat_multiple_agents()` (handles single and multi-agent)
+- **Image Type**: Routes to `image()` function
 
 ### 4. Chat Function Processing
 
 #### File: `src/services/commonServices/common.py`
-#### Function: `chat(request_body)`
+#### Functions: `chat_multiple_agents(request_body)`, `chat(request_body)`
 
 **Step-by-Step Processing:**
 
-1. **Request Parsing** (`parse_request_body`)
+1. **Agent Resolution** (`chat_multiple_agents`)
+   - Selects primary agent from `bridge_configurations`
+   - Uses Redis cache to resume last transferred agent per `thread_id/sub_thread_id`
+   - Builds a per-agent request body and calls `chat()`
+
+2. **Request Parsing** (`parse_request_body`)
    - Extracts all required fields from request body
    - Initializes default values
    - Creates structured data object
 
-2. **Template Enhancement**
+3. **Guardrails Check**
+   - If `guardrails.is_enabled`, validates content early
+   - Returns blocked response if guardrails fail
+
+4. **Template Enhancement**
    - Adds default template with current time reference
    - Adds user message to variables as `_user_message`
 
-3. **Timer Initialization**
+5. **Timer Initialization**
    - Creates Timer object for performance tracking
    - Starts timing for overall API execution
 
-4. **Model Configuration Loading**
+6. **Model Configuration Loading**
    - Loads model configuration from `model_config_document`
    - Extracts custom configuration based on user input
    - Handles fine-tuned model selection
 
-5. **Pre-Tools Execution**
+7. **Pre-Tools Execution**
+   - Populates pre-tool args using agent-specific variables (`setup_agent_pre_tools`)
    - Executes pre-configured tools if specified
-   - Makes HTTP calls to external functions
    - Stores results in variables
 
-6. **Thread Management**
+8. **Thread Management**
    - Creates or retrieves conversation thread
    - Manages sub-thread relationships
    - Loads conversation history
+   - Uses Redis conversation cache when available
 
-7. **Prompt Preparation**
+9. **Prompt Preparation**
    - Replaces variables in prompt template
    - Applies system templates if specified
    - Handles memory context for GPT memory
    - Identifies missing required variables
 
-8. **Custom Settings Configuration**
+10. **Custom Settings Configuration**
    - Applies service-specific configurations
    - Handles response type conversions
    - Manages JSON schema formatting
 
-9. **Service Parameter Building**
+11. **Service Parameter Building**
    - Assembles all parameters for service execution
    - Includes token calculator for cost tracking
    - Prepares execution context
@@ -195,13 +223,15 @@ The `getConfiguration` function assembles:
 - **Function**: `Helper.create_service_handler`
 
 **Service Mapping:**
-- `openai` → `UnifiedOpenAICase`
+- `openai` → `OpenaiResponse`
+- `openai_completion` → `OpenaiCompletion`
 - `gemini` → `GeminiHandler`
 - `anthropic` → `Anthropic`
 - `groq` → `Groq`
-- `openai_response` → `OpenaiResponse`
+- `grok` → `Grok`
 - `open_router` → `OpenRouter`
 - `mistral` → `Mistral`
+- `ai_ml` → `Ai_Ml`
 
 #### Service Execution
 - **Method**: `class_obj.execute()`
@@ -214,6 +244,7 @@ The `getConfiguration` function assembles:
 ```json
 {
   "bridge_id": "string",
+  "bridge_configurations": { "bridge_id": { /* per-agent config */ } },
   "configuration": { /* AI model config */ },
   "thread_id": "string",
   "sub_thread_id": "string",
@@ -224,6 +255,12 @@ The `getConfiguration` function assembles:
   "variables": { /* prompt variables */ },
   "tools": [ /* available tools */ ],
   "is_playground": boolean,
+  "guardrails": { /* guardrails config */ },
+  "built_in_tools": [ /* tool flags */ ],
+  "web_search_filters": [ /* allowed domains */ ],
+  "fall_back": { /* fallback config */ },
+  "parent_bridge_id": "string",
+  "transfer_request_id": "string",
   "response_format": { /* response formatting */ },
   "files": [ /* uploaded files */ ],
   "images": [ /* image inputs */ ]
@@ -246,7 +283,12 @@ The `getConfiguration` function assembles:
   "token_calculator": { /* cost tracking */ },
   "variables": { /* prompt variables */ },
   "memory": "string",
-  "rag_data": [ /* document data */ ]
+  "rag_data": [ /* document data */ ],
+  "tool_call_count": 3,
+  "built_in_tools": [ /* tool flags */ ],
+  "files": [ /* file URLs */ ],
+  "web_search_filters": [ /* allowed domains */ ],
+  "bridge_configurations": { "bridge_id": { /* per-agent config */ } }
 }
 ```
 
@@ -276,36 +318,21 @@ The `getConfiguration` function assembles:
 
 ### Caching Strategy
 - **Redis Cache**: Bridge configurations cached by `bridge_id` or `version_id`
+- **Conversation Cache**: Thread history cached by `thread_id` and `sub_thread_id`
 - **File Cache**: Uploaded files cached by thread context
 - **Memory Cache**: GPT memory context cached by thread ID
+- **Agent Cache**: Last transferred agent cached per thread for continuity
 
 ### Async Processing
 - **Queue System**: Non-default response formats processed asynchronously
-- **Background Tasks**: Metrics and logging handled in background
+- **Background Tasks**: Metrics and logging handled via a sub-queue consumer
 - **Thread Pool**: Executor for CPU-intensive operations
-
-## Security Considerations
-
-### Authentication
-- JWT token validation required
-- Organization-level access control
-- API key validation per service
-
-### Rate Limiting
-- Per-bridge rate limiting (100 points)
-- Per-thread rate limiting (20 points)
-- Configurable rate limit windows
-
-### Data Isolation
-- Organization-level data segregation
-- Bridge-level permission validation
-- Secure API key storage and retrieval
 
 ## 6. Service Execution (OpenAI Example)
 
 ### Service Handler Execution
-- **File**: `src/services/commonServices/openAI/openaiCall.py`
-- **Class**: `UnifiedOpenAICase`
+- **File**: `src/services/commonServices/openAI/openai_response.py`
+- **Class**: `OpenaiResponse`
 - **Method**: `execute()`
 
 #### Conversation Creation
@@ -320,8 +347,7 @@ The `getConfiguration` function assembles:
 - Creates proper message structure for different AI services
 
 **Service-Specific Conversation Formats:**
-- `createOpenAiConversation`: Standard OpenAI chat format
-- `createOpenAiResponseConversation`: OpenAI Response API format
+- `createOpenAiConversation`: OpenAI chat/response input format
 - `createAnthropicConversation`: Anthropic Claude format
 - `createGroqConversation`: Groq API format
 - `createGeminiConversation`: Google Gemini format
@@ -333,13 +359,15 @@ The `getConfiguration` function assembles:
 - **Purpose**: Routes to appropriate service model runner
 
 **Service Routing:**
-- `openai` → `runModel` (OpenAI API)
-- `openai_response` → `openai_response_model` (OpenAI Response API)
+- `openai` → `openai_response_model` (OpenAI Response API)
+- `openai_completion` → `runModel` (OpenAI Chat Completion API)
 - `anthropic` → `anthropic_runmodel`
 - `groq` → `groq_runmodel`
+- `grok` → `grok_runmodel`
 - `gemini` → `gemini_modelrun`
 - `mistral` → `mistral_model_run`
 - `open_router` → `openrouter_modelrun`
+- `ai_ml` → `ai_ml_modelrun`
 
 #### OpenAI Model Execution
 - **File**: `src/services/commonServices/openAI/runModel.py`
@@ -352,15 +380,10 @@ The `getConfiguration` function assembles:
 - Error handling with status codes
 - Support for both standard and response APIs
 
-**Retry Logic:**
-- Primary model: `o3` → Fallback: `gpt-4o-2024-08-06`
-- Primary model: `gpt-4o` → Fallback: `o3`
-- Default fallback: `gpt-4o`
-
 ## 7. Tool Call Detection and Execution
 
 ### Tool Call Detection
-- **Check**: `len(modelResponse.get('choices', [])[0].get('message', {}).get("tool_calls", [])) > 0`
+- **Check**: service-specific tool call extraction in `make_code_mapping_by_service()`
 - **Purpose**: Determines if AI model wants to execute functions
 
 ### Function Call Processing
@@ -375,6 +398,7 @@ The `getConfiguration` function assembles:
 3. **Configuration Update**: Adds tool results to conversation
 4. **Model Re-call**: Sends updated conversation back to AI
 5. **Recursion**: Repeats until no more tool calls or limit reached
+6. **Transfer Handling**: Detects transfer actions and hands off to another agent
 
 #### Tool Execution Process
 - **Function**: `self.run_tool()`
@@ -382,18 +406,18 @@ The `getConfiguration` function assembles:
   1. **Code Mapping**: `make_code_mapping_by_service()` - Extracts tool calls by service
   2. **Variable Replacement**: `replace_variables_in_args()` - Processes tool arguments
   3. **Tool Processing**: `process_data_and_run_tools()` - Executes tools concurrently
+  4. **Transfer Detection**: `check_transfer_from_codes_mapping()` - Returns `transfer_agent_config` when `action_type=transfer`
 
 #### Service-Specific Tool Call Extraction
-- **OpenAI/Groq/Mistral**: `tool_calls` array with `function` objects
-- **OpenAI Response**: `output` array with `function_call` type
+- **OpenAI (Response API)**: `output` array with `function_call` type
+- **OpenAI Completion/Groq/Grok/Mistral/OpenRouter/Gemini/AI-ML**: `tool_calls` array with `function` objects
 - **Anthropic**: `content` array with `tool_use` type
-- **Gemini**: Similar to OpenAI format
 
 #### Tool Types and Execution
 - **Regular Tools**: HTTP calls to external APIs
 - **RAG Tools**: Vector database queries
-- **Agent Tools**: Calls to other AI agents
-- **Built-in Tools**: Internal system functions
+- **Agent Tools**: Calls to other AI agents (includes thread/version context)
+- **Built-in Tools**: Internal system functions (e.g., web search)
 
 **Concurrent Execution:**
 - Uses `asyncio.gather()` for parallel tool execution
@@ -468,7 +492,7 @@ The `getConfiguration` function assembles:
 3. **Chatbot Processing**: Special handling for chatbot responses
 4. **Usage Calculation**: Token and cost calculations
 5. **Response Formatting**: Final response structure
-6. **Background Tasks**: Async database operations
+6. **Background Tasks**: Async database operations and queue publishing
 
 #### Response Delivery
 - **Playground Mode**: Direct JSON response
@@ -483,9 +507,10 @@ The `getConfiguration` function assembles:
 - **File**: `src/services/utils/common_utils.py`
 
 **Background Operations:**
-1. **Metrics Creation**: `create()` from metrics_service
-2. **Sub-queue Publishing**: Message queue for downstream processing
-3. **Conversation Storage**: Thread and message persistence
+1. **History Storage**: Persists conversation (supports transfer chains)
+2. **Orchestrator Storage**: Optional single-entry storage for multi-agent transfers
+3. **Sub-queue Publishing**: Message queue for downstream processing (`queueLogService`)
+4. **Metrics/Memory/Suggestions**: Processed by `queueLogService` consumer
 
 ## 10. Database Operations and Metrics
 
@@ -498,6 +523,7 @@ The `getConfiguration` function assembles:
 2. **Raw Data Insertion**: PostgreSQL metrics table
 3. **TimescaleDB Metrics**: Time-series data for analytics
 4. **Token Caching**: Redis cache for usage tracking
+5. **Orchestrator History**: Optional single entry for agent chains
 
 #### Stored Metrics:
 - **Usage Data**: Input/output tokens, costs
@@ -517,12 +543,14 @@ The `getConfiguration` function assembles:
 ### Request Journey:
 1. **API Entry** → Authentication & Rate Limiting
 2. **Middleware** → Configuration Retrieval & Validation
-3. **Chat Function** → Request Processing & Setup
-4. **Service Handler** → AI Model Execution
-5. **Tool Processing** → Function Call Execution (if needed)
-6. **Response Formatting** → Standardized Output
-7. **Background Tasks** → Database Storage & Metrics
-8. **Response Delivery** → Client Response
+3. **Agent Resolution** → Primary agent selection and caching
+4. **Chat Function** → Request Processing & Setup
+5. **Service Handler** → AI Model Execution
+6. **Tool Processing** → Function Call Execution (if needed)
+7. **Transfer Handling** → Agent handoff if tool requests transfer
+8. **Response Formatting** → Standardized Output
+9. **Background Tasks** → Database Storage & Queue Processing
+10. **Response Delivery** → Client Response
 
 ### Key Performance Features:
 - **Concurrent Tool Execution**: Parallel function calling
