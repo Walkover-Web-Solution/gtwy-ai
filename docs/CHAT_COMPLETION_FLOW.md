@@ -14,7 +14,7 @@ This document provides a comprehensive flow of the Completion API from request i
 ### Route Handler
 - **File**: `src/routes/v2/modelRouter.py`
 - **Function**: `chat_completion`
-- **Dependencies**: 
+- **Dependencies**:
   - `auth_and_rate_limit` (JWT middleware + rate limiting)
   - `add_configuration_data_to_body` (configuration middleware)
 
@@ -24,7 +24,7 @@ This document provides a comprehensive flow of the Completion API from request i
 
 #### Authentication & Rate Limiting
 - **JWT Middleware**: Validates authentication tokens
-- **Rate Limiting**: 
+- **Rate Limiting**:
   - 100 points per `bridge_id`
   - 20 points per `thread_id`
 
@@ -216,7 +216,7 @@ The `getConfiguration` function assembles:
   "bridge_id": "string",
   "configuration": { /* AI model config */ },
   "thread_id": "string",
-  "sub_thread_id": "string", 
+  "sub_thread_id": "string",
   "org_id": "string",
   "user": "string",
   "service": "string",
@@ -472,7 +472,7 @@ The `getConfiguration` function assembles:
 
 #### Response Delivery
 - **Playground Mode**: Direct JSON response
-- **Production Mode**: 
+- **Production Mode**:
   - WebSocket/webhook delivery for configured formats
   - Database storage
   - Usage tracking

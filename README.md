@@ -1,6 +1,6 @@
 # GTWY AI (Python Backend - FastAPI)
 
-GTWY AI is an open-source project aimed at building intelligent, scalable, and community-driven AI services.  
+GTWY AI is an open-source project aimed at building intelligent, scalable, and community-driven AI services.
 This repository contains the **Python backend built with FastAPI**, which powers the core APIs.
 
 ## 🚀 Features
@@ -8,7 +8,7 @@ This repository contains the **Python backend built with FastAPI**, which powers
 - Easy-to-extend modular structure
 - Environment-based configuration
 - Open for community-driven extensions
-- RAG implementation 
+- RAG implementation
 - Chatbot implementation
 
 ## 🛠️ Installation

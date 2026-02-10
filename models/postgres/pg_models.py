@@ -1,13 +1,12 @@
-from sqlalchemy import Column, String, Text, JSON, Enum, Integer, DateTime, Boolean, Float, ForeignKey,ARRAY
+from sqlalchemy import ARRAY, JSON, Boolean, Column, DateTime, Integer, String, Text
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
-import uuid
+
 from models.postgres.pg_connection import Base
 
+
 class system_prompt_versionings(Base):
-    __tablename__ = 'system_prompt_versionings'
-    __table_args__ = {'extend_existing': True}
+    __tablename__ = "system_prompt_versionings"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     created_at = Column(DateTime, nullable=False, default=func.now())
@@ -16,9 +15,10 @@ class system_prompt_versionings(Base):
     bridge_id = Column(String, nullable=False)
     org_id = Column(String, nullable=False)
 
+
 class user_bridge_config_history(Base):
-    __tablename__ = 'user_bridge_config_history'
-    __table_args__ = {'extend_existing': True}
+    __tablename__ = "user_bridge_config_history"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, nullable=False)
@@ -28,9 +28,10 @@ class user_bridge_config_history(Base):
     time = Column(DateTime, nullable=False, default=func.now())
     version_id = Column(String, nullable=True, default="")
 
+
 class OrchestratorConversationLog(Base):
-    __tablename__ = 'orchestrator_conversation_logs'
-    __table_args__ = {'extend_existing': True}
+    __tablename__ = "orchestrator_conversation_logs"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     llm_message = Column(JSON, nullable=True)  # {"bridge_id": "message"}
@@ -62,9 +63,10 @@ class OrchestratorConversationLog(Base):
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
     agents_path = Column(ARRAY(String), nullable=True, default=[])
 
+
 class ConversationLog(Base):
-    __tablename__ = 'conversation_logs'
-    __table_args__ = {'extend_existing': True}
+    __tablename__ = "conversation_logs"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     llm_message = Column(Text, nullable=True)
