@@ -1,11 +1,12 @@
-from sqlalchemy import Column, String, Float, DateTime, Integer, Boolean
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import UUID
+
 from models.Timescale.connections import Base
 
+
 class Metrics_model(Base):
-    __tablename__ = 'metrics_raw_data'
-    __table_args__ = {'extend_existing': True}
+    __tablename__ = "metrics_raw_data"
+    __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     org_id = Column(String)
