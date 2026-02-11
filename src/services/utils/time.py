@@ -1,5 +1,5 @@
-    
 import time
+
 
 class Timer:
     def __init__(self):
@@ -12,7 +12,7 @@ class Timer:
         if timeArray is None:
             timeArray = []
         self.start_times.extend(timeArray)
-    
+
     def getTime(self):
         return self.start_times
 
@@ -21,6 +21,7 @@ class Timer:
             raise Exception("Timer was not started")
         start_time = self.start_times.pop()
         elapsed_time = time.time() - start_time
-        return elapsed_time 
+        return elapsed_time
+
 
 timer_obj = Timer()

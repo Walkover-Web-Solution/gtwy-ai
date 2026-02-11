@@ -1,8 +1,9 @@
 from io import BytesIO
-from PIL import Image
-from google.genai import types
-from src.services.utils.gcp_upload_service import uploadDoc
 
+from google.genai import types
+from PIL import Image
+
+from src.services.utils.gcp_upload_service import uploadDoc
 
 IMAGEN_MODELS = {
     "imagen-4.0-generate-001",
@@ -16,9 +17,7 @@ async def handle_imagen_generation(client, model, prompt, configuration):
     """Generate images using Imagen and return formatted response with GCP URLs."""
     # Generate images
     response = client.models.generate_images(
-        model=model,
-        prompt=prompt,
-        config=types.GenerateImagesConfig(**configuration) if configuration else None
+        model=model, prompt=prompt, config=types.GenerateImagesConfig(**configuration) if configuration else None
     )
 
     # Process and upload images
@@ -28,15 +27,10 @@ async def handle_imagen_generation(client, model, prompt, configuration):
         img_buffer = BytesIO()
         image.save(img_buffer, format="PNG")
         img_buffer.seek(0)
-        
-        gcp_url = await uploadDoc(
-            file=img_buffer,
-            folder="generated-images",
-            real_time=True,
-            content_type="image/png"
-        )
+
+        gcp_url = await uploadDoc(file=img_buffer, folder="generated-images", real_time=True, content_type="image/png")
         gcp_urls.append(gcp_url)
-    
+
     # Return formatted response
     return {
         "success": True,
@@ -54,22 +48,20 @@ async def handle_imagen_generation(client, model, prompt, configuration):
 async def handle_gemini_generation(client, model, prompt, configuration):
     """Generate content using Gemini and return formatted response with image and text."""
     # Extract and build configuration
-    aspect_ratio = configuration.pop('aspect_ratio', None)
-    image_size = configuration.pop('image_size', None)
-    
+    aspect_ratio = configuration.pop("aspect_ratio", None)
+    image_size = configuration.pop("image_size", None)
+
     config_params = {
-        'response_modalities': ['TEXT', 'IMAGE'],
-        'image_config': types.ImageConfig(aspect_ratio=aspect_ratio, image_size=image_size)
+        "response_modalities": ["TEXT", "IMAGE"],
+        "image_config": types.ImageConfig(aspect_ratio=aspect_ratio, image_size=image_size),
     }
     config_params.update(configuration)
-    
+
     # Generate content
     response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(**config_params)
+        model=model, contents=prompt, config=types.GenerateContentConfig(**config_params)
     )
-    
+
     # Process response
     text_content = []
     gcp_urls = []
@@ -82,12 +74,9 @@ async def handle_gemini_generation(client, model, prompt, configuration):
             img_buffer = BytesIO()
             image.save(img_buffer, format="PNG")
             img_buffer.seek(0)
-            
+
             gcp_url = await uploadDoc(
-                file=img_buffer,
-                folder="generated-images",
-                real_time=True,
-                content_type="image/png"
+                file=img_buffer, folder="generated-images", real_time=True, content_type="image/png"
             )
             gcp_urls.append(gcp_url)
     # Return formatted response
@@ -102,3 +91,5 @@ async def handle_gemini_generation(client, model, prompt, configuration):
         }
     }
 
+    # Return formatted response
+    return {"success": True, "response": {"data": [{"url": gcp_url, "text_content": text_content}]}}
