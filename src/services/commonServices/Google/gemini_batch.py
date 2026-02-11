@@ -26,8 +26,9 @@ class GeminiBatch(BaseService):
 
         # Construct batch requests in Gemini JSONL format
         for idx, message in enumerate(self.batch):
-            # Generate a unique key for each request
-            custom_id = str(uuid.uuid4())
+            # Generate a unique message_id for each message
+            # This will be sent as key to Gemini API (required by their format)
+            message_id = str(uuid.uuid4())
 
             # Construct Gemini native format request
             request_content = {"contents": [{"parts": [{"text": message}]}]}
@@ -44,13 +45,19 @@ class GeminiBatch(BaseService):
                     if key not in ["messages", "prompt", "model"]:
                         request_content["config"][key] = value
 
-            # Create JSONL entry with key and request
-            batch_entry = {"key": custom_id, "request": request_content}
+            # Create JSONL entry with message_id sent as key (required by Gemini API)
+            batch_entry = {
+                "key": message_id,
+                "request": request_content
+            }
             batch_requests.append(json.dumps(batch_entry))
 
             # Store message mapping for response
-            mapping_item = {"message": message, "custom_id": custom_id}
-
+            mapping_item = {
+                "message": message,
+                "message_id": message_id
+            }
+            
             # Add batch_variables to mapping if provided
             if batch_variables is not None:
                 mapping_item["variables"] = batch_variables[idx]
@@ -70,9 +77,13 @@ class GeminiBatch(BaseService):
             "apikey": self.apikey,
             "webhook": self.webhook,
             "batch_variables": batch_variables,
-            "custom_id_mapping": {item["custom_id"]: idx for idx, item in enumerate(message_mappings)},
+            "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service,
             "uploaded_file": uploaded_file.name,
+            "org_id": self.org_id,
+            "bridge_id": self.bridge_id,
+            "version_id": getattr(self, 'version_id', ''),
+            "thread_id": self.thread_id
         }
         cache_key = f"{redis_keys['batch_']}{batch_job.name}"
         await store_in_cache(cache_key, batch_json, ttl=86400)

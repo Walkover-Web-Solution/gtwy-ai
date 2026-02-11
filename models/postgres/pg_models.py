@@ -97,5 +97,6 @@ class ConversationLog(Base):
     parent_id = Column(String, nullable=True)
     child_id = Column(String, nullable=True)
     prompt = Column(JSON, nullable=True)
+    batch_data = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())

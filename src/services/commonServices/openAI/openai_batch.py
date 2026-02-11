@@ -28,9 +28,10 @@ class OpenaiBatch(BaseService):
         for idx, message in enumerate(self.batch):
             # Copy all keys from self.customConfig into the body
             body_data = self.customConfig
-
-            # Generate a unique ID for each request
-            custom_id = str(uuid.uuid4())
+            
+            # Generate a unique message_id for each message
+            # This will be sent as custom_id to OpenAI API (required by their format)
+            message_id = str(uuid.uuid4())
 
             # Add messages array with processed system prompt and user message
             body_data["messages"] = [
@@ -38,15 +39,23 @@ class OpenaiBatch(BaseService):
                 {"role": "user", "content": message},
             ]
 
-            # Construct one JSONL line for each message
-            request_obj = {"custom_id": custom_id, "method": "POST", "url": "/v1/chat/completions", "body": body_data}
+            # Construct one JSONL line for each message with message_id as custom_id
+            request_obj = {
+                "custom_id": message_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": body_data
+            }
 
             # Serialize to JSON string
             results.append(json.dumps(request_obj))
 
             # Store message mapping for response
-            mapping_item = {"message": message, "custom_id": custom_id}
-
+            mapping_item = {
+                "message": message,
+                "message_id": message_id
+            }
+            
             # Add batch_variables to mapping if provided
             if batch_variables is not None:
                 mapping_item["variables"] = batch_variables[idx]
@@ -79,8 +88,13 @@ class OpenaiBatch(BaseService):
             "apikey": self.apikey,
             "webhook": self.webhook,
             "batch_variables": batch_variables,
-            "custom_id_mapping": {item["custom_id"]: idx for idx, item in enumerate(message_mappings)},
+            "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service,
+            "model": self.model,
+            "org_id": self.org_id,
+            "bridge_id": self.bridge_id,
+            "version_id": getattr(self, 'version_id', ''),
+            "thread_id": self.thread_id
         }
         cache_key = f"{redis_keys['batch_']}{batch_file.id}"
         await store_in_cache(cache_key, batch_json, ttl=86400)

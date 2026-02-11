@@ -26,8 +26,9 @@ class MistralBatch(BaseService):
 
         # Construct batch requests in Mistral JSONL format
         for idx, message in enumerate(self.batch):
-            # Generate a unique custom_id for each request
-            custom_id = str(uuid.uuid4())
+            # Generate a unique message_id for each message
+            # This will be sent as custom_id to Mistral API (required by their format)
+            message_id = str(uuid.uuid4())
 
             # Construct Mistral batch request body
             request_body = {"messages": [], "max_tokens": self.customConfig.get("max_tokens", 1024)}
@@ -44,13 +45,19 @@ class MistralBatch(BaseService):
                     if key in self.customConfig:
                         request_body[key] = self.customConfig[key]
 
-            # Create JSONL entry with custom_id and body
-            batch_entry = {"custom_id": custom_id, "body": request_body}
+            # Create JSONL entry with message_id sent as custom_id (required by Mistral API)
+            batch_entry = {
+                "custom_id": message_id,
+                "body": request_body
+            }
             batch_requests.append(json.dumps(batch_entry))
 
             # Store message mapping for response
-            mapping_item = {"message": message, "custom_id": custom_id}
-
+            mapping_item = {
+                "message": message,
+                "message_id": message_id
+            }
+            
             # Add batch_variables to mapping if provided
             if batch_variables is not None:
                 mapping_item["variables"] = batch_variables[idx]
@@ -70,9 +77,13 @@ class MistralBatch(BaseService):
             "apikey": self.apikey,
             "webhook": self.webhook,
             "batch_variables": batch_variables,
-            "custom_id_mapping": {item["custom_id"]: idx for idx, item in enumerate(message_mappings)},
+            "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service,
             "uploaded_file_id": uploaded_file.id,
+            "org_id": self.org_id,
+            "bridge_id": self.bridge_id,
+            "version_id": getattr(self, 'version_id', ''),
+            "thread_id": self.thread_id
         }
         cache_key = f"{redis_keys['batch_']}{batch_job.id}"
         await store_in_cache(cache_key, batch_json, ttl=86400)

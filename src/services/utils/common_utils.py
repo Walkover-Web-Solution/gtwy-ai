@@ -629,6 +629,33 @@ async def process_background_tasks_for_error(parsed_data, error):
     await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)
 
 
+async def process_batch_background_tasks(parsed_data, result, processed_prompts, batch_variables):
+    """
+    Process background tasks for batch API including conversation log creation.
+    
+    Args:
+        parsed_data: Parsed request data
+        result: Result from batch execution containing batch_id and messages
+        processed_prompts: List of processed prompts for each batch message
+        batch_variables: List of variables for each batch message
+    """
+    from src.db_services.metrics_service import create_batch_conversation_logs
+    
+    batch_id = result.get("batch_id")
+    messages = result.get("messages", [])
+    
+    if batch_id and messages:
+        # Call the history save function in background
+        asyncio.create_task(
+            create_batch_conversation_logs(
+                batch_id=batch_id,
+                messages=messages,
+                parsed_data=parsed_data,
+                processed_prompts=processed_prompts,
+                batch_variables=batch_variables
+            )
+        )
+
 def build_service_params_for_batch(parsed_data, custom_config, model_output_config):
     return {
         "customConfig": custom_config,
