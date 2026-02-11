@@ -399,6 +399,9 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
             message_id = message_info.get("message_id", "")
             variables = message_info.get("variables", {}) if batch_variables else {}
             
+            # Extract webhook information from parsed_data
+            webhook_info = parsed_data.get('batch_webhook') or {}
+            
             # Create conversation log entry for this batch message
             conversation_log_data = {
                 "user": user_message,
@@ -416,7 +419,9 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
                 "prompt": {"system": processed_prompts[idx]} if idx < len(processed_prompts) else None,
                 "batch_data": {
                     "status": "queued",
-                    "batch_id": batch_id
+                    "batch_id": batch_id,
+                    "webhook_url": webhook_info.get('url'),
+                    "webhook_headers": webhook_info.get('headers')
                 }
             }
             

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import and_
+from sqlalchemy import and_, update, text
 
 from globals import logger
 from models.index import combined_models as models
