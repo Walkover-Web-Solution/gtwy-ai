@@ -3,9 +3,13 @@ import uuid
 
 from src.configs.constant import redis_keys
 from src.services.commonServices.Mistral.mistral_run_batch import create_batch_file, process_batch_file
+from src.db_services.conversationDbService import find_completed_batch_conversations
+from src.controllers.conversationController import add_tool_call_data_in_history
+from src.services.commonServices.createConversations import ConversationService
 
 from ...cache_service import store_in_cache
 from ..baseService.baseService import BaseService
+from globals import logger
 
 
 class MistralBatch(BaseService):
@@ -24,6 +28,46 @@ class MistralBatch(BaseService):
                     "message": f"batch_variables array length ({len(batch_variables)}) must match batch array length ({len(self.batch)})",
                 }
 
+        # Fetch thread history if thread_id is present (only completed conversations, not queued)
+        thread_history = []
+        if hasattr(self, 'thread_id') and self.thread_id:
+            try:
+                # Fetch only completed batch conversations (exclude queued ones)
+                chats = await find_completed_batch_conversations(
+                    org_id=self.org_id,
+                    thread_id=self.thread_id,
+                    sub_thread_id=getattr(self, 'sub_thread_id', self.thread_id),
+                    bridge_id=self.bridge_id,
+                    limit=3  # Fetch last 3 completed conversations
+                )
+                
+                if chats:
+                    # Add tool call data to history
+                    chats = await add_tool_call_data_in_history(chats)
+                    
+                    # Convert to OpenAI conversation format (Mistral uses same format)
+                    memory = getattr(self, 'gpt_memory_context', None)
+                    files = getattr(self, 'files', [])
+                    
+                    conversation_result = ConversationService.createOpenAiConversation(
+                        conversation=chats,
+                        memory=memory,
+                        files=files
+                    )
+                    
+                    if conversation_result.get('success'):
+                        thread_history = conversation_result.get('messages', [])
+                        logger.info(f"Loaded {len(thread_history)} history messages for Mistral batch with thread_id={self.thread_id}")
+                    else:
+                        logger.warning(f"Failed to create conversation history for Mistral batch: {conversation_result}")
+                else:
+                    logger.info(f"No completed conversation history found for thread_id={self.thread_id}")
+                    
+            except Exception as e:
+                logger.error(f"Error fetching thread history for Mistral batch: {str(e)}")
+                # Continue without history if there's an error
+                thread_history = []
+
         # Construct batch requests in Mistral JSONL format
         for idx, message in enumerate(self.batch):
             # Generate a unique message_id for each message
@@ -33,8 +77,12 @@ class MistralBatch(BaseService):
             # Construct Mistral batch request body
             request_body = {"messages": [], "max_tokens": self.customConfig.get("max_tokens", 1024)}
 
-            # Add processed system message
+            # Add processed system message first
             request_body["messages"].append({"role": "system", "content": self.processed_prompts[idx]})
+
+            # Add thread history after system prompt (if available)
+            if thread_history:
+                request_body["messages"].extend(thread_history)
 
             # Add user message
             request_body["messages"].append({"role": "user", "content": message})

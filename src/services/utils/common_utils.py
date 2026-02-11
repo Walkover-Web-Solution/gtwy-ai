@@ -685,6 +685,11 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "folder_id": parsed_data.get("folder_id"),
         "batch_variables": parsed_data["batch_variables"],
         "processed_prompts": parsed_data.get("processed_prompts", []),
+        "thread_id": parsed_data.get("thread_id"),
+        "sub_thread_id": parsed_data.get("sub_thread_id"),
+        "gpt_memory_context": parsed_data.get("gpt_memory_context", ""),
+        "files": parsed_data.get("files", []),
+        "version_id": parsed_data.get("version_id", ""),
     }
 
 

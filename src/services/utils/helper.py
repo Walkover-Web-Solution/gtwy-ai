@@ -21,9 +21,12 @@ from ..commonServices.anthropic.anthropic_batch import AnthropicBatch
 from ..commonServices.anthropic.anthropicCall import Anthropic
 from ..commonServices.baseService.utils import sendResponse
 from ..commonServices.Google.geminiCall import GeminiHandler
+from ..commonServices.Google.gemini_batch import GeminiBatch
 from ..commonServices.grok.grokCall import Grok
 from ..commonServices.groq.groqCall import Groq
+from ..commonServices.groq.groq_batch import GroqBatch
 from ..commonServices.Mistral.mistral_call import Mistral
+from ..commonServices.Mistral.mistral_batch import MistralBatch
 from ..commonServices.openAI.openai_batch import OpenaiBatch
 from ..commonServices.openAI.openai_completion_response import OpenaiCompletion
 from ..commonServices.openAI.openai_embedding_call import OpenaiEmbedding
@@ -318,12 +321,18 @@ class Helper:
         return usage
 
     async def create_service_handler_for_batch(params, service):
-        # Currently only supports openai and anthropic
+        # Supports all batch services
         class_obj = None
         if service == service_name["openai"]:
             class_obj = OpenaiBatch(params)
         elif service == service_name["anthropic"]:
             class_obj = AnthropicBatch(params)
+        elif service == service_name["groq"]:
+            class_obj = GroqBatch(params)
+        elif service == service_name["mistral"]:
+            class_obj = MistralBatch(params)
+        elif service == service_name["gemini"]:
+            class_obj = GeminiBatch(params)
         else:
             raise ValueError(f"Unsupported batch service: {service}")
 
