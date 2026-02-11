@@ -10,7 +10,7 @@ from src.services.proxy.Proxyservice import (
     validate_proxy_pauthkey,
 )
 from src.services.utils.time import Timer
-
+from src.services.token_service import is_token_blacklisted
 
 async def make_data_if_proxy_token_given(req):
     proxy_auth_token = req.headers.get("proxy_auth_token")
@@ -71,12 +71,14 @@ async def jwt_middleware(request: Request):
         timer_obj = Timer()
         timer_obj.start()
         request.state.timer = timer_obj.getTime()
-        # request.state.timer = timer
         check_token = False
+        
         if request.headers.get("Authorization"):
             token = request.headers.get("Authorization")
             if not token:
                 raise HTTPException(status_code=498, detail="invalid token")
+            if await is_token_blacklisted(token):
+                raise HTTPException(status_code=401, detail="token revoked")
             check_token = jwt.decode(token, Config.SecretKey, algorithms=["HS256"])
         elif request.headers.get("proxy_auth_token") or request.headers.get("pauthkey"):
             check_token = await make_data_if_proxy_token_given(request)
@@ -92,7 +94,6 @@ async def jwt_middleware(request: Request):
                 request.state.embed = False
             request.state.folder_id = check_token.get("extraDetails", {}).get("folder_id", None)
             request.state.user_id = str(check_token["user"].get("id"))
-            # Set owner_id in profile to match interface middleware pattern
             org_id = request.state.org_id
             user_id = request.state.user_id
             request.state.profile["owner_id"] = org_id
