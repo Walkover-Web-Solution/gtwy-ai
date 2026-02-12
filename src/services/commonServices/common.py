@@ -462,8 +462,6 @@ async def chat(request_body):
                         
             except Exception as e:
                 logger.error(f"Error rendering template: {str(e)}")
-        else:
-            logger.info(f"Template Rendering Skipped: is_template={response_type.get('is_template')} or response_type invalid")
         
         # Add template data to historyParams chatbot_message if template was used and not playground
         if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
