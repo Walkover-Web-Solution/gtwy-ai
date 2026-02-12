@@ -561,7 +561,6 @@ async def batch(request_body):
     try:
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-        print(parsed_data)
         if parsed_data["batch_webhook"] is None:
             raise ValueError("webhook is required")
 
