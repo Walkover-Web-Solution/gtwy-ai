@@ -781,6 +781,15 @@ async def image(request_body):
         if not result["success"]:
             raise ValueError(result)
 
+        # Calculate image tokens and costs
+        params['token_calculator'].calculate_image_usage(result['response'])
+        
+        parsed_data['tokens'] = params['token_calculator'].calculate_image_cost(parsed_data['model'])
+        
+        # Add usage data to response
+        result['response']['usage'] = params['token_calculator'].get_image_usage()
+        result['response']['usage']['cost'] = parsed_data['tokens'].get('total_cost', 0)
+
         # Create latency object using utility function
         if result.get("response") and result["response"].get("data"):
             result["response"]["data"]["id"] = parsed_data["message_id"]

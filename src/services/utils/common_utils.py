@@ -891,9 +891,10 @@ def create_latency_object(timer, params):
 
 def update_usage_metrics(parsed_data, params, latency, result=None, error=None, success=False):
     """
-      be metrics with latency and other information.
+    Update usage metrics with latency and other information.
     Handles both success and error cases with a unified interface.
-
+    Supports both chat models and image models with proper token calculation.
+    
     Args:
         parsed_data: Dictionary containing parsed request data
         params: Parameters dictionary containing execution logs
@@ -905,6 +906,37 @@ def update_usage_metrics(parsed_data, params, latency, result=None, error=None, 
     Returns:
         Updated usage dictionary
     """
+    # Extract usage data from result
+    usage_data = result.get('response', {}).get('usage', {}) if result else {}
+    
+    # Check if this is an image model (has image-specific token fields)
+    is_image_model = (
+        'text_input_tokens' in usage_data or 
+        'image_input_tokens' in usage_data or
+        'text_output_tokens' in usage_data or
+        'image_output_tokens' in usage_data
+    )
+    
+    # Calculate tokens based on model type
+    if is_image_model:
+        # For image models, sum up text and image tokens
+        input_tokens = (
+            usage_data.get('text_input_tokens', 0) + 
+            usage_data.get('image_input_tokens', 0) +
+            usage_data.get('cached_text_input_tokens', 0) +
+            usage_data.get('cached_image_input_tokens', 0)
+        )
+        output_tokens = (
+            usage_data.get('text_output_tokens', 0) + 
+            usage_data.get('image_output_tokens', 0)
+        )
+        total_tokens = input_tokens + output_tokens
+    else:
+        # For chat models, use standard token fields
+        input_tokens = usage_data.get('input_tokens', 0) or 0
+        output_tokens = usage_data.get('output_tokens', 0) or 0
+        total_tokens = usage_data.get('total_tokens', 0) or 0
+    
     # Base fields common to both success and error cases
     update_data = {
         "service": parsed_data["service"],
@@ -912,12 +944,12 @@ def update_usage_metrics(parsed_data, params, latency, result=None, error=None, 
         "orgId": parsed_data["org_id"],
         "latency": json.dumps(latency),
         "success": success,
-        "apikey_object_id": params.get("apikey_object_id"),
-        "expectedCost": parsed_data["tokens"].get("total_cost", 0),
-        "variables": parsed_data.get("variables") or {},
-        "outputTokens": result.get("response", {}).get("usage", {}).get("output_tokens", 0) or 0 if result else 0,
-        "inputTokens": result.get("response", {}).get("usage", {}).get("input_tokens", 0) or 0 if result else 0,
-        "total_tokens": result.get("response", {}).get("usage", {}).get("total_tokens", 0) or 0 if result else 0,
+        "apikey_object_id": params.get('apikey_object_id'),
+        "expectedCost": parsed_data['tokens'].get('total_cost', 0),
+        "variables": parsed_data.get('variables') or {},
+        "outputTokens": output_tokens,
+        "inputTokens": input_tokens,
+        "total_tokens": total_tokens
     }
 
     # Add success-specific fields

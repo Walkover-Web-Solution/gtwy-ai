@@ -41,14 +41,16 @@ async def OpenAIImageModel(configuration, apiKey, execution_time_logs, timer):
                 )
 
                 # Add GCP URL to response and keep original b64_json
-                response["data"][i]["url"] = gcp_url  # Primary URL (GCP)
-
+                response['data'][i]['url'] = gcp_url  # Primary URL (GCP)
+                
             else:
-                raise ValueError(
-                    f"Image data contains neither 'url' nor 'b64_json' key. Available keys: {list(image_data.keys())}"
-                )
-
-        return {"success": True, "response": response}
+                raise ValueError(f"Image data contains neither 'url' nor 'b64_json' key. Available keys: {list(image_data.keys())}")
+        
+        response['usage']['total_images_generated'] = len(response['data'])
+        return {
+            'success': True,
+            'response': response
+        }
     except Exception as error:
         execution_time_logs.append(
             {"step": "OpenAI image Processing time", "time_taken": timer.stop("OpenAI image Processing time")}
