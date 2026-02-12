@@ -206,6 +206,7 @@ def parse_request_body(request_body):
         "batch_variables": body.get("batch_variables"),
         "chatbot_auto_answers": body.get("chatbot_auto_answers"),
         "owner_id": state.get("profile", {}).get("owner_id"),
+        "richui_templates": body.get("richui_templates", {}),
     }
 
 
@@ -770,6 +771,32 @@ def send_error(
 
 
 def restructure_json_schema(response_type, service):
+    # Handle Template IDs -> Generate Schema
+    if 'template_id' in response_type:
+        template_ids = response_type['template_id']
+        if not isinstance(template_ids, list):
+            template_ids = [template_ids]
+            
+        schemas = []        
+        if schemas:
+             if len(schemas) == 1:
+                 response_type['json_schema'] = schemas[0]
+             else:
+                 response_type['json_schema'] = {
+                     "name": "ui_components_response", # Generic name
+                     "strict": True,
+                     "schema": {
+                         "type": "object",
+                         "properties": {
+                             "item": {
+                                 "anyOf": [s['schema'] for s in schemas]
+                             }
+                         },
+                         "required": ["item"],
+                         "additionalProperties": False
+                     }
+                 }
+    
     match service:
         case "openai":
             schema = response_type.get("json_schema", {})

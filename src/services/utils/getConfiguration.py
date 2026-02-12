@@ -207,6 +207,7 @@ async def _prepare_configuration_response(
         "wrapper_id": result.get("bridges", {}).get("wrapper_id"),
         "web_search_filters": web_search_filters_value,
         "chatbot_auto_answers": bridge_data.get("bridges", {}).get("chatbot_auto_answers"),
+        "richui_templates": result.get("bridges", {}).get("richui_templates"),
     }
 
     return None, base_config, result, resolved_bridge_id
