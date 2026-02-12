@@ -394,6 +394,9 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
         batch_variables: List of variables for each batch message (or None)
     """
     try:
+        # Lazy import to avoid circular import (helper -> ai_ml_call -> baseService -> metrics_service)
+        from ..services.utils.helper import Helper
+
         for idx, message_info in enumerate(messages):
             user_message = message_info.get("message", "")
             message_id = message_info.get("message_id", "")
@@ -401,7 +404,8 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
             
             # Extract webhook information from parsed_data
             webhook_info = parsed_data.get('batch_webhook') or {}
-            
+            masked_headers = Helper.mask_headers(webhook_info.get('headers'))
+
             # Create conversation log entry for this batch message
             conversation_log_data = {
                 "user": user_message,
@@ -421,7 +425,7 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
                     "status": "queued",
                     "batch_id": batch_id,
                     "webhook_url": webhook_info.get('url'),
-                    "webhook_headers": webhook_info.get('headers')
+                    "webhook_headers": masked_headers
                 }
             }
             

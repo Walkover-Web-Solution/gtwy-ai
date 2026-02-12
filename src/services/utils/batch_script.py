@@ -8,6 +8,7 @@ from ..commonServices.baseService.baseService import sendResponse
 from ..utils.send_error_webhook import create_response_format
 from .ai_middleware_format import process_batch_results
 from .batch_script_utils import get_batch_result_handler
+from .helper import Helper
 from globals import *
 from src.db_services.conversationDbService import updateConversationLogByBatchData, timescale_metrics
 from .token_calculation import TokenCalculator
@@ -148,7 +149,7 @@ async def check_batch_status():
                                         'webhook_response': webhook_response,
                                         'webhook_error': webhook_error,  # Store webhook error if any
                                         'webhook_url': webhook.get('url'),
-                                        'webhook_headers': webhook.get('headers')
+                                        'webhook_headers': Helper.mask_headers(webhook.get('headers'))
                                     }
                                 }
                                 

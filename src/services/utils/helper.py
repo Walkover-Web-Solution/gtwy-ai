@@ -74,6 +74,23 @@ class Helper:
         return key
 
     @staticmethod
+    def mask_headers(headers):
+        """Mask header values for safe storage: first 2-3 chars + ****** + last 2-3 chars."""
+        if not headers or not isinstance(headers, dict):
+            return headers
+        result = {}
+        for k, v in headers.items():
+            if v is None:
+                result[k] = None
+                continue
+            s = str(v).strip()
+            if len(s) <= 6:
+                result[k] = "******"
+            else:
+                result[k] = s[:3] + "******" + s[-3:]
+        return result
+
+    @staticmethod
     def extract_embed_user_id(userinfo, org_id):
         if not userinfo:
             return None
