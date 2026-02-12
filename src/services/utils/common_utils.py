@@ -276,9 +276,7 @@ def add_default_template(prompt):
              prompt["customPrompt"] += suffix
         elif prompt.get("instruction"):
              prompt["instruction"] += suffix
-        else:
-             # Fallback for generic dicts -> convert to string
-             prompt = convert_prompt_to_string(prompt) + suffix
+
     else:
         # String case
         prompt = convert_prompt_to_string(prompt) + suffix
@@ -489,22 +487,13 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
                     "instruction": prompt_data.get("instruction", ""),  # Note: frontend uses "instruction"
                 }
                 configuration["prompt"] = convert_prompt_to_string(prompt_payload)
-                configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-                    configuration["prompt"], variables
-                )
+                
 
-            else:
-                # Generic object format - try to convert
-                configuration["prompt"] = convert_prompt_to_string(prompt_data)
-                configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-                    configuration["prompt"], variables
-                )
-        
         # CASE 1: Simple string (legacy)
-        else:
-            configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-                configuration["prompt"], variables
-            )
+        
+        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
+            configuration["prompt"], variables
+        )
 
         if template:
             system_prompt = template
