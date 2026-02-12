@@ -427,10 +427,10 @@ def finish_reason_mapping(finish_reason):
 
 
 async def Batch_Response_formatter(
-    response=None, service=None, tools=None, type="chat", images=None, batch_id=None, custom_id=None, isBatch=True
+    response=None, service=None, tools=None, type="chat", images=None, batch_id=None, message_id=None, isBatch=True
 ):
     """
-    Formatter specifically for batch responses that includes batch_id and custom_id for easy mapping
+    Formatter specifically for batch responses that includes batch_id and message_id for easy mapping
 
     Args:
         isBatch: Boolean flag to indicate this is a batch response (default: True)
@@ -440,15 +440,15 @@ async def Batch_Response_formatter(
         response=response, service=service, tools=tools, type=type, images=images, isBatch=isBatch
     )
     print(formatted_response)
-    # Add batch_id and custom_id to the response for mapping
+    # Add batch_id and message_id to the response for mapping
     formatted_response["batch_id"] = batch_id
-    formatted_response["custom_id"] = custom_id
+    formatted_response["message_id"] = message_id
     formatted_response["isBatch"] = isBatch
 
     return formatted_response
 
 
-async def process_batch_results(results, service, batch_id, batch_variables, custom_id_mapping):
+async def process_batch_results(results, service, batch_id, batch_variables, message_id_mapping):
     """
     Common function to process batch results for all services.
 
@@ -457,7 +457,7 @@ async def process_batch_results(results, service, batch_id, batch_variables, cus
         service: Service name (e.g., 'gemini', 'anthropic')
         batch_id: Batch ID
         batch_variables: Optional batch variables
-        custom_id_mapping: Mapping of custom_id to index
+        message_id_mapping: Mapping of message_id to index
 
     Returns:
         List of formatted results
@@ -474,23 +474,24 @@ async def process_batch_results(results, service, batch_id, batch_variables, cus
             formatted_results.append(result_item)
             continue
 
-        # Extract custom_id and result data (format varies by service)
+        # Extract message_id from result (sent as custom_id/key to the APIs)
+        # The external API returns our message_id in their custom_id/key field
         if service == "gemini":
-            custom_id = result_item.get("key", None)
+            message_id = result_item.get("key", None)
             result_data = result_item.get("response", {})
-            result_data = custom_id
+            result_data = message_id
         elif service == "anthropic":
-            custom_id = result_item.get("custom_id", None)
+            message_id = result_item.get("custom_id", None)
             result_data = result_item.get("result", {})
             if result_data.get("type") != "error":
                 result_data = result_data.get("message", {})
         elif service in ["openai", "groq"]:
-            custom_id = result_item.get("custom_id", None)
+            message_id = result_item.get("custom_id", None)
             response = result_item.get("response", {})
             result_data = response.get("body", {})
             status_code = response.get("status_code", 200)
         elif service == "mistral":
-            custom_id = result_item.get("custom_id", None)
+            message_id = result_item.get("custom_id", None)
             result_data = result_item.get("response", {})
 
         # Check for errors
@@ -504,7 +505,7 @@ async def process_batch_results(results, service, batch_id, batch_variables, cus
 
         if has_error:
             formatted_content = {
-                "custom_id": custom_id,
+                "message_id": message_id,
                 "batch_id": batch_id,
                 "error": result_data.get("error", result_data),
                 "status_code": status_code if service in ["openai", "groq"] else 400,
@@ -518,13 +519,13 @@ async def process_batch_results(results, service, batch_id, batch_variables, cus
                 type="chat",
                 images=None,
                 batch_id=batch_id,
-                custom_id=custom_id,
+                message_id=message_id,
                 isBatch=True,
             )
 
         # Add batch_variables to response if available
-        if batch_variables is not None and custom_id in custom_id_mapping:
-            variable_index = custom_id_mapping[custom_id]
+        if batch_variables is not None and message_id in message_id_mapping:
+            variable_index = message_id_mapping[message_id]
             if variable_index < len(batch_variables):
                 formatted_content["variables"] = batch_variables[variable_index]
 

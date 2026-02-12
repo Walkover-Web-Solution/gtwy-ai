@@ -39,6 +39,7 @@ from src.services.utils.common_utils import (
     setup_agent_pre_tools,
     update_cost_and_last_used_in_background,
     update_usage_metrics,
+    process_batch_background_tasks
 )
 from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
@@ -633,9 +634,20 @@ async def batch(request_body):
 
         if not result["success"]:
             raise ValueError(result)
-
-        response_content = {"success": True, "response": result["message"]}
-
+        
+        # Step 9: Process batch conversation logs in background
+        await process_batch_background_tasks(
+            parsed_data=parsed_data,
+            result=result,
+            processed_prompts=processed_prompts,
+            batch_variables=batch_variables
+        )
+        
+        response_content = {
+            "success": True,
+            "response": result["message"]
+        }
+        
         # Include batch_id and messages if available
         if "batch_id" in result:
             response_content["batch_id"] = result["batch_id"]
