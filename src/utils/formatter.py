@@ -420,8 +420,6 @@ def render_card_to_tailwind(card_json):
     root = card_json.get("template_1") or card_json.get("template_2") or card_json
     return render_node(root)
 
-from src.services.template_service import get_template_by_id
-
 def render_template_to_html(card_json_template, variables_data={}): 
     # Apply variables using dot-notation paths
     if variables_data:
