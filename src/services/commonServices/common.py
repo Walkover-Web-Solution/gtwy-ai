@@ -9,6 +9,7 @@ from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
+from src.utils.formatter import render_template_to_html
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.common_utils import (
@@ -400,6 +401,72 @@ async def chat(request_body):
             )
             result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
 
+        # Template HTML Generation
+        response_type = parsed_data.get('response_type', {})
+        template_data = None
+        if isinstance(response_type, dict) and response_type.get('is_template', False):
+            try:
+                html_output = ""
+                template_ids = response_type.get('template_id', [])
+                if not template_ids:
+                    logger.warning("Template Rendering: 'is_template' is True but 'template_id' is missing or empty.")
+                base_template = None
+                if template_ids and response_type:
+                    # Get templates from parsed_data (already fetched in pipeline)
+                    richui_templates = parsed_data.get('richui_templates', {})
+
+                    # AI Result Data
+                    ai_data = result.get('response', {}).get('data', {})
+                    ai_data = json.loads(json.dumps(ai_data.get('content', ai_data)))
+                    # Unwrap 'item' if present
+                    if isinstance(ai_data, dict) and "item" in ai_data:
+                        ai_data = ai_data["item"]
+                    elif isinstance(ai_data, str):
+                        try:
+                            parsed = json.loads(ai_data)
+                            if isinstance(parsed, dict) and "item" in parsed:
+                                ai_data = parsed["item"]
+                            else:
+                                ai_data = parsed
+                        except:
+                            pass
+                    
+                    # Get template directly using widget_id from ai_data
+                    if isinstance(ai_data, dict):
+                        widget_id = ai_data.get('widget_id')
+                        if widget_id and str(widget_id) in richui_templates:
+                            base_template = richui_templates[str(widget_id)]
+                        else:
+                            logger.warning(f"Template with widget_id '{widget_id}' not found in richui_templates")
+                        
+                    # Only render HTML if we have a matching template
+                    if base_template:
+                        try:
+                            html_output = render_template_to_html(base_template, ai_data)
+                            # Update Result
+                            result['response']['type'] = 'template'
+                            result['response']['data']['content'] = html_output
+                            
+                            # Store template data for history in chatbot_message
+                            template_data = {
+                                'template_id': base_template.get('_id') or base_template.get('id'),
+                                'template_name': base_template.get('name'),
+                                'is_template': True
+                            }
+                        except Exception as render_err:
+                            logger.error(f"Template Rendering Failed in render function: {render_err}")
+                    else:
+                        # No template found or matched, return data as-is (default behavior for greetings, etc.)
+                        logger.info("No matching template found, returning data as-is")
+                        
+            except Exception as e:
+                logger.error(f"Error rendering template: {str(e)}")
+        else:
+            logger.info(f"Template Rendering Skipped: is_template={response_type.get('is_template')} or response_type invalid")
+        
+        # Add template data to historyParams chatbot_message if template was used and not playground
+        if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
+            result['historyParams']['chatbot_message'] = html_output
         # Send data to playground
         if parsed_data.get("is_playground") and parsed_data.get("body", {}).get("bridge_configurations", {}).get(
             "playground_response_format"

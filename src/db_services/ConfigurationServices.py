@@ -340,6 +340,78 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     }
                 }
             },
+            # Stage 9.5: Extract template_ids from configuration.response_type if is_template is true
+            {
+                "$addFields": {
+                    "template_ids_to_fetch": {
+                        "$cond": [
+                            {
+                                "$and": [
+                                    {"$eq": [{"$type": "$configuration.response_type"}, "object"]},
+                                    {"$eq": ["$configuration.response_type.is_template", True]},
+                                    {"$isArray": "$configuration.response_type.template_id"},
+                                    {"$gt": [{"$size": "$configuration.response_type.template_id"}, 0]},
+                                ]
+                            },
+                            {
+                                "$map": {
+                                    "input": "$configuration.response_type.template_id",
+                                    "as": "tid",
+                                    "in": {
+                                        "$convert": {
+                                            "input": "$$tid",
+                                            "to": "objectId",
+                                            "onError": None,
+                                            "onNull": None,
+                                        }
+                                    },
+                                }
+                            },
+                            [],
+                        ]
+                    }
+                }
+            },
+            # Stage 9.6: Lookup templates from rich_ui_templates collection
+            {
+                "$lookup": {
+                    "from": "rich_ui_templates",
+                    "let": {
+                        "template_ids": {
+                            "$filter": {
+                                "input": "$template_ids_to_fetch",
+                                "as": "id",
+                                "cond": {"$ne": ["$$id", None]},
+                            }
+                        }
+                    },
+                    "pipeline": [
+                        {"$match": {"$expr": {"$in": ["$_id", "$$template_ids"]}}},
+                        {"$addFields": {"_id": {"$toString": "$_id"}}},
+                    ],
+                    "as": "templates_docs",
+                }
+            },
+            # Stage 9.7: Create richui_templates object with template_id as key
+            {
+                "$addFields": {
+                    "richui_templates": {
+                        "$cond": [
+                            {"$gt": [{"$size": "$templates_docs"}, 0]},
+                            {
+                                "$arrayToObject": {
+                                    "$map": {
+                                        "input": "$templates_docs",
+                                        "as": "template",
+                                        "in": ["$$template._id", "$$template"],
+                                    }
+                                }
+                            },
+                            {},
+                        ]
+                    }
+                }
+            },
             # Stage 10: Remove temporary fields to clean up the output
             {
                 "$project": {
@@ -349,6 +421,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "has_apikeys": 0,
                     "connected_agents_bridge_ids": 0,
                     "agent_details_docs": 0,
+                    "template_ids_to_fetch": 0,
+                    "templates_docs": 0,
                     # Exclude additional temporary fields as needed
                 }
             },
