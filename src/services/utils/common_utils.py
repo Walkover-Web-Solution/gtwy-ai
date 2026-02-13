@@ -333,6 +333,7 @@ async def handle_pre_tools(parsed_data):
         if parsed_data["pre_tools"].get("args") is None:
             parsed_data["pre_tools"]["args"] = {}
         parsed_data["pre_tools"]["args"]["user"] = parsed_data["user"]
+        parsed_data["pre_tools"]["args"]["_response_type"] = parsed_data["configuration"]["response_type"]
         pre_function_response = await axios_work(
             parsed_data["pre_tools"].get("args", {}),
             {"url": f"https://flow.sokt.io/func/{parsed_data['pre_tools'].get('name')}"},
@@ -343,7 +344,11 @@ async def handle_pre_tools(parsed_data):
             )
         else:
             parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
-
+            response_data = pre_function_response.get("response", {})
+            if response_data.get("_response_type"):
+                parsed_data["configuration"]["response_type"] = response_data["_response_type"]
+            if response_data.get("_user_message"):
+                parsed_data["user"] = response_data["_user_message"]
 
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
