@@ -698,13 +698,17 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             # Merge folder_pre_tool into bridge's pre_tools_data array
             if folder_result and folder_result[0].get("folder_pre_tool"):
                 folder_pre_tool = folder_result[0]["folder_pre_tool"]
-                # Ensure pre_tools_data exists
+                folder_pre_tool_id = folder_pre_tool.get("_id")
+                
+                # Ensure pre_tools and pre_tools_data exist
+                if "pre_tools" not in bridge_data:
+                    bridge_data["pre_tools"] = []
                 if "pre_tools_data" not in bridge_data:
                     bridge_data["pre_tools_data"] = []
-                # Add folder pre_tool to the array if not already present
-                # Check if this pre_tool is already in the array by _id
-                pre_tool_ids = [pt.get("_id") for pt in bridge_data["pre_tools_data"]]
-                if folder_pre_tool.get("_id") not in pre_tool_ids:
+                
+                # Add folder pre_tool if not already present
+                if folder_pre_tool_id and folder_pre_tool_id not in bridge_data["pre_tools"]:
+                    bridge_data["pre_tools"].append(folder_pre_tool_id)
                     bridge_data["pre_tools_data"].append(folder_pre_tool)
 
             # Merge folder variables_path into bridge's variables_path
