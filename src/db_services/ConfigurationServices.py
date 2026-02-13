@@ -551,10 +551,10 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         "let": {
                             "tools_ids": {
                                 "$cond": [
-                                    {"$isArray": "$tools_id"},
+                                    {"$isArray": "$config.tools_id"},
                                     {
                                         "$map": {
-                                            "input": "$tools_id",
+                                            "input": "$config.tools_id",
                                             "as": "tid",
                                             "in": {
                                                 "$convert": {
@@ -615,10 +615,10 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         "let": {
                             "pre_tool_id_obj": {
                                 "$cond": [
-                                    {"$ne": ["$pre_tool_id", None]},
+                                    {"$ne": ["$config.pre_tool_id", None]},
                                     {
                                         "$convert": {
-                                            "input": "$pre_tool_id",
+                                            "input": "$config.pre_tool_id",
                                             "to": "objectId",
                                             "onError": None,
                                             "onNull": None,
@@ -669,9 +669,9 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         "folder_limit": {"$ifNull": ["$folder_limit", 0]},
                         "folder_usage": {"$ifNull": ["$folder_usage", 0]},
                         "apikey_object_id": 1,
-                        "tools_id": 1,
-                        "pre_tool_id": 1,
-                        "variables_path": {"$ifNull": ["$variables_path", {}]},
+                        "tools_id": "$config.tools_id",
+                        "pre_tool_id": "$config.pre_tool_id",
+                        "variables_path": {"$ifNull": ["$config.variables_path", {}]},
                     }
                 },
             ]
