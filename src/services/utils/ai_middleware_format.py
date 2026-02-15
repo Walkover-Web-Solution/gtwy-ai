@@ -177,37 +177,21 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
     elif service == service_name["openai"] and type == "embedding":
         return {"data": {"embedding": response.get("data")[0].get("embedding")}}
     elif service == service_name["gemini"] and type == "image":
-        data_item = response.get("data", [{}])[0]
-        # Handle both Imagen models (urls as list) and Gemini models (url as single value)
-        urls = data_item.get('urls')
-        text_content = data_item.get('text_content', [])
+        data_items = response.get("data", [])
+        image_urls = []
+        for item in data_items:
+            image_urls.append({
+                "image_url": item.get("url"),
+                "permanent_url": item.get("url")
+            })
         
-        # If Imagen returned multiple URLs, format like OpenAI's multi-image response
-        if urls and len(urls) > 0:
-            image_urls = []
-            for img_url in urls:
-                image_urls.append({
-                    "image_url": img_url,
-                    "permanent_url": img_url
-                })
-            
-            return {
-                "data": {
-                    "revised_prompt": text_content,
-                    "image_urls": image_urls,
-                },
-                "usage": response.get("usage_metadata", {})
-            }
-        else:
-            # Single image from Gemini image model
-            return {
-                "data" : {
-                    "revised_prompt" : text_content,
-                    "image_url" : urls,
-                    "permanent_url" : urls
-                },
-                "usage": response.get("usage_metadata", {})
-            }
+        return {
+            "data": {
+                "revised_prompt": response.get("text_content", []),
+                "image_urls": image_urls,
+            },
+            "usage": response.get("usage_metadata", {})
+        }
     elif service == service_name["gemini"] and type == "video":
         return {
             "data": {
