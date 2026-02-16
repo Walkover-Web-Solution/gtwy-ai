@@ -485,56 +485,8 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
                 )
                 parsed_data["memory"] = response
                 memory = response
-        # Handle different prompt formats
-        prompt_data = configuration.get("prompt")
-        
-        # CASE 3: Embed user with custom prompt (customPrompt exists and useDefaultPrompt is false)
-        if isinstance(prompt_data, dict) and prompt_data.get("customPrompt") and not prompt_data.get("useDefaultPrompt", True):
-            template_str = prompt_data["customPrompt"]
-            
-            # Build field values from embedFields array
-            field_values = {}
-            embed_fields = prompt_data.get("embedFields", [])
-            
-            # Process embedFields array format: [{name, value, type, hidden}, ...]
-            for field in embed_fields:
-                if isinstance(field, dict):
-                    field_name = field.get("name", "")
-                    # Only include visible (not hidden) fields
-                    if field_name:
-                        field_values[field_name] = field.get("value", "") or variables.get(field_name, "")
-            
-            # FIRST PASS: Replace field placeholders ({{role}}, {{goal}}, etc.) in customPrompt
-            configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-                template_str, field_values
-            )
-            
-            # SECOND PASS: Replace any remaining variables in the result
-            configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-                configuration["prompt"], variables
-            )
-        
-        # CASE 2: Structured prompt (role/goal/instruction object) - Main User Format
-        elif isinstance(prompt_data, dict):
-            # Check if it's embed format with customPrompt
-            if prompt_data.get("customPrompt") and not prompt_data.get("useDefaultPrompt", True):
-                # This is handled in CASE 3 above, skip here
-                pass
-            # Check if it's main user format (role, goal, instruction)
-            elif "role" in prompt_data or "goal" in prompt_data or "instruction" in prompt_data:
-                # Main user structured format
-                prompt_payload = {
-                    "role": prompt_data.get("role", ""),
-                    "goal": prompt_data.get("goal", ""),
-                    "instruction": prompt_data.get("instruction", ""),  # Note: frontend uses "instruction"
-                }
-                configuration["prompt"] = convert_prompt_to_string(prompt_payload)
-                
-
-        # CASE 1: Simple string (legacy)
-        
         configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-            configuration["prompt"], variables
+            configuration.get("prompt") or "", variables
         )
 
         if template:
@@ -567,8 +519,6 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             parsed_data["bridge_summary"], missing_vars = Helper.replace_variables_in_prompt(
                 parsed_data["bridge_summary"], variables
             )
-
-        logger.info(f"FINAL PROMPT TO AI: {configuration['prompt']}")
         return memory, missing_vars
 
     return memory, []
