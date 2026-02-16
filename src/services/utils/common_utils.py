@@ -328,10 +328,6 @@ async def handle_fine_tune_model(parsed_data, custom_config):
         custom_config["model"] = parsed_data["fine_tune_model"]
 
 
-# Constants for response_type validation
-VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
-VALID_RESPONSE_TYPES_STR = "text, json_object, json_schema"
-
 async def handle_pre_tools(parsed_data,custom_config):
     if parsed_data["pre_tools"]:
         if parsed_data["pre_tools"].get("args") is None:
@@ -350,43 +346,7 @@ async def handle_pre_tools(parsed_data,custom_config):
             parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
             response_data = pre_function_response.get("response", {})
             
-            if isinstance(response_data, dict):
-                if response_data.get("_response_type"):
-                    new_response_type = response_data["_response_type"]
-                    
-                    if not isinstance(new_response_type, dict):
-                        raise BadRequestException(
-                            "Invalid _response_type format. Expected dict with 'type' field. "
-                            "Examples: {'type': 'text'}, {'type': 'json_object'}, "
-                            "{'type': 'json_schema', 'json_schema': {...}}"
-                        )
-                    
-                    response_type_value = new_response_type.get("type")
-                    if not response_type_value:
-                        raise BadRequestException(
-                            "Invalid _response_type format. Missing 'type' field. "
-                            "Expected: {'type': 'text'} or {'type': 'json_object'} or "
-                            "{'type': 'json_schema', 'json_schema': {...}}"
-                        )
-                    
-                    if response_type_value not in VALID_RESPONSE_TYPES:
-                        raise BadRequestException(
-                            f"Invalid _response_type.type: '{response_type_value}'. "
-                            f"Supported types: {VALID_RESPONSE_TYPES_STR}"
-                        )
-                    
-                    if response_type_value == "json_schema":
-                        if "json_schema" not in new_response_type or new_response_type["json_schema"] is None:
-                            raise BadRequestException(
-                                "Invalid _response_type: json_schema type requires 'json_schema' field. "
-                                "Expected format: {'type': 'json_schema', 'json_schema': {...}}"
-                            )
-                    
-                    parsed_data["configuration"]["response_type"] = new_response_type
-                    custom_config["response_type"] = new_response_type
-                
-                if response_data.get("_user_message"):
-                    parsed_data["user"] = response_data["_user_message"]
+            Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
 
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]

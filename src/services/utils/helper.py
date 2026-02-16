@@ -13,6 +13,8 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
 from config import Config
+from globals import BadRequestException
+from src.configs.constant import VALID_RESPONSE_TYPES, agent_config_update_keys
 from src.configs.model_configuration import model_config_document
 
 from ...configs.constant import service_name
@@ -525,3 +527,26 @@ class Helper:
                     required_params.append(key)
 
         return {"fields": fields, "required_params": required_params}
+
+    @staticmethod
+    def update_agentconfig_from_pre_function(response_data, parsed_data, custom_config):
+        if not isinstance(response_data, dict):
+            return
+        
+        new_response_type = response_data.get(agent_config_update_keys["_response_type"])
+        if new_response_type:
+            if not isinstance(new_response_type, dict):
+                raise BadRequestException("Invalid _response_type format. Expected dict with 'type' field")
+            response_type_value = new_response_type.get("type")
+            if not response_type_value:
+                raise BadRequestException("Invalid _response_type: Missing 'type' field")
+            if response_type_value not in VALID_RESPONSE_TYPES:
+                raise BadRequestException(f"Invalid _response_type.type: '{response_type_value}'. Supported types: {', '.join(sorted(VALID_RESPONSE_TYPES))}")
+            if response_type_value == "json_schema" and not new_response_type.get("json_schema"):
+                raise BadRequestException("Invalid _response_type: 'json_schema' type requires 'json_schema' field")
+                
+            parsed_data["configuration"]["response_type"] = new_response_type
+            custom_config["response_type"] = new_response_type
+        
+        if user_message := response_data.get(agent_config_update_keys["_user_message"]):
+            parsed_data["user"] = user_message
