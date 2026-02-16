@@ -251,16 +251,7 @@ def convert_prompt_to_string(prompt):
         instruction_value = prompt.get("instruction")
         if instruction_value:
             parts.append(f"Instructions: {instruction_value}")
-        
-        # Add embed fields if present
-        for field in prompt.get("embedFields", []):
-            if isinstance(field, dict) and field.get("value") and not field.get("hidden", False):
-                label = field.get("label") or field.get("name")
-                if not label:
-                    continue
-                parts.append(f"{label}: {field['value']}")
-        
-        
+                
         return "\n\n".join(parts)
     
     if prompt is None:

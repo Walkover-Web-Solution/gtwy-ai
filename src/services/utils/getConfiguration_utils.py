@@ -50,18 +50,21 @@ def setup_configuration(configuration, result, service):
     folder_id = result.get("bridges", {}).get("folder_id")
 
     if folder_id is not None and isinstance(prompt, dict):
-        prompt_str = prompt.get("customPrompt")
-        embed_fields = prompt.get("embedFields", [])
-        field_values = {}
-        for field in embed_fields:
-            if isinstance(field, dict):
-                label = field.get("label") or field.get("name")
-                value = field.get("value")
-                if label and value:
-                    field_values[label] = value
+        if prompt.get("useDefaultPrompt"):
+           db_configuration["prompt"] = convert_prompt_to_string(prompt)
+        else:
+            prompt_str = prompt.get("customPrompt")
+            embed_fields = prompt.get("embedFields", [])
+            field_values = {}
+            for field in embed_fields:
+                if isinstance(field, dict):
+                    label = field.get("label") or field.get("name")
+                    value = field.get("value")
+                    if label and value:
+                        field_values[label] = value
 
-        prompt_str, _ = Helper.replace_variables_in_prompt(prompt_str, field_values)
-        db_configuration["prompt"] = prompt_str
+            prompt_str, _ = Helper.replace_variables_in_prompt(prompt_str, field_values)
+            db_configuration["prompt"] = prompt_str
 
     elif isinstance(prompt, dict):
         db_configuration["prompt"] = convert_prompt_to_string(prompt)
