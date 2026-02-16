@@ -3,6 +3,7 @@ from config import Config
 from models.mongo_connection import db
 from src.configs.constant import inbuild_tools
 from src.services.commonServices.baseService.utils import makeFunctionName
+from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
 from src.services.utils.service_config_utils import tool_choice_function_name_formatter
 
@@ -43,6 +44,11 @@ def setup_configuration(configuration, result, service):
 
     if configuration:
         db_configuration.update(configuration)
+
+    # Convert prompt dict (role/goal/instruction) to a proper string prompt
+    prompt = db_configuration.get("prompt")
+    if isinstance(prompt, dict):
+        db_configuration["prompt"] = convert_prompt_to_string(prompt)
 
     return db_configuration, service
 
