@@ -415,6 +415,8 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
                 "org_id": parsed_data.get('org_id'),
                 "thread_id": parsed_data.get('thread_id'),
                 "sub_thread_id": parsed_data.get('sub_thread_id'),
+                "version_id": parsed_data.get('version_id', ''),
+                "AiConfig": parsed_data.get('AiConfig') or {},
                 "service": parsed_data.get('service'),
                 "model": parsed_data.get('model'),
                 "status": False,  # Not completed yet
