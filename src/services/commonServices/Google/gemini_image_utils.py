@@ -35,9 +35,9 @@ async def handle_imagen_generation(client, model, prompt, configuration):
     return {
         "success": True,
         "response": {
-            "data": [{
-                "urls": gcp_urls,
-            }],
+            "data": [
+                {"url": gcp_url} for gcp_url in gcp_urls
+            ],
             "usage_metadata": {
                 "total_images_generated": len(gcp_urls)
             }
@@ -86,10 +86,10 @@ async def handle_gemini_generation(client, model, prompt, configuration):
     return {
         "success": True,
         "response": {
-            "data": [{
-                "urls": gcp_urls,
-                "text_content": text_content
-            }],
+            "data": [
+                {"url": gcp_url} for gcp_url in gcp_urls
+            ],
+            "text_content": text_content,
             "usage_metadata": response.model_dump().get('usage_metadata', {}) | {"total_images_generated": (len(gcp_urls))}
         }
     }
