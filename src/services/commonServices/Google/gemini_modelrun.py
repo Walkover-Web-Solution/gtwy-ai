@@ -1,4 +1,4 @@
-from openai import AsyncOpenAI
+from google import genai
 import traceback
 from ..api_executor import execute_api_call
 # from src.services.utils.unified_token_validator import validate_gemini_token_limit
@@ -11,13 +11,13 @@ async def gemini_modelrun(configuration, apiKey, execution_time_logs, bridge_id,
         # model_name = configuration.get('model')
         # validate_gemini_token_limit(configuration, model_name, service, apiKey)
         
-        gemini = AsyncOpenAI(api_key=apiKey, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+        client = genai.Client(api_key=apiKey) 
 
         # Define the API call function
         async def api_call(config):
             try:
-                chat_completion = await gemini.chat.completions.create(**config)
-                return {'success': True, 'response': chat_completion.to_dict()}
+                chat_completion = await client.aio.models.generate_content(**config)
+                return {'success': True, 'response': chat_completion.model_dump()}
             except Exception as error:
                 return {
                     'success': False,

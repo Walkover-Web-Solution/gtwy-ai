@@ -274,37 +274,41 @@ class ConversationService:
 
     @staticmethod
     def createGeminiConversation(conversation, memory):
+        from google.genai import types
         try:
-            threads = []
+            contents = []
             if memory is not None:
-                threads.append({'role': 'user', 'content': 'provide the summary of the previous conversation stored in the memory?'})
-                threads.append({'role': 'assistant', 'content': f'Summary of previous conversations :  {memory}' })
+                contents.append(types.Content(role='user', parts=[types.Part(text='Please Provide the summary of the previous conversation stored in the memory.')]))
+                contents.append(types.Content(role='model', parts=[types.Part(text=f'Summary of previous conversations: {memory}')]))
+            
             for message in conversation or []:
-                if message['role'] != "tools_call" and message['role'] != "tool":
-                    content = [{"type": "text", "text": message['content']}]
+                role = message.get('role')
+                if role not in {'tools_calls', "tools"}:
+                    gemini_role = 'model' if role == 'assistant' else 'user'
+                    parts = []
+
+                    msg_content = message.get('content')
+                    if msg_content:
+                        parts.append(types.Part(text=msg_content))
+                    
                     if 'urls' in message and isinstance(message['urls'], list):
                         for url in message['urls']:
-                            if not url.lower().endswith('.pdf'):
-                                content.append({
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": url
-                                    }
-                                })
-                    else:
-                        # Default behavior for messages without URLs
-                        content = message['content']
-                    threads.append({'role': message['role'], 'content': content})
+                            if url.lower().endswith('.pdf'):
+                                parts.append(types.Part.from_url(file_uri=url, mime_type="application/pdf"))
+                            else:
+                                mime_type = "image/png" if url.lower().endswith(".png") else "image/jpeg"
+                                parts.append(types.Part.from_url(file_uri=url, mime_type=(mime_type)))
+                    if parts:
+                        contents.append(types.Content(role=gemini_role, parts=parts))
             
             return {
-                'success': True, 
-                'messages': threads
+                "success": True,
+                "messages": contents
             }
         except Exception as e:
             traceback.print_exc()
             logger.error(f"create conversation error=>, {str(e)}")
             raise ValueError(e.args[0])
-
     @staticmethod
     def createOpenaiCompletionConversation(conversation, memory):
         try:
