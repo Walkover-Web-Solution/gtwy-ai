@@ -74,3 +74,10 @@ new_agent_service = {
 }
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
+
+VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
+
+agent_config_update_keys = {
+    "_response_type": "_response_type",
+    "_user_message": "_user_message"
+}
