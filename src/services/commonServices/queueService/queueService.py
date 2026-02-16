@@ -1,11 +1,9 @@
 import asyncio
-import json
+
 from config import Config
 from src.services.commonServices.common import chat_multiple_agents, image
-from aio_pika.abc import AbstractIncomingMessage
-from src.services.utils.logger import logger
-from src.services.utils.common_utils import process_background_tasks
 from src.services.commonServices.queueService.baseQueue import BaseQueue
+from src.services.utils.logger import logger
 
 
 class Queue(BaseQueue):
@@ -24,8 +22,8 @@ class Queue(BaseQueue):
 
     async def process_messages(self, messages):
         """Implement your batch processing logic here."""
-        type = messages.get("body",{}).get('configuration',{}).get('type')
-        if type == 'image':
+        type = messages.get("body", {}).get("configuration", {}).get("type")
+        if type == "image":
             await image(messages)
             return
         # Use chat_multiple_agents to handle both single and multiple agents
@@ -40,15 +38,18 @@ class Queue(BaseQueue):
 
                 print(f"Started consuming from queue {self.queue_name}")
                 logger.info(f"Started consuming from queue {self.queue_name}")
-                
+
                 # Using the message handler wrapper from BaseQueue with direct reference to process_messages
                 await primary_queue.consume(
                     lambda message: self._message_handler_wrapper(message, self.process_messages)
                 )
-                
+
                 while True:
-                    await asyncio.sleep(1)  # Keeps the consumer running indefinitely, can do something work too if needed
+                    await asyncio.sleep(
+                        1
+                    )  # Keeps the consumer running indefinitely, can do something work too if needed
         except Exception as e:
             logger.error(f"Error while consuming messages: {e}")
+
 
 queue_obj = Queue()
