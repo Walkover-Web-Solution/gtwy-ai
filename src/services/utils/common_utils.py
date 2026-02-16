@@ -673,7 +673,7 @@ async def process_background_tasks_for_error(parsed_data, error):
 
 async def process_batch_background_tasks(parsed_data, result, processed_prompts, batch_variables):
     """
-    Process background tasks for batch API including conversation log creation.
+    Process background tasks for batch API including conversation log creation and subthread saving.
     
     Args:
         parsed_data: Parsed request data
@@ -686,9 +686,11 @@ async def process_batch_background_tasks(parsed_data, result, processed_prompts,
     batch_id = result.get("batch_id")
     messages = result.get("messages", [])
     
+    tasks = []
+    
+    # Task 1: Save batch conversation logs
     if batch_id and messages:
-        # Call the history save function in background
-        asyncio.create_task(
+        tasks.append(
             create_batch_conversation_logs(
                 batch_id=batch_id,
                 messages=messages,
@@ -697,6 +699,24 @@ async def process_batch_background_tasks(parsed_data, result, processed_prompts,
                 batch_variables=batch_variables
             )
         )
+    
+    # Task 2: Save subthread information (only if thread_id and sub_thread_id exist)
+    if parsed_data.get("thread_id") and parsed_data.get("sub_thread_id"):
+        tasks.append(
+            save_sub_thread_id_and_name(
+                parsed_data["thread_id"],
+                parsed_data["sub_thread_id"],
+                parsed_data["org_id"],
+                parsed_data.get("thread_flag", False),
+                parsed_data.get("response_format", {}),
+                parsed_data["bridge_id"],
+                parsed_data["user"],
+            )
+        )
+    
+    # Execute all tasks in parallel without blocking
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 def build_service_params_for_batch(parsed_data, custom_config, model_output_config):
     return {
