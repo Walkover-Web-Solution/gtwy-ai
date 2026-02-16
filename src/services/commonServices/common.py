@@ -629,6 +629,9 @@ async def batch(request_body):
         if parsed_data["batch_webhook"] is None:
             raise ValueError("webhook is required")
 
+        # Manage threads (set thread_id / sub_thread_id when not in body)
+        await manage_threads(parsed_data)
+
         # Validate batch_variables if provided
         batch_variables = parsed_data.get("batch_variables")
         if batch_variables is not None:
@@ -699,7 +702,10 @@ async def batch(request_body):
 
         if not result["success"]:
             raise ValueError(result)
-        
+
+        # Store custom_config as AiConfig for batch conversation logs
+        parsed_data["AiConfig"] = custom_config
+
         # Step 9: Process batch conversation logs in background
         await process_batch_background_tasks(
             parsed_data=parsed_data,
