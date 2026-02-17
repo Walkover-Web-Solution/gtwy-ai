@@ -50,7 +50,8 @@ def setup_configuration(configuration, result, service):
     folder_id = result.get("bridges", {}).get("folder_id")
 
     if folder_id is not None and isinstance(prompt, dict):
-        if prompt.get("useDefaultPrompt"):
+        use_default = prompt.get("useDefaultPrompt")
+        if use_default is None or use_default is True:
            db_configuration["prompt"] = convert_prompt_to_string(prompt)
         else:
             prompt_str = prompt.get("customPrompt")
