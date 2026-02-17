@@ -374,9 +374,11 @@ class Helper:
                 continue
 
             resource_id = data.get("resource_id", "")
+            resource_name = data.get("name", "Untitled")
             resource_description = data.get("description", "No description available")
 
             prompt += f"{idx}. Resource ID: {resource_id}\n"
+            prompt += f"   Name: {resource_name}\n\n"
             prompt += f"   Description: {resource_description}\n\n"
 
         return prompt
