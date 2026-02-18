@@ -15,34 +15,39 @@ async def OpenAIImageModel(configuration, apiKey, execution_time_logs, timer):
             {"step": "OpenAI image Processing time", "time_taken": timer.stop("OpenAI image Processing time")}
         )
         response = chat_completion.to_dict()
+        user_message = configuration.get("prompt", "") or ""
+
         # Process all images in the response data array
         for i, image_data in enumerate(response["data"]):
             # Check if response contains URL or base64 data
             if "url" in image_data:
-                # URL format - download and upload to GCP
+                # URL format - upload in background only (return predictive GCP URL immediately)
                 original_image_url = image_data["url"]
 
-                # Generate predictable GCP URL immediately and start background upload
                 gcp_url = await uploadDoc(
                     file=original_image_url, folder="generated-images", real_time=False, content_type="image/png"
                 )
 
-                # Add both URLs to response
                 response["data"][i]["original_url"] = original_image_url
-                response["data"][i]["url"] = gcp_url  # Primary URL (GCP)
+                response["data"][i]["url"] = gcp_url
+                response["data"][i]["image_url"] = gcp_url
+                response["data"][i]["permanent_url"] = gcp_url
+                response["data"][i]["revised_prompt"] = image_data.get("revised_prompt")
             elif "b64_json" in image_data:
-                # Base64 format - decode and upload to GCP
-                # Decode base64 to bytes
+                # Base64 format - upload first (synchronous), then return with user message as revised_prompt
                 image_bytes = base64.b64decode(image_data["b64_json"])
 
-                # Upload to GCP
                 gcp_url = await uploadDoc(
-                    file=image_bytes, folder="generated-images", real_time=False, content_type="image/png"
+                    file=image_bytes, folder="generated-images", real_time=True, content_type="image/png"
                 )
 
-                # Add GCP URL to response and keep original b64_json
-                response["data"][i]["url"] = gcp_url  # Primary URL (GCP)
-
+                response["data"][i]["url"] = gcp_url
+                response["data"][i]["image_url"] = gcp_url
+                response["data"][i]["permanent_url"] = gcp_url
+                response["data"][i]["revised_prompt"] = user_message
+                # Optionally remove b64_json from response to avoid sending large payload
+                if "b64_json" in response["data"][i]:
+                    del response["data"][i]["b64_json"]
             else:
                 raise ValueError(
                     f"Image data contains neither 'url' nor 'b64_json' key. Available keys: {list(image_data.keys())}"

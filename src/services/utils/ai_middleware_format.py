@@ -209,11 +209,13 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
     elif service == service_name["openai"]:
         image_urls = []
         for image_data in response.get("data", []):
+            # image_url and permanent_url are set by image_model (GCP URL); fallback to url for both
+            gcp_url = image_data.get("image_url") or image_data.get("permanent_url") or image_data.get("url")
             image_urls.append(
                 {
                     "revised_prompt": image_data.get("revised_prompt"),
-                    "image_url": image_data.get("original_url"),
-                    "permanent_url": image_data.get("url"),
+                    "image_url": gcp_url,
+                    "permanent_url": gcp_url,
                 }
             )
 
