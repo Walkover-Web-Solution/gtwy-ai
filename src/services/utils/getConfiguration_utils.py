@@ -3,6 +3,7 @@ from config import Config
 from models.mongo_connection import db
 from src.configs.constant import inbuild_tools
 from src.services.commonServices.baseService.utils import makeFunctionName
+from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
 from src.services.utils.service_config_utils import tool_choice_function_name_formatter
 
@@ -43,6 +44,31 @@ def setup_configuration(configuration, result, service):
 
     if configuration:
         db_configuration.update(configuration)
+
+    # Convert prompt dict (role/goal/instruction) to a proper string prompt
+    prompt = db_configuration.get("prompt")
+    folder_id = result.get("bridges", {}).get("folder_id")
+
+    if folder_id is not None and isinstance(prompt, dict):
+        use_default = prompt.get("useDefaultPrompt")
+        if use_default is None or use_default is True:
+           db_configuration["prompt"] = convert_prompt_to_string(prompt)
+        else:
+            prompt_str = prompt.get("customPrompt")
+            embed_fields = prompt.get("embedFields", [])
+            field_values = {}
+            for field in embed_fields:
+                if isinstance(field, dict):
+                    label = field.get("label") or field.get("name")
+                    value = field.get("value")
+                    if label and value:
+                        field_values[label] = value
+
+            prompt_str, _ = Helper.replace_variables_in_prompt(prompt_str, field_values)
+            db_configuration["prompt"] = prompt_str
+
+    elif isinstance(prompt, dict):
+        db_configuration["prompt"] = convert_prompt_to_string(prompt)
 
     return db_configuration, service
 

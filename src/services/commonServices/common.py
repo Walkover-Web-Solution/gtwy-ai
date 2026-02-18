@@ -9,12 +9,13 @@ from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
+from src.utils.formatter import render_template_to_html
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
-    add_user_in_varaibles,
+    add_user_in_variables,
     apply_prompt_wrapper,
     build_service_params,
     build_service_params_for_batch,
@@ -39,6 +40,7 @@ from src.services.utils.common_utils import (
     setup_agent_pre_tools,
     update_cost_and_last_used_in_background,
     update_usage_metrics,
+    process_batch_background_tasks
 )
 from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
@@ -49,12 +51,6 @@ from ..utils.send_error_webhook import send_error_to_webhook
 from .baseService.utils import sendResponse
 
 app = FastAPI()
-from src.services.utils.helper import Helper
-from globals import *
-from src.services.cache_service import find_in_cache, store_in_cache
-from src.configs.constant import redis_keys
-from .baseService.utils import unknown_error_handler
-
 configurationModel = db["configurations"]
 
 
@@ -158,7 +154,7 @@ async def chat(request_body):
         parsed_data["configuration"]["prompt"] = add_default_template(
             parsed_data.get("configuration", {}).get("prompt", "")
         )
-        parsed_data["variables"] = add_user_in_varaibles(parsed_data["variables"], parsed_data["user"])
+        parsed_data["variables"] = add_user_in_variables(parsed_data["variables"], parsed_data["user"])
         # Step 2: Initialize Timer
         timer = initialize_timer(parsed_data["state"])
 
@@ -172,7 +168,7 @@ async def chat(request_body):
         await handle_fine_tune_model(parsed_data, custom_config)
 
         # Step 4: Handle Pre-Tools Execution
-        await handle_pre_tools(parsed_data)
+        await handle_pre_tools(parsed_data,custom_config)
 
         # Step 5: Manage Threads
         thread_info = await manage_threads(parsed_data)
@@ -220,23 +216,11 @@ async def chat(request_body):
             bridge_configurations,
         )
         # Step 10: json_schema service conversion
-        response_type = custom_config.get('response_type')
-        if isinstance(response_type, dict) and response_type.get('type') == 'json_schema':
-            if 'json_schema' in response_type:
-                custom_config['response_type'] = restructure_json_schema(response_type, parsed_data['service'])
-            else:
-                error_data = {
-                    "bridge_id": parsed_data.get('bridge_id'),
-                    "service": parsed_data.get('service'),
-                    "response_type": response_type,
-                    "error": "json schema key not found in response_type"
-                }
-                logger.warning(
-                    f"response_type missing json_schema before restructure: {error_data}"
-                )
-                await unknown_error_handler(error_data)
-        
-        
+        if "response_type" in custom_config and custom_config["response_type"].get("type") == "json_schema":
+            custom_config["response_type"] = restructure_json_schema(
+                custom_config["response_type"], parsed_data["service"]
+            )
+
         # Execute with retry mechanism
         class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
@@ -341,20 +325,14 @@ async def chat(request_body):
                         bridge_configurations,
                     )
                     # Step 9 : json_schema service conversion
-                    fallback_response_type = fallback_custom_config.get('response_type')
-                    if isinstance(fallback_response_type, dict) and fallback_response_type.get('type') == 'json_schema':
-                        if 'json_schema' in fallback_response_type:
-                            fallback_custom_config['response_type'] = restructure_json_schema(
-                                fallback_response_type,
-                                parsed_data['service'],
-                            )
-                        else:
-                            logger.warning(
-                                f"fallback response_type missing json_schema before restructure: "
-                                f"bridge_id={parsed_data.get('bridge_id')} service={parsed_data.get('service')} "
-                                f"response_type_keys={list(fallback_response_type.keys())}"
-                            )
-                    
+                    if (
+                        "response_type" in fallback_custom_config
+                        and fallback_custom_config["response_type"].get("type") == "json_schema"
+                    ):
+                        fallback_custom_config["response_type"] = restructure_json_schema(
+                            fallback_custom_config["response_type"], parsed_data["service"]
+                        )
+
                     # Create new service handler for the fallback service
                     class_obj = await Helper.create_service_handler(params, parsed_data["service"])
                 else:
@@ -424,6 +402,70 @@ async def chat(request_body):
             )
             result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
 
+        # Template HTML Generation
+        response_type = parsed_data.get('response_type', {})
+        template_data = None
+        if isinstance(response_type, dict) and response_type.get('is_template', False):
+            try:
+                html_output = ""
+                template_ids = response_type.get('template_id', [])
+                if not template_ids:
+                    logger.warning("Template Rendering: 'is_template' is True but 'template_id' is missing or empty.")
+                base_template = None
+                if template_ids and response_type:
+                    # Get templates from parsed_data (already fetched in pipeline)
+                    richui_templates = parsed_data.get('richui_templates', {})
+
+                    # AI Result Data
+                    ai_data = result.get('response', {}).get('data', {})
+                    ai_data = json.loads(json.dumps(ai_data.get('content', ai_data)))
+                    # Unwrap 'item' if present
+                    if isinstance(ai_data, dict) and "item" in ai_data:
+                        ai_data = ai_data["item"]
+                    elif isinstance(ai_data, str):
+                        try:
+                            parsed = json.loads(ai_data)
+                            if isinstance(parsed, dict) and "item" in parsed:
+                                ai_data = parsed["item"]
+                            else:
+                                ai_data = parsed
+                        except:
+                            pass
+                    
+                    # Get template directly using widget_id from ai_data
+                    if isinstance(ai_data, dict):
+                        widget_id = ai_data.get('widget_id')
+                        if widget_id and str(widget_id) in richui_templates:
+                            base_template = richui_templates[str(widget_id)]
+                        else:
+                            logger.warning(f"Template with widget_id '{widget_id}' not found in richui_templates")
+                        
+                    # Only render HTML if we have a matching template
+                    if base_template:
+                        try:
+                            html_output = render_template_to_html(base_template, ai_data)
+                            # Update Result
+                            result['response']['type'] = 'template'
+                            result['response']['data']['content'] = html_output
+                            
+                            # Store template data for history in chatbot_message
+                            template_data = {
+                                'template_id': base_template.get('_id') or base_template.get('id'),
+                                'template_name': base_template.get('name'),
+                                'is_template': True
+                            }
+                        except Exception as render_err:
+                            logger.error(f"Template Rendering Failed in render function: {render_err}")
+                    else:
+                        # No template found or matched, return data as-is (default behavior for greetings, etc.)
+                        logger.info("No matching template found, returning data as-is")
+                        
+            except Exception as e:
+                logger.error(f"Error rendering template: {str(e)}")
+        
+        # Add template data to historyParams chatbot_message if template was used and not playground
+        if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
+            result['historyParams']['chatbot_message'] = html_output
         # Send data to playground
         if parsed_data.get("is_playground") and parsed_data.get("body", {}).get("bridge_configurations", {}).get(
             "playground_response_format"
@@ -587,6 +629,9 @@ async def batch(request_body):
         if parsed_data["batch_webhook"] is None:
             raise ValueError("webhook is required")
 
+        # Manage threads (set thread_id / sub_thread_id when not in body)
+        await manage_threads(parsed_data)
+
         # Validate batch_variables if provided
         batch_variables = parsed_data.get("batch_variables")
         if batch_variables is not None:
@@ -642,7 +687,7 @@ async def batch(request_body):
         )
 
         # Step 4: Handle Pre-Tools Execution
-        await handle_pre_tools(parsed_data)
+        await handle_pre_tools(parsed_data, custom_config)
 
         # Step 7: Configure Custom Settings
         custom_config = await configure_custom_settings(
@@ -658,8 +703,22 @@ async def batch(request_body):
         if not result["success"]:
             raise ValueError(result)
 
-        response_content = {"success": True, "response": result["message"]}
+        # Store custom_config as AiConfig for batch conversation logs
+        parsed_data["AiConfig"] = custom_config
 
+        # Step 9: Process batch conversation logs in background
+        await process_batch_background_tasks(
+            parsed_data=parsed_data,
+            result=result,
+            processed_prompts=processed_prompts,
+            batch_variables=batch_variables
+        )
+        
+        response_content = {
+            "success": True,
+            "response": result["message"]
+        }
+        
         # Include batch_id and messages if available
         if "batch_id" in result:
             response_content["batch_id"] = result["batch_id"]
@@ -725,6 +784,15 @@ async def image(request_body):
 
         if not result["success"]:
             raise ValueError(result)
+
+        # Calculate image tokens and costs
+        params['token_calculator'].calculate_image_usage(result['response'])
+        
+        parsed_data['tokens'] = params['token_calculator'].calculate_image_cost(parsed_data['model'])
+        
+        # Add usage data to response
+        result['response']['usage'] = params['token_calculator'].get_image_usage()
+        result['response']['usage']['cost'] = parsed_data['tokens'].get('total_cost', 0)
 
         # Create latency object using utility function
         if result.get("response") and result["response"].get("data"):

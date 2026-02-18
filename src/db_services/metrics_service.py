@@ -381,5 +381,64 @@ async def create_orchestrator(transfer_chain, thread_info=None):
         return None
 
 
+async def create_batch_conversation_logs(batch_id, messages, parsed_data, processed_prompts, batch_variables):
+    """
+    Create conversation log entries for each message in a batch request.
+    Save each message as a separate row in PostgreSQL with "under process" status.
+    
+    Args:
+        batch_id: The batch ID from the provider
+        messages: List of message mappings containing message, custom_id, and variables
+        parsed_data: Parsed request data containing bridge_id, org_id, etc.
+        processed_prompts: List of processed prompts for each batch message
+        batch_variables: List of variables for each batch message (or None)
+    """
+    try:
+        # Lazy import to avoid circular import (helper -> ai_ml_call -> baseService -> metrics_service)
+        from ..services.utils.helper import Helper
+
+        for idx, message_info in enumerate(messages):
+            user_message = message_info.get("message", "")
+            message_id = message_info.get("message_id", "")
+            variables = message_info.get("variables", {}) if batch_variables else {}
+            
+            # Extract webhook information from parsed_data
+            webhook_info = parsed_data.get('batch_webhook') or {}
+            masked_headers = Helper.mask_headers(webhook_info.get('headers'))
+
+            # Create conversation log entry for this batch message
+            conversation_log_data = {
+                "user": user_message,
+                "llm_message": "Your message has been queued for batch processing. You will receive the response shortly.",
+                "chatbot_message": None,
+                "bridge_id": parsed_data.get('bridge_id'),
+                "org_id": parsed_data.get('org_id'),
+                "thread_id": parsed_data.get('thread_id'),
+                "sub_thread_id": parsed_data.get('sub_thread_id'),
+                "version_id": parsed_data.get('version_id', ''),
+                "AiConfig": parsed_data.get('AiConfig') or {},
+                "service": parsed_data.get('service'),
+                "model": parsed_data.get('model'),
+                "status": False,  # Not completed yet
+                "variables": variables,
+                "message_id": message_id,  # Save message_id to the database
+                "prompt": {"system": processed_prompts[idx]} if idx < len(processed_prompts) else None,
+                "batch_data": {
+                    "status": "queued",
+                    "batch_id": batch_id,
+                    "webhook_url": webhook_info.get('url'),
+                    "webhook_headers": masked_headers
+                }
+            }
+            
+            # Save to database - each message gets its own row
+            await savehistory_consolidated(conversation_log_data)
+        
+        logger.info(f"Created {len(messages)} conversation logs for batch {batch_id}")
+                
+    except Exception as error:
+        logger.error(f'Error creating batch conversation logs: {str(error)}')
+        logger.error(traceback.format_exc())
+
 # Exporting functions
-__all__ = ["create", "create_orchestrator"]
+__all__ = ["find", "create", "create_orchestrator", "find_one", "find_one_pg", "create_batch_conversation_logs"]

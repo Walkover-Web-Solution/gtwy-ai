@@ -32,7 +32,17 @@ async def handle_imagen_generation(client, model, prompt, configuration):
         gcp_urls.append(gcp_url)
 
     # Return formatted response
-    return {"success": True, "response": {"data": [{"urls": gcp_urls, "text_content": []}]}}
+    return {
+        "success": True,
+        "response": {
+            "data": [
+                {"url": gcp_url} for gcp_url in gcp_urls
+            ],
+            "usage_metadata": {
+                "total_images_generated": len(gcp_urls)
+            }
+        }
+    }
 
 
 async def handle_gemini_generation(client, model, prompt, configuration):
@@ -54,8 +64,8 @@ async def handle_gemini_generation(client, model, prompt, configuration):
 
     # Process response
     text_content = []
-    gcp_url = None
-
+    gcp_urls = []
+    
     for part in response.candidates[0].content.parts:
         if part.text:
             text_content.append(part.text)
@@ -64,10 +74,22 @@ async def handle_gemini_generation(client, model, prompt, configuration):
             img_buffer = BytesIO()
             image.save(img_buffer, format="PNG")
             img_buffer.seek(0)
-
+            
             gcp_url = await uploadDoc(
-                file=img_buffer, folder="generated-images", real_time=True, content_type="image/png"
+                file=img_buffer,
+                folder="generated-images",
+                real_time=True,
+                content_type="image/png"
             )
-
+            gcp_urls.append(gcp_url)
     # Return formatted response
-    return {"success": True, "response": {"data": [{"url": gcp_url, "text_content": text_content}]}}
+    return {
+        "success": True,
+        "response": {
+            "data": [
+                {"url": gcp_url} for gcp_url in gcp_urls
+            ],
+            "text_content": text_content,
+            "usage_metadata": response.model_dump().get('usage_metadata', {}) | {"total_images_generated": (len(gcp_urls))}
+        }
+    }

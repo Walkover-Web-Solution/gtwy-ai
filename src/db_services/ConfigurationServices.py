@@ -340,6 +340,78 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     }
                 }
             },
+            # Stage 9.5: Extract template_ids from configuration.response_type if is_template is true
+            {
+                "$addFields": {
+                    "template_ids_to_fetch": {
+                        "$cond": [
+                            {
+                                "$and": [
+                                    {"$eq": [{"$type": "$configuration.response_type"}, "object"]},
+                                    {"$eq": ["$configuration.response_type.is_template", True]},
+                                    {"$isArray": "$configuration.response_type.template_id"},
+                                    {"$gt": [{"$size": "$configuration.response_type.template_id"}, 0]},
+                                ]
+                            },
+                            {
+                                "$map": {
+                                    "input": "$configuration.response_type.template_id",
+                                    "as": "tid",
+                                    "in": {
+                                        "$convert": {
+                                            "input": "$$tid",
+                                            "to": "objectId",
+                                            "onError": None,
+                                            "onNull": None,
+                                        }
+                                    },
+                                }
+                            },
+                            [],
+                        ]
+                    }
+                }
+            },
+            # Stage 9.6: Lookup templates from rich_ui_templates collection
+            {
+                "$lookup": {
+                    "from": "rich_ui_templates",
+                    "let": {
+                        "template_ids": {
+                            "$filter": {
+                                "input": "$template_ids_to_fetch",
+                                "as": "id",
+                                "cond": {"$ne": ["$$id", None]},
+                            }
+                        }
+                    },
+                    "pipeline": [
+                        {"$match": {"$expr": {"$in": ["$_id", "$$template_ids"]}}},
+                        {"$addFields": {"_id": {"$toString": "$_id"}}},
+                    ],
+                    "as": "templates_docs",
+                }
+            },
+            # Stage 9.7: Create richui_templates object with template_id as key
+            {
+                "$addFields": {
+                    "richui_templates": {
+                        "$cond": [
+                            {"$gt": [{"$size": "$templates_docs"}, 0]},
+                            {
+                                "$arrayToObject": {
+                                    "$map": {
+                                        "input": "$templates_docs",
+                                        "as": "template",
+                                        "in": ["$$template._id", "$$template"],
+                                    }
+                                }
+                            },
+                            {},
+                        ]
+                    }
+                }
+            },
             # Stage 10: Remove temporary fields to clean up the output
             {
                 "$project": {
@@ -349,6 +421,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "has_apikeys": 0,
                     "connected_agents_bridge_ids": 0,
                     "agent_details_docs": 0,
+                    "template_ids_to_fetch": 0,
+                    "templates_docs": 0,
                     # Exclude additional temporary fields as needed
                 }
             },
@@ -470,15 +544,134 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         }
                     }
                 },
-                # Stage 5: Project folder_apikeys and type
+                # Stage 5: Lookup folder tools from apicalls collection
+                {
+                    "$lookup": {
+                        "from": "apicalls",
+                        "let": {
+                            "tools_ids": {
+                                "$cond": [
+                                    {"$isArray": "$config.tools_id"},
+                                    {
+                                        "$map": {
+                                            "input": "$config.tools_id",
+                                            "as": "tid",
+                                            "in": {
+                                                "$convert": {
+                                                    "input": "$$tid",
+                                                    "to": "objectId",
+                                                    "onError": None,
+                                                    "onNull": None,
+                                                }
+                                            },
+                                        }
+                                    },
+                                    [],
+                                ]
+                            }
+                        },
+                        "pipeline": [
+                            {"$match": {"$expr": {"$in": ["$_id", {"$ifNull": ["$$tools_ids", []]}]}}},
+                            {
+                                "$addFields": {
+                                    "_id": {"$toString": "$_id"},
+                                    "bridge_ids": {
+                                        "$map": {
+                                            "input": "$bridge_ids",
+                                            "as": "bid",
+                                            "in": {"$toString": "$$bid"},
+                                        }
+                                    },
+                                }
+                            },
+                        ],
+                        "as": "folder_tools_docs",
+                    }
+                },
+                # Stage 6: Create folder_tools object with tool_id as key
+                {
+                    "$addFields": {
+                        "folder_tools": {
+                            "$cond": [
+                                {"$gt": [{"$size": "$folder_tools_docs"}, 0]},
+                                {
+                                    "$arrayToObject": {
+                                        "$map": {
+                                            "input": "$folder_tools_docs",
+                                            "as": "tool",
+                                            "in": ["$$tool._id", "$$tool"],
+                                        }
+                                    }
+                                },
+                                {},
+                            ]
+                        }
+                    }
+                },
+                # Stage 7: Lookup folder pre_tool from apicalls collection
+                {
+                    "$lookup": {
+                        "from": "apicalls",
+                        "let": {
+                            "pre_tool_id_obj": {
+                                "$cond": [
+                                    {"$ne": ["$config.pre_tool_id", None]},
+                                    {
+                                        "$convert": {
+                                            "input": "$config.pre_tool_id",
+                                            "to": "objectId",
+                                            "onError": None,
+                                            "onNull": None,
+                                        }
+                                    },
+                                    None,
+                                ]
+                            }
+                        },
+                        "pipeline": [
+                            {"$match": {"$expr": {"$eq": ["$_id", "$$pre_tool_id_obj"]}}},
+                            {
+                                "$addFields": {
+                                    "_id": {"$toString": "$_id"},
+                                    "bridge_ids": {
+                                        "$map": {
+                                            "input": "$bridge_ids",
+                                            "as": "bid",
+                                            "in": {"$toString": "$$bid"},
+                                        }
+                                    },
+                                }
+                            },
+                        ],
+                        "as": "folder_pre_tool_docs",
+                    }
+                },
+                # Stage 8: Extract folder_pre_tool
+                {
+                    "$addFields": {
+                        "folder_pre_tool": {
+                            "$cond": [
+                                {"$gt": [{"$size": "$folder_pre_tool_docs"}, 0]},
+                                {"$arrayElemAt": ["$folder_pre_tool_docs", 0]},
+                                None,
+                            ]
+                        }
+                    }
+                },
+                # Stage 9: Project folder fields including tools and variables
                 {
                     "$project": {
                         "folder_apikeys": 1,
+                        "folder_tools": 1,
+                        "folder_pre_tool": 1,
                         "type": 1,
                         "wrapper_id": 1,
                         "folder_limit": {"$ifNull": ["$folder_limit", 0]},
                         "folder_usage": {"$ifNull": ["$folder_usage", 0]},
                         "apikey_object_id": 1,
+                        "tools_id": "$config.tools_id",
+                        "pre_tool_id": "$config.pre_tool_id",
+                        "variables_path": {"$ifNull": ["$config.variables_path", {}]},
                     }
                 },
             ]
@@ -493,6 +686,41 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             else:
                 bridge_data["folder_apikeys"] = {}
 
+            # Merge folder_tools into bridge's apiCalls object
+            if folder_result and folder_result[0].get("folder_tools"):
+                folder_tools = folder_result[0]["folder_tools"]
+                # Ensure apiCalls exists
+                if "apiCalls" not in bridge_data:
+                    bridge_data["apiCalls"] = {}
+                # Merge folder tools into apiCalls
+                bridge_data["apiCalls"].update(folder_tools)
+
+            # Merge folder_pre_tool into bridge's pre_tools_data array
+            if folder_result and folder_result[0].get("folder_pre_tool"):
+                folder_pre_tool = folder_result[0]["folder_pre_tool"]
+                folder_pre_tool_id = folder_pre_tool.get("_id")
+                
+                # Ensure pre_tools and pre_tools_data exist
+                if "pre_tools" not in bridge_data:
+                    bridge_data["pre_tools"] = []
+                if "pre_tools_data" not in bridge_data:
+                    bridge_data["pre_tools_data"] = []
+                
+                # Add folder pre_tool if not already present
+                if folder_pre_tool_id and folder_pre_tool_id not in bridge_data["pre_tools"]:
+                    bridge_data["pre_tools"].append(folder_pre_tool_id)
+                    bridge_data["pre_tools_data"].append(folder_pre_tool)
+
+            # Merge folder variables_path into bridge's variables_path
+            if folder_result and folder_result[0].get("variables_path"):
+                folder_variables_path = folder_result[0]["variables_path"]
+                # Ensure variables_path exists in bridge_data
+                if "variables_path" not in bridge_data:
+                    bridge_data["variables_path"] = {}
+                # Merge folder variables_path into bridge's variables_path
+                bridge_data["variables_path"].update(folder_variables_path)
+
+            # Extract folder metadata
             if folder_result and folder_result[0].get("type"):
                 bridge_data["folder_type"] = folder_result[0]["type"]
             else:

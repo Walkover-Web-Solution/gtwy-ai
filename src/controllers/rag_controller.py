@@ -14,7 +14,6 @@ from models.mongo_connection import db
 from ..services.rag_services.chunking_methords import manual_chunking, recursive_chunking, semantic_chunking
 from ..services.utils.apiservice import fetch
 from ..services.utils.rag_utils import extract_csv_text, extract_pdf_text
-from ..services.utils.apiservice import fetch
 
 rag_model = db["rag_datas"]
 rag_parent_model = db["rag_parent_datas"]
@@ -258,7 +257,7 @@ async def get_vectors_and_text(request):
 
     except Exception as error:
         print(f"Error in get_vectors_and_text: {error}")
-        raise HTTPException(status_code=400, detail=str(str(error))) from error
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 async def get_all_docs(request):

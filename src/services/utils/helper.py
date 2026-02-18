@@ -1,5 +1,4 @@
 import hashlib
-import resource
 import json
 import operator
 import re
@@ -14,6 +13,8 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
 from config import Config
+from globals import BadRequestException
+from src.configs.constant import VALID_RESPONSE_TYPES, agent_config_update_keys
 from src.configs.model_configuration import model_config_document
 
 from ...configs.constant import service_name
@@ -22,9 +23,12 @@ from ..commonServices.anthropic.anthropic_batch import AnthropicBatch
 from ..commonServices.anthropic.anthropicCall import Anthropic
 from ..commonServices.baseService.utils import sendResponse
 from ..commonServices.Google.geminiCall import GeminiHandler
+from ..commonServices.Google.gemini_batch import GeminiBatch
 from ..commonServices.grok.grokCall import Grok
 from ..commonServices.groq.groqCall import Groq
+from ..commonServices.groq.groq_batch import GroqBatch
 from ..commonServices.Mistral.mistral_call import Mistral
+from ..commonServices.Mistral.mistral_batch import MistralBatch
 from ..commonServices.openAI.openai_batch import OpenaiBatch
 from ..commonServices.openAI.openai_completion_response import OpenaiCompletion
 from ..commonServices.openAI.openai_embedding_call import OpenaiEmbedding
@@ -70,6 +74,23 @@ class Helper:
         if len(key) > 6:
             return key[:3] + "*" * (9) + key[-3:]
         return key
+
+    @staticmethod
+    def mask_headers(headers):
+        """Mask header values for safe storage: first 2-3 chars + ****** + last 2-3 chars."""
+        if not headers or not isinstance(headers, dict):
+            return headers
+        result = {}
+        for k, v in headers.items():
+            if v is None:
+                result[k] = None
+                continue
+            s = str(v).strip()
+            if len(s) <= 6:
+                result[k] = "******"
+            else:
+                result[k] = s[:3] + "******" + s[-3:]
+        return result
 
     @staticmethod
     def extract_embed_user_id(userinfo, org_id):
@@ -319,12 +340,18 @@ class Helper:
         return usage
 
     async def create_service_handler_for_batch(params, service):
-        # Currently only supports openai and anthropic
+        # Supports all batch services
         class_obj = None
         if service == service_name["openai"]:
             class_obj = OpenaiBatch(params)
         elif service == service_name["anthropic"]:
             class_obj = AnthropicBatch(params)
+        elif service == service_name["groq"]:
+            class_obj = GroqBatch(params)
+        elif service == service_name["mistral"]:
+            class_obj = MistralBatch(params)
+        elif service == service_name["gemini"]:
+            class_obj = GeminiBatch(params)
         else:
             raise ValueError(f"Unsupported batch service: {service}")
 
@@ -500,3 +527,26 @@ class Helper:
                     required_params.append(key)
 
         return {"fields": fields, "required_params": required_params}
+
+    @staticmethod
+    def update_agentconfig_from_pre_function(response_data, parsed_data, custom_config):
+        if not isinstance(response_data, dict):
+            return
+        
+        new_response_type = response_data.get(agent_config_update_keys["_response_type"])
+        if new_response_type:
+            if not isinstance(new_response_type, dict):
+                raise BadRequestException("Invalid _response_type format. Expected dict with 'type' field")
+            response_type_value = new_response_type.get("type")
+            if not response_type_value:
+                raise BadRequestException("Invalid _response_type: Missing 'type' field")
+            if response_type_value not in VALID_RESPONSE_TYPES:
+                raise BadRequestException(f"Invalid _response_type.type: '{response_type_value}'. Supported types: {', '.join(sorted(VALID_RESPONSE_TYPES))}")
+            if response_type_value == "json_schema" and not new_response_type.get("json_schema"):
+                raise BadRequestException("Invalid _response_type: 'json_schema' type requires 'json_schema' field")
+                
+            parsed_data["configuration"]["response_type"] = new_response_type
+            custom_config["response_type"] = new_response_type
+        
+        if user_message := response_data.get(agent_config_update_keys["_user_message"]):
+            parsed_data["user"] = user_message

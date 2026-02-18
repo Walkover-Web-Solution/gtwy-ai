@@ -3,9 +3,13 @@ import uuid
 
 from src.configs.constant import redis_keys
 from src.services.commonServices.openAI.openai_run_batch import create_batch_file, process_batch_file
+from src.db_services.conversationDbService import find_completed_batch_conversations
+from src.controllers.conversationController import add_tool_call_data_in_history
+from src.services.commonServices.createConversations import ConversationService
 
 from ...cache_service import store_in_cache
 from ..baseService.baseService import BaseService
+from globals import logger
 
 
 class OpenaiBatch(BaseService):
@@ -24,29 +28,88 @@ class OpenaiBatch(BaseService):
                     "message": f"batch_variables array length ({len(batch_variables)}) must match batch array length ({len(self.batch)})",
                 }
 
+        # Fetch thread history if thread_id is present (only completed conversations, not queued)
+        thread_history = []
+        if hasattr(self, 'thread_id') and self.thread_id:
+            try:
+                # Fetch only completed batch conversations (exclude queued ones)
+                chats = await find_completed_batch_conversations(
+                    org_id=self.org_id,
+                    thread_id=self.thread_id,
+                    sub_thread_id=getattr(self, 'sub_thread_id', self.thread_id),
+                    bridge_id=self.bridge_id,
+                    limit=3  # Fetch last 3 completed conversations
+                )
+                
+                if chats:
+                    # Add tool call data to history
+                    chats = await add_tool_call_data_in_history(chats)
+                    
+                    # Convert to OpenAI conversation format
+                    memory = getattr(self, 'gpt_memory_context', None)
+                    files = getattr(self, 'files', [])
+                    
+                    conversation_result = ConversationService.createOpenAiConversation(
+                        conversation=chats,
+                        memory=memory,
+                        files=files
+                    )
+                    
+                    if conversation_result.get('success'):
+                        thread_history = conversation_result.get('messages', [])
+                        logger.info(f"Loaded {len(thread_history)} history messages for batch with thread_id={self.thread_id}")
+                    else:
+                        logger.warning(f"Failed to create conversation history for batch: {conversation_result}")
+                else:
+                    logger.info(f"No completed conversation history found for thread_id={self.thread_id}")
+                    
+            except Exception as e:
+                logger.error(f"Error fetching thread history for batch: {str(e)}")
+                # Continue without history if there's an error
+                thread_history = []
+
         # Assume "self.batch" is the list of messages we want to process
         for idx, message in enumerate(self.batch):
             # Copy all keys from self.customConfig into the body
             body_data = self.customConfig
+            
+            # Generate a unique message_id for each message
+            # This will be sent as custom_id to OpenAI API (required by their format)
+            message_id = str(uuid.uuid4())
 
-            # Generate a unique ID for each request
-            custom_id = str(uuid.uuid4())
+            # Build messages array with system prompt first, then thread history, then user message
+            messages = []
+            
+            # Add system prompt first
+            messages.append({"role": "system", "content": self.processed_prompts[idx]})
+            
+            # Add thread history after system prompt (if available)
+            if thread_history:
+                messages.extend(thread_history)
+            
+            # Add current user message
+            messages.append({"role": "user", "content": message})
+            
+            # Set messages in body
+            body_data["messages"] = messages
 
-            # Add messages array with processed system prompt and user message
-            body_data["messages"] = [
-                {"role": "system", "content": self.processed_prompts[idx]},
-                {"role": "user", "content": message},
-            ]
-
-            # Construct one JSONL line for each message
-            request_obj = {"custom_id": custom_id, "method": "POST", "url": "/v1/chat/completions", "body": body_data}
+            # Construct one JSONL line for each message with message_id as custom_id
+            request_obj = {
+                "custom_id": message_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": body_data
+            }
 
             # Serialize to JSON string
             results.append(json.dumps(request_obj))
 
             # Store message mapping for response
-            mapping_item = {"message": message, "custom_id": custom_id}
-
+            mapping_item = {
+                "message": message,
+                "message_id": message_id
+            }
+            
             # Add batch_variables to mapping if provided
             if batch_variables is not None:
                 mapping_item["variables"] = batch_variables[idx]
@@ -79,8 +142,13 @@ class OpenaiBatch(BaseService):
             "apikey": self.apikey,
             "webhook": self.webhook,
             "batch_variables": batch_variables,
-            "custom_id_mapping": {item["custom_id"]: idx for idx, item in enumerate(message_mappings)},
+            "message_id_mapping": {item["message_id"]: idx for idx, item in enumerate(message_mappings)},
             "service": self.service,
+            "model": self.model,
+            "org_id": self.org_id,
+            "bridge_id": self.bridge_id,
+            "version_id": getattr(self, 'version_id', ''),
+            "thread_id": self.thread_id
         }
         cache_key = f"{redis_keys['batch_']}{batch_file.id}"
         await store_in_cache(cache_key, batch_json, ttl=86400)

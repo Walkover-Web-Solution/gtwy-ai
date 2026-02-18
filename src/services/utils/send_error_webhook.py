@@ -145,9 +145,5 @@ def create_broadcast_response_payload(details):
     return {"alert": "Broadcast Response", "response": details}
 
 
-def create_broadcast_response_payload(details):
-    return {"alert": "Broadcast Response", "response": details}
-
-
 def create_response_format(url, headers):
     return {"type": "webhook", "cred": {"url": url, "headers": headers}}

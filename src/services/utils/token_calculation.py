@@ -1,4 +1,6 @@
 from src.configs.model_configuration import model_config_document
+from src.services.utils.gemini_token_utils import extract_gemini_image_usage, calculate_gemini_image_cost
+from src.services.utils.openai_token_utils import extract_openai_image_usage, calculate_openai_image_cost
 
 
 class TokenCalculator:
@@ -13,6 +15,16 @@ class TokenCalculator:
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
             "reasoning_tokens": 0,
+        }
+        # Image-specific token tracking
+        self.image_usage = {
+            "text_input_tokens": 0,
+            "text_output_tokens": 0,
+            "image_input_tokens": 0,
+            "image_output_tokens": 0,
+            "cached_text_input_tokens": 0,
+            "cached_image_input_tokens": 0,
+            "total_images_generated": 0
         }
 
     def calculate_usage(self, model_response):
@@ -97,6 +109,35 @@ class TokenCalculator:
         self.total_usage["cache_creation_input_tokens"] += usage.get("cachingCreationInputTokens") or 0
         self.total_usage["reasoning_tokens"] += usage.get("reasoningTokens") or 0
 
+    def calculate_image_usage(self, model_response):
+        """
+        Calculate usage for image generation models
+        Handles both OpenAI and Gemini response structures
+        
+        Args:
+            model_response: Response from image generation API
+            
+        Returns:
+            Dictionary with image-specific usage metrics
+        """
+        usage = {}
+        match self.service:
+            case 'gemini':
+                # Gemini format - use utility function
+                usage = extract_gemini_image_usage(model_response)
+            
+            case 'openai':
+                # OpenAI format - use utility function
+                usage = extract_openai_image_usage(model_response)
+            
+            case _:
+                # Default case - no image usage data available for this service
+                pass
+        
+        self._update_image_usage(usage)
+        return self.image_usage
+
+
     def calculate_total_cost(self, model, service):
         """
         Calculate total cost in dollars using accumulated total_usage
@@ -109,7 +150,9 @@ class TokenCalculator:
             Dictionary with cost breakdown using total_usage
         """
         model_obj = model_config_document[service][model]
-        pricing = model_obj["outputConfig"]["usage"][0]["total_cost"]
+        
+        # Regular chat model cost calculation
+        pricing = model_obj['outputConfig']['usage'][0]['total_cost']
 
         cost = {
             "input_cost": 0,
@@ -155,6 +198,68 @@ class TokenCalculator:
         )
 
         return cost
+    
+    def calculate_image_cost(self, model):
+        """
+        Calculate cost for image generation models
+        
+        Args:
+            model: model name
+            service: service name
+            
+        Returns:
+            Dictionary with detailed cost breakdown for image models
+        """
+        model_obj = model_config_document[self.service][model]
+        pricing = model_obj['outputConfig']['usage'][0]['total_cost']
+        
+        cost = {
+            "text_input_cost": 0,
+            "text_output_cost": 0,
+            "image_input_cost": 0,
+            "image_output_cost": 0,
+            "cached_text_input_cost": 0,
+            "cached_image_input_cost": 0,
+            "total_cost": 0
+        }
+        
+        # Check if this is Gemini service with flat pricing structure
+        match self.service:
+            case 'gemini':
+                # Gemini cost calculation - use utility function
+                return calculate_gemini_image_cost(self.image_usage, pricing, model_obj)
+            
+            case 'openai':
+                # OpenAI cost calculation - use utility function
+                return calculate_openai_image_cost(self.image_usage, pricing)
+            
+            case _:
+                # Default case - no specific pricing logic for this service
+                pass
+        
+        # Calculate total cost (token-based only)
+        cost['total_cost'] = (
+            cost['text_input_cost'] +
+            cost['text_output_cost'] +
+            cost['image_input_cost'] +
+            cost['image_output_cost'] +
+            cost['cached_text_input_cost'] +
+            cost['cached_image_input_cost']
+        )
+
+        return cost
+
+    def _update_image_usage(self, usage):
+        self.image_usage["text_input_tokens"] += usage.get("text_input_tokens") or 0
+        self.image_usage["text_output_tokens"] += usage.get("text_output_tokens") or  0
+        self.image_usage["image_input_tokens"] += usage.get("image_input_tokens") or 0
+        self.image_usage["image_output_tokens"] += usage.get("image_output_tokens") or  0
+        self.image_usage["cached_text_input_tokens"] += usage.get("cached_text_input_tokens") or 0
+        self.image_usage["cached_image_input_tokens"] += usage.get("cached_image_input_tokens") or 0
+        self.image_usage["total_images_generated"] += usage.get("total_images_generated") or 0
 
     def get_total_usage(self):
         return self.total_usage
+    
+    def get_image_usage(self):
+        return self.image_usage

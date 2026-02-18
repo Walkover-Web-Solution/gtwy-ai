@@ -65,7 +65,6 @@ class BaseService:
         self.token_calculator = params.get("token_calculator")
         self.apikey_object_id = params.get("apikey_object_id")
         self.image_data = params.get("images")
-        self.audio_data = params.get('audios')
         self.audio_data = params.get("audios")
         self.tool_call_count = params.get("tool_call_count")
         self.text = params.get("text")
@@ -86,7 +85,6 @@ class BaseService:
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
-
 
     def aiconfig(self):
         return self.customConfig
@@ -312,9 +310,8 @@ class BaseService:
             else [],
             "revised_prompt": model_response.get("data", [{}])[0].get("revised_prompt", None),
             "user_urls": [
-                *({'url': u, 'type': 'image'} for u in (self.image_data or [])),
-                *({'url': u, 'type': 'pdf'} for u in (self.files or [])),
-                *({'url': u, 'type': 'audio'} for u in (self.audio_data or [])),
+                *({"url": u, "type": "image"} for u in (self.image_data or [])),
+                *({"url": u, "type": "pdf"} for u in (self.files or [])),
                 *({"url": u, "type": "audio"} for u in (self.audio_data or [])),
             ],
             "AiConfig": self.customConfig,
