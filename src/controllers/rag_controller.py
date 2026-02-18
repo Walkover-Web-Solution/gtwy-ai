@@ -314,8 +314,10 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
         top_k = args.get("top_k", 3)
         min_score = args.get("minScore", score)  # Use minScore from args, fallback to score parameter
         ownerId = owner_id
-        # Extract resourceId from args
+        # Extract resource_id and collection_id from args
         resource_id = args.get("resource_id")
+        # Direct collection_id (e.g. from RAG_COLLECTION tool) - API called with collection_id and owner_id only
+        collection_id_from_args = args.get("collection_id")
 
         if query is None:
             raise HTTPException(status_code=400, detail="Query is required.")
@@ -324,35 +326,32 @@ async def get_text_from_vectorsQuery(args, Flag=True, score=0.1, owner_id=None, 
         if min_score < 0.1 or min_score > 1:
             raise HTTPException(status_code=400, detail="minScore must be between 0.1 and 1.")
 
-        # Get collection_id from mapping using resource_id (optional - multiple resources can share one collection)
+        # Get collection_id from mapping using resource_id (optional - when using resource_id)
         if not resource_to_collection_mapping:
             resource_to_collection_mapping = {}
 
-        collection_id = resource_to_collection_mapping.get(resource_id)
+        collection_id = collection_id_from_args or resource_to_collection_mapping.get(resource_id)
 
         # Prepare Hippocampus API request
         hippocampus_url = "http://hippocampus.gtwy.ai/search"
         headers = {"x-api-key": Config.HIPPOCAMPUS_API_KEY, "Content-Type": "application/json"}
 
-        # Build payload - handle three cases:
-        # Case 1: Only collection_id (when resource_id is placeholder like "collection_only_query")
-        # Case 2: resource_id with optional collection_id
-        # Case 3: resource_id only
+        # Build payload: if collection_id passed directly (no resource_id), send only collectionId and ownerId;
+        # otherwise send resource_id (and optionally collection_id).
         payload = {"query": query, "ownerId": ownerId, "minScore": min_score, "top_k": top_k}
 
-        # Check if this is a collection-only query (placeholder resource_id)
-        is_collection_only_query = resource_id and resource_id == "collection_only_query" and collection_id
-
-        if is_collection_only_query:
-            # Only collection_id, no resource_id in payload
-            payload["collectionId"] = collection_id
-        elif resource_id:
-            # Real resource_id is provided
+        if collection_id_from_args and not resource_id:
+            # Collection-only: send only collection_id and owner_id (no resource_id)
+            payload["collectionId"] = collection_id_from_args
+        elif resource_id and resource_id != "collection_only_query":
+            # Resource-based: send resource_id (and optional collection_id)
             payload["resourceId"] = resource_id
             if collection_id:
                 payload["collectionId"] = collection_id
+        elif resource_id == "collection_only_query" and collection_id:
+            # Legacy placeholder: only collection_id
+            payload["collectionId"] = collection_id
         else:
-            # Neither collection_id nor resource_id
             raise Exception("Either Resource ID or Collection ID must be provided.")
 
         # Call Hippocampus API using async fetch

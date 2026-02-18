@@ -311,6 +311,52 @@ def add_rag_tool(tools, tool_id_and_name_mapping, rag_data):
     }
 
 
+def add_rag_collection_tool(tools, tool_id_and_name_mapping, rag_collections):
+    """Add RAG collection-only tool when rag_collections (name, description, collection_id) is available."""
+    if not rag_collections or rag_collections == []:
+        return
+
+    name_to_collection_mapping = {}
+    collection_names = []
+    for data in rag_collections:
+        if isinstance(data, dict):
+            name = data.get("name", "")
+            collection_id = data.get("collection_id", "")
+            if name and collection_id:
+                name_to_collection_mapping[name] = collection_id
+                collection_names.append(name)
+
+    tools.append(
+        {
+            "type": "function",
+            "name": "get_collection_knowledge_base_data",
+            "description": "When user wants to query a collection knowledge base by name, call this function with the collection name and query. Use only for collection-based knowledge bases (no resource_id).",
+            "properties": {
+                "name": {
+                    "description": "Name of the collection to query",
+                    "type": "string",
+                    "enum": collection_names if collection_names else [],
+                    "required_params": [],
+                    "parameter": {},
+                },
+                "query": {
+                    "description": "query to ask from the knowledge base",
+                    "type": "string",
+                    "enum": [],
+                    "required_params": [],
+                    "parameter": {},
+                },
+            },
+            "required": ["name", "query"],
+        }
+    )
+
+    tool_id_and_name_mapping["get_collection_knowledge_base_data"] = {
+        "type": "RAG_COLLECTION",
+        "name_to_collection_mapping": name_to_collection_mapping,
+    }
+
+
 def _should_enable_web_crawling_tool(built_in_tools):
     if not built_in_tools:
         return False

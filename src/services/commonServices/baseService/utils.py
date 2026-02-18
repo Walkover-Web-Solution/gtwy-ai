@@ -301,6 +301,24 @@ async def process_data_and_run_tools(codes_mapping, self):
                         owner_id=self.owner_id,
                         resource_to_collection_mapping=resource_to_collection_mapping,
                     )
+                elif self.tool_id_and_name_mapping[name].get("type") == "RAG_COLLECTION":
+                    # Collection-only: resolve collection_id from name, call API with collection_id and owner_id only
+                    name_to_collection_mapping = self.tool_id_and_name_mapping[name].get(
+                        "name_to_collection_mapping", {}
+                    )
+                    args = tool_data.get("args", {})
+                    collection_name = args.get("name")
+                    collection_id = name_to_collection_mapping.get(collection_name) if collection_name else None
+                    task = get_text_from_vectorsQuery(
+                        {
+                            **args,
+                            "org_id": self.org_id,
+                            "collection_id": collection_id,
+                        },
+                        Flag=True,
+                        owner_id=self.owner_id,
+                        resource_to_collection_mapping={},
+                    )
                 elif self.tool_id_and_name_mapping[name].get("type") == "AGENT":
                     agent_args = {
                         "org_id": self.org_id,

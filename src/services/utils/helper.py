@@ -381,6 +381,20 @@ class Helper:
 
         return prompt
 
+    def add_collection_description_to_prompt(prompt, rag_collections):
+        """Append collection knowledge base (name, description) to prompt for RAG collection tool."""
+        if not rag_collections:
+            return prompt
+        prompt += "\n Available Collection Knowledge Bases :- Here are the available collections to get data when needed call the function get_collection_knowledge_base_data: \n"
+        for idx, data in enumerate(rag_collections, 1):
+            if not isinstance(data, dict):
+                continue
+            name = data.get("name", "")
+            description = data.get("description", "No description available")
+            prompt += f"{idx}. Name: {name}\n"
+            prompt += f"   Description: {description}\n\n"
+        return prompt
+
     def append_tone_and_response_style_prompts(prompt, tone, response_style):
         if tone:
             prompt += f"\n\nTone Prompt: {tone['prompt']}"

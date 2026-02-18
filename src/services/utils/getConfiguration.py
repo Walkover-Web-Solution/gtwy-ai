@@ -8,6 +8,7 @@ from .getConfiguration_utils import (
     add_anthropic_json_schema,
     add_connected_agents,
     add_rag_tool,
+    add_rag_collection_tool,
     add_web_crawling_tool,
     get_bridge_data,
     setup_api_key,
@@ -145,6 +146,7 @@ async def _prepare_configuration_response(
             pre_tools_data_for_later = api_data
 
     rag_data = bridge.get("doc_ids")
+    rag_collections = bridge.get("rag_collections", [])
     gpt_memory_context = bridge.get("gpt_memory_context")
     gpt_memory = result.get("bridges", {}).get("gpt_memory")
 
@@ -155,6 +157,7 @@ async def _prepare_configuration_response(
     )
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
+    add_rag_collection_tool(tools, tool_id_and_name_mapping, rag_collections)
 
     gtwy_web_search_filters = web_search_filters or result.get("bridges", {}).get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
@@ -167,6 +170,10 @@ async def _prepare_configuration_response(
 
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
+    if rag_collections:
+        configuration["prompt"] = Helper.add_collection_description_to_prompt(
+            configuration["prompt"], rag_collections
+        )
 
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
@@ -193,6 +200,7 @@ async def _prepare_configuration_response(
         "tool_call_count": result.get("bridges", {}).get("tool_call_count", 3),
         "variables": variables,
         "rag_data": rag_data,
+        "rag_collections": rag_collections,
         "actions": result.get("bridges", {}).get("actions", []),
         "name": bridge_data.get("name") or bridge_data.get("bridges", {}).get("name") or "",
         "org_name": org_name,
