@@ -324,7 +324,7 @@ async def manage_threads(parsed_data):
                 parsed_data["configuration"]["conversation"] = result or []
     else:
         thread_id = str(uuid.uuid1())
-        sub_thread_id = thread_id
+        sub_thread_id = str(uuid.uuid1())
         parsed_data["thread_id"] = thread_id
         parsed_data["sub_thread_id"] = sub_thread_id
         parsed_data["gpt_memory"] = False
