@@ -20,6 +20,7 @@ async def groq_runmodel(
     service="",
     count=0,
     token_calculator=None,
+    apikey_object_id=None,
 ):
     try:
         # Initialize async client
@@ -48,6 +49,7 @@ async def groq_runmodel(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            apikey_object_id=apikey_object_id,
         )
 
     except Exception as e:

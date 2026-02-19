@@ -66,6 +66,7 @@ async def openai_response_model(
     service="",
     count=0,
     token_calculator=None,
+    apikey_object_id=None,
 ):
     try:
         # # Validate token count before making API call (raises exception if invalid)
@@ -130,6 +131,7 @@ async def openai_response_model(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            apikey_object_id=apikey_object_id
         )
 
     except Exception as error:
@@ -157,6 +159,7 @@ async def openai_completion(
     service="",
     count=0,
     token_calculator=None,
+    apikey_object_id=None,
 ):
     try:
         openAI = AsyncOpenAI(api_key=apiKey)
@@ -184,6 +187,7 @@ async def openai_completion(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            apikey_object_id=apikey_object_id,
         )
 
     except Exception as error:

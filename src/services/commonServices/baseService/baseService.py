@@ -391,6 +391,7 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.apikey_object_id,
                 )
             elif service == service_name["anthropic"]:
                 response = await loop.run_in_executor(
@@ -407,6 +408,7 @@ class BaseService:
                             service,
                             count,
                             self.token_calculator,
+                            self.apikey_object_id,
                         )
                     ),
                 )
@@ -424,6 +426,7 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.apikey_object_id,
                 )
             elif service == service_name["grok"]:
                 response = await grok_runmodel(
@@ -439,6 +442,7 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.apikey_object_id,
                 )
             elif service == service_name["open_router"]:
                 response = await openrouter_modelrun(
@@ -454,6 +458,7 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.apikey_object_id,
                 )
             elif service == service_name["mistral"]:
                 response = await mistral_model_run(
@@ -469,6 +474,7 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.apikey_object_id,
                 )
             elif service == service_name["gemini"]:
                 response = await gemini_modelrun(
@@ -484,6 +490,7 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.apikey_object_id,
                 )
             elif service == service_name["ai_ml"]:
                 response = await ai_ml_model_run(
@@ -499,6 +506,7 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.apikey_object_id,
                 )
             elif service == service_name["openai_completion"]:
                 response = await openai_completion(
@@ -514,6 +522,7 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.apikey_object_id,
                 )
             if not response["success"]:
                 raise ValueError(response["error"])

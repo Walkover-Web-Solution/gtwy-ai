@@ -20,6 +20,7 @@ async def anthropic_runmodel(
     service="",
     count=0,
     token_calculator=None,
+    apikey_object_id=None,
 ):
     try:
         # # Validate token count before making API call
@@ -185,6 +186,7 @@ async def anthropic_runmodel(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            apikey_object_id=apikey_object_id,
         )
 
     except Exception as e:

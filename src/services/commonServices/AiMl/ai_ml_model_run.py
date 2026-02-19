@@ -20,6 +20,7 @@ async def ai_ml_model_run(
     service="",
     count=0,
     token_calculator=None,
+    apikey_object_id=None,
 ):
     try:
         openAI = AsyncOpenAI(api_key=apiKey, base_url="https://api.ai.ml/openai")
@@ -47,6 +48,7 @@ async def ai_ml_model_run(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            apikey_object_id=apikey_object_id,
         )
 
     except Exception as error:

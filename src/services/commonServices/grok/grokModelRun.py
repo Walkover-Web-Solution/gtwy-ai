@@ -19,6 +19,7 @@ async def grok_runmodel(
     service="",
     count=0,
     token_calculator=None,
+    apikey_object_id=None,
 ):
     """Execute a chat completion call against the xAI Grok API using custom fetch function."""
 
@@ -51,6 +52,7 @@ async def grok_runmodel(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            apikey_object_id=apikey_object_id,
         )
     except Exception as error:
         execution_time_logs.append(

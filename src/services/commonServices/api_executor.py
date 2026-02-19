@@ -20,6 +20,7 @@ async def execute_api_call(
     service="",
     count=0,
     token_calculator=None,
+    apikey_object_id=None
 ):
     try:
         # Start timer
@@ -55,6 +56,7 @@ async def execute_api_call(
                         "message_id": message_id,
                         "bridge_id": bridge_id,
                         "org_id": org_id,
+                        "apikey_id": apikey_object_id.get(service, "") if apikey_object_id else "",
                         "message": "API call failed - no retry attempted",
                         "error": result.get("error"),
                     }
