@@ -134,8 +134,9 @@ async def _prepare_configuration_response(
     # Store pre_tools_data for later processing
     pre_tools_data_for_later = None
     if bridge.get("pre_tools"):
-        api_data = result.get("bridges", {}).get("pre_tools_data", [{}])[0]
-        del api_data["_id"]
+        pre_tools_list = result.get("bridges", {}).get("pre_tools_data") or []
+        api_data = pre_tools_list[0] if pre_tools_list else {}
+        api_data.pop("_id", None)
         if api_data.get("bridge_ids"):
             del api_data["bridge_ids"]
         if api_data.get("folder_id"):
