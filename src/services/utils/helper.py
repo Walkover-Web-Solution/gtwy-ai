@@ -544,9 +544,9 @@ class Helper:
                 raise BadRequestException(f"Invalid _response_type.type: '{response_type_value}'. Supported types: {', '.join(sorted(VALID_RESPONSE_TYPES))}")
             if response_type_value == "json_schema" and not new_response_type.get("json_schema"):
                 raise BadRequestException("Invalid _response_type: 'json_schema' type requires 'json_schema' field")
-                
-            parsed_data["configuration"]["response_type"] = new_response_type
-            custom_config["response_type"] = new_response_type
+            if parsed_data.get("service") != service_name["anthropic"]:
+                parsed_data["configuration"]["response_type"] = new_response_type
+                custom_config["response_type"] = new_response_type
         
         if user_message := response_data.get(agent_config_update_keys["_user_message"]):
             parsed_data["user"] = user_message
