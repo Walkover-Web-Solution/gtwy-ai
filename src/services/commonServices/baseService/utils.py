@@ -529,12 +529,13 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
         "check_chatbot_suggestions": {
             "bridgeType": parsed_data.get("bridgeType"),
         },
-        "save_to_hippocampus": {
+        "save_agent_memory": {
             "user_message": user_message,
             "assistant_message": assistant_message,
             "bridge_id": parsed_data.get("bridge_id"),
             "bridge_name": parsed_data.get("name", ""),
-            "chatbot_auto_answers": parsed_data.get("chatbot_auto_answers"),
+            "system_prompt": parsed_data.get("configuration", {}).get("prompt", ""),
+            "chatbot_auto_answers": parsed_data.get("chatbot_auto_answers", False)
         },
         "type": parsed_data.get("type"),
         "save_files_to_redis": {
