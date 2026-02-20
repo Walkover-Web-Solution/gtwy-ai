@@ -7,7 +7,7 @@ from src.services.commonServices.queueService.baseQueue import BaseQueue
 from src.services.commonServices.suggestion import chatbot_suggestions
 from src.services.utils.ai_middleware_format import validateResponse
 from src.services.utils.gpt_memory import handle_gpt_memory
-from src.services.utils.hippocampus_utils import save_conversation_to_hippocampus
+from src.services.agent_memory_service import save_to_agent_memory
 from src.services.utils.logger import logger
 from src.services.utils.send_error_webhook import send_error_to_webhook
 
@@ -34,14 +34,17 @@ class Queue2(BaseQueue):
         if messages.get("type") == "image":
             return
 
-        # Save conversation to Hippocampus for chatbot bridge types
-        hippocampus_data = messages.get("save_to_hippocampus", {})
-        if hippocampus_data.get("chatbot_auto_answers"):
-            await save_conversation_to_hippocampus(
-                user_message=hippocampus_data.get("user_message", ""),
-                assistant_message=hippocampus_data.get("assistant_message", ""),
-                agent_id=hippocampus_data.get("bridge_id", ""),
-                bridge_name=hippocampus_data.get("bridge_name", ""),
+        # Save Agent to Hippocampus for chatbot bridge types
+        agent_memory_data = messages.get("save_agent_memory", {})
+        
+        
+        if agent_memory_data.get("chatbot_auto_answers", False):
+            await save_to_agent_memory(
+                user_question=agent_memory_data.get("user_message", ""),
+                assistant_answer=agent_memory_data.get("assistant_message", ""),
+                agent_id=agent_memory_data.get("bridge_id", ""),
+                bridge_name=agent_memory_data.get("bridge_name", ""),
+                system_prompt=agent_memory_data.get("system_prompt", ""),
             )
 
         # await create(**messages['metrics_service'])
