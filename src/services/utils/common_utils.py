@@ -158,7 +158,7 @@ def parse_request_body(request_body):
         "variables_path": body.get("variables_path") or {},
         "tool_id_and_name_mapping": body.get("tool_id_and_name_mapping"),
         "suggest": body.get("suggest", False),
-        "message_id": str(uuid.uuid1()),
+        "message_id": body.get("message_id"),
         "reasoning_model": body.get("configuration", {}).get("model") in {"o1-preview", "o1-mini"},
         "gpt_memory": body.get("gpt_memory"),
         "version_id": body.get("version_id"),
