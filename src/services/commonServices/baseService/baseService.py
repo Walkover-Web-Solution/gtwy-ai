@@ -117,14 +117,12 @@ class BaseService:
             tools[function_response["name"]] = function_response["content"]
 
             match service:
-                case "openai_completion" | "groq" | "grok" | "open_router" | "mistral" | "gemini" | "ai_ml":
-                    assistant_tool_calls = response["choices"][0]["message"]["tool_calls"][index]
-                    configuration["messages"].append(
-                        {"role": "assistant", "content": None, "tool_calls": [assistant_tool_calls]}
-                    )
-                    tool_calls_id = assistant_tool_calls["id"]
-                    configuration["messages"].append(mapping_response_data[tool_calls_id])
-                case "openai":
+                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'ai_ml':
+                    assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
+                    configuration['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]})
+                    tool_calls_id = assistant_tool_calls['id']
+                    configuration['messages'].append(mapping_response_data[tool_calls_id])
+                case 'openai':
                     # First, add all reasoning outputs to the configuration
                     for output in response["output"]:
                         if output.get("type") == "reasoning":
@@ -136,23 +134,52 @@ class BaseService:
                     ]
                     if index < len(function_call_outputs):
                         output = function_call_outputs[index]
-                        configuration["input"].append(output)
-                        tool_calls_id = output["id"]
-                        configuration["input"].append(
-                            {
-                                "type": "function_call_output",
-                                "call_id": output["call_id"],
-                                "output": mapping_response_data[tool_calls_id]["content"],
+                        configuration['input'].append(output)
+                        tool_calls_id = output['id']
+                        configuration['input'].append({                           
+                            "type": "function_call_output",
+                            "call_id": output['call_id'],
+                            "output": mapping_response_data[tool_calls_id]['content']
+                        })
+                case 'anthropic':
+                    ordered_json = {"type":"tool_result",  
+                                                 "tool_use_id": function_response['tool_call_id'],
+                                                 "content": function_response['content']}
+                    configuration['messages'][-1]['content'].append(ordered_json)
+                case 'gemini':
+                    from google.genai import types
+
+                    function_call_part = None
+                    for part in response.get('candidates', [{}])[0].get('content', {}).get('parts', []):
+                        if isinstance(part, dict) and part.get('function_call'):
+                            if part['function_call'].get('name') == function_response['name']:
+                                function_call_part = part['function_call']
+                                break
+                    
+                    configuration['contents'].append({
+                        'role': 'model',
+                        'parts': [{'function_call': function_call_part}]
+                    })
+
+                    if isinstance(function_response['content'], str):
+                        try:
+                            function_response['content'] = json.loads(function_response['content'])
+                        except:
+                            pass
+                    
+                    if isinstance(function_response['content'], list):
+                        function_response['content'] = {"result": function_response['content']}
+
+                    configuration['contents'].append({
+                        'role': 'user',
+                        'parts': [{
+                            'function_response': {
+                                'name': function_response['name'],
+                                'response':  function_response['content']
                             }
-                        )
-                case "anthropic":
-                    ordered_json = {
-                        "type": "tool_result",
-                        "tool_use_id": function_response["tool_call_id"],
-                        "content": function_response["content"],
-                    }
-                    configuration["messages"][-1]["content"].append(ordered_json)
-                case _:
+                        }]
+                    })
+                case  _:
                     pass
         return configuration, tools
 
@@ -314,7 +341,12 @@ class BaseService:
                 *({"url": u, "type": "pdf"} for u in (self.files or [])),
                 *({"url": u, "type": "audio"} for u in (self.audio_data or [])),
             ],
-            "AiConfig": self.customConfig,
+            "AiConfig": json.loads(
+                json.dumps(
+                    self.customConfig,
+                    default=lambda o: o.model_dump() if hasattr(o, "model_dump") else str(o) # Because Gemini Config is not serializable
+                )
+            ),
             "firstAttemptError": model_response.get("firstAttemptError") or "",
             "annotations": _.get(model_response, self.modelOutputConfig.get("annotations")) or [],
             "fallback_model": (
@@ -361,13 +393,40 @@ class BaseService:
                 data = new_config["text"]
                 new_config["text"] = {"format": data}
             if service == service_name["openai"] and "reasoning" in new_config:
-                # Only transform if reasoning has 'key' and 'type' structure
                 if (
                     isinstance(new_config["reasoning"], dict)
                     and "key" in new_config["reasoning"]
                     and "type" in new_config["reasoning"]
                 ):
                     new_config["reasoning"] = {new_config["reasoning"]["key"]: new_config["reasoning"]["type"]}
+
+            if service == service_name['gemini']:
+                from google.genai import types
+
+                if 'tools' not in new_config and 'parallel_tool_calls' in new_config:
+                    del new_config['parallel_tool_calls']
+
+                # Parallel Tool Config
+                if "parallel_tool_calls" in new_config and new_config["parallel_tool_calls"]:
+                    new_config["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=True)
+
+                # Flatening JSON Schema
+                if "response_mime_type" in new_config and isinstance(new_config['response_mime_type'], dict):
+                    print(f"\nResponse Config: {new_config['response_mime_type']}\n")
+                    match new_config["response_mime_type"]["type"]:
+                        case "text":
+                            del new_config["response_mime_type"]
+                        case "json_object":
+                            new_config["response_mime_type"] = "application/json"
+                        case "json_schema":
+                            new_config["response_json_schema"] = new_config["response_mime_type"]["json_schema"]["schema"]
+                            new_config["response_mime_type"] = "application/json" 
+
+                # Build config_params excluding "model", and remove None values
+                config_params = {k: v for k, v in new_config.items() if v is not None and k not in {"model", "tool_choice", "parallel_tool_calls"}}
+                del new_config["system_instruction"]
+                new_config['config'] = types.GenerateContentConfig(**config_params)
+
             return new_config
         except Exception as e:
             logger.error(f"An error occurred: {str(e)}")
