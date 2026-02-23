@@ -56,6 +56,7 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
     testcases_flag = body.get("testcases", False)
     testcase_data = body.get("testcase_data")
     variables = body.get("variables", {})
+    matching_type = body.get("matching_type", None)
 
     return {
         "bridge_id": bridge_id,
@@ -63,7 +64,8 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
         "testcase_id": testcase_id,
         "testcases_flag": testcases_flag,
         "testcase_data": testcase_data,
-        "variables": variables
+        "variables": variables,
+        "matching_type": matching_type
     }
 
 
@@ -186,7 +188,7 @@ async def get_testcase_configuration(
     return bridge_configurations[primary_bridge_id]
 
 
-async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str, Any]) -> dict[str, Any]:
+async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str, Any], override_matching_type: str | None) -> dict[str, Any]:
     """
     Process a single testcase
 
@@ -210,7 +212,7 @@ async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str,
             "body": {
                 "user": testcase.get("conversation", [])[-1].get("content", "") if testcase.get("conversation") else "",
                 "testcase_data": {
-                    "matching_type": testcase.get("matching_type") or "cosine",
+                    "matching_type": override_matching_type or testcase.get("matching_type") or "cosine",
                     "run_testcase": True,
                     "_id": testcase.get("_id"),
                     "expected": testcase.get("expected"),
@@ -243,7 +245,7 @@ async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str,
             if isinstance(result_data, dict)
             else str(result_data),
             "score": testcase_result.get("score"),
-            "matching_type": testcase.get("matching_type", ""),
+            "matching_type": testcase_result.get("matching_type") or testcase.get("matching_type", ""),
             "success": True,
         }
 
@@ -261,7 +263,7 @@ async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str,
         }
 
 
-async def run_testcases_parallel(testcases: list[dict[str, Any]], db_config: dict[str, Any]) -> list[dict[str, Any]]:
+async def run_testcases_parallel(testcases: list[dict[str, Any]], db_config: dict[str, Any], override_matching_type: str | None) -> list[dict[str, Any]]:
     """
     Run multiple testcases in parallel
 
@@ -273,7 +275,7 @@ async def run_testcases_parallel(testcases: list[dict[str, Any]], db_config: dic
         List of testcase results
     """
     # Process all testcases in parallel
-    results = await asyncio.gather(*[process_single_testcase(testcase, db_config.copy()) for testcase in testcases])
+    results = await asyncio.gather(*[process_single_testcase(testcase, db_config.copy(), override_matching_type) for testcase in testcases])
 
     return results
 
@@ -315,7 +317,7 @@ async def execute_testcases(body: dict[str, Any], org_id: str) -> dict[str, Any]
     )
 
     # Run testcases in parallel
-    results = await run_testcases_parallel(testcases, db_config)
+    results = await run_testcases_parallel(testcases, db_config, request_data['matching_type'])
 
     # Return formatted response
     return {
