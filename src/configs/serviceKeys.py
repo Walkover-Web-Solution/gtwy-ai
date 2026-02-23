@@ -26,6 +26,7 @@ ServiceKeys = {
             "token_selection_limit": "top_k",
             "additional_stop_sequences": "stop_sequence",
             "max_tokens": "max_tokens",
+            "response_type": "output_config",
         }
     },
     service_name["grok"]: {

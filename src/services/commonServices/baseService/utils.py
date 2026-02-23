@@ -37,10 +37,6 @@ def validate_tool_call(service, response):
         case "openai":
             return any(output.get("type") == "function_call" for output in response.get("output", []))
         case "anthropic":
-            for item in response.get("content", []):
-                if item.get("name") == "JSON_Schema_Response_Format":
-                    response["content"][0]["text"] = json.dumps(item.get("input"))
-                    return False
             return response.get('stop_reason') == 'tool_use'
         case 'gemini':
             candidates = response.get('candidates', [])

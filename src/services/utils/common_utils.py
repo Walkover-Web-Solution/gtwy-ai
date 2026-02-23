@@ -865,6 +865,20 @@ def restructure_json_schema(response_type, service):
             for key, value in schema.items():
                 response_type[key] = value
             return response_type
+        case "anthropic":
+            # ServiceKeys renames response_type -> output_config; value must be API output_config payload (no extra nesting)
+            json_schema = response_type.get("json_schema") or {}
+            if not isinstance(json_schema, dict):
+                return response_type
+            schema = json_schema.get("schema") if "schema" in json_schema else json_schema
+            if not schema or not isinstance(schema, dict):
+                return response_type
+            return {
+                "format": {
+                    "type": "json_schema",
+                    "schema": schema,
+                }
+            }
         case _:
             return response_type
 

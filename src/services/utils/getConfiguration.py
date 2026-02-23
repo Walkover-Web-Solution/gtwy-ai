@@ -5,7 +5,6 @@ from models.mongo_connection import db
 from src.services.utils.common_utils import updateVariablesWithTimeZone
 
 from .getConfiguration_utils import (
-    add_anthropic_json_schema,
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
@@ -164,8 +163,6 @@ async def _prepare_configuration_response(
         built_in_tools or result.get("bridges", {}).get("built_in_tools"),
         gtwy_web_search_filters,
     )
-    add_anthropic_json_schema(service, configuration, tools)
-
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
 
