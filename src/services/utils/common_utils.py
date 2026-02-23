@@ -21,6 +21,7 @@ from src.services.utils.send_error_webhook import send_error_to_webhook
 from src.services.utils.time import Timer
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
+from src.controllers.rag_controller import get_text_from_vectorsQuery
 
 from ...controllers.conversationController import getThread
 from ..commonServices.baseService.utils import sendResponse
@@ -122,6 +123,24 @@ async def handle_agent_transfer(
     return transfer_result
 
 
+def _resolve_owner_id(state, body):
+    owner_id = state.get("profile", {}).get("owner_id")
+    if not owner_id:
+        return owner_id
+    org_id = state.get("profile", {}).get("org", {}).get("id")
+    if owner_id == org_id:
+        user_id = body.get("user_id")
+        folder_id = body.get("folder_id")
+        is_embed = body.get("is_embed")
+        if is_embed and user_id:
+            if folder_id:
+                return f"{org_id}_{folder_id}_{user_id}"
+            return f"{org_id}_{user_id}"
+        elif folder_id and user_id:
+            return f"{org_id}_{folder_id}_{user_id}"
+    return owner_id
+
+
 def parse_request_body(request_body):
     body = request_body.get("body", {})
     state = request_body.get("state", {})
@@ -205,7 +224,7 @@ def parse_request_body(request_body):
         "orchestrator_flag": body.get("orchestrator_flag"),
         "batch_variables": body.get("batch_variables"),
         "chatbot_auto_answers": body.get("chatbot_auto_answers"),
-        "owner_id": state.get("profile", {}).get("owner_id"),
+        "owner_id": _resolve_owner_id(state, body),
         "richui_templates": body.get("richui_templates", {}),
     }
 
@@ -320,6 +339,7 @@ async def handle_fine_tune_model(parsed_data, custom_config):
 
 
 async def handle_pre_tools(parsed_data,custom_config):
+    rag_doc_ids = []
     if parsed_data["pre_tools"]:
         if parsed_data["pre_tools"].get("args") is None:
             parsed_data["pre_tools"]["args"] = {}
@@ -338,6 +358,23 @@ async def handle_pre_tools(parsed_data,custom_config):
             response_data = pre_function_response.get("response", {})
             
             Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
+        rag_doc_ids = parsed_data["pre_tools"].get("rag_doc_ids", [])
+    if rag_doc_ids:
+            user_message = parsed_data.get("user") or parsed_data.get("input", "")
+            resource_to_collection_mapping = parsed_data["pre_tools"].get("resource_to_collection_mapping", {})
+            all_chunks = []
+            for doc in rag_doc_ids:
+                resource_id = doc.get("resource_id") if isinstance(doc, dict) else doc
+                logger.info(f"[PRE_TOOLS] owner_id being used for RAG: {parsed_data.get('owner_id')}")
+                rag_result = await get_text_from_vectorsQuery(
+                    {"query": user_message, "resource_id": resource_id, "org_id": parsed_data["org_id"]},
+                    Flag=True,
+                    owner_id=parsed_data.get("owner_id"),
+                    resource_to_collection_mapping=resource_to_collection_mapping,
+                )
+                if rag_result.get("status") == 1:
+                    all_chunks.append(rag_result.get("response", ""))
+            parsed_data["variables"]["pre_function_rag"] = "\n".join(all_chunks)
 
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
