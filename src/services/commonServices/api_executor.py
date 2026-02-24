@@ -1,8 +1,7 @@
 import copy
 import traceback
-
 from src.configs.constant import service_name
-
+from src.services.commonServices.baseService.utils import serialize_config
 from ..utils.ai_middleware_format import send_alert
 
 
@@ -51,7 +50,7 @@ async def execute_api_call(
                     data={
                         "org_name": org_name,
                         "bridge_name": name,
-                        "configuration": configuration,
+                        "configuration": serialize_config(configuration),
                         "message_id": message_id,
                         "bridge_id": bridge_id,
                         "org_id": org_id,

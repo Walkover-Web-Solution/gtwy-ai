@@ -643,3 +643,25 @@ async def unknown_error_handler(data):
             headers={},
             json_body=data
         )
+
+def serialize_config(config) -> dict:
+    def default(o):
+        if hasattr(o, "model_dump"):
+            return o.model_dump()
+        return str(o)
+
+    def remove_nulls(obj):
+        # Remove None inside dict
+        if isinstance(obj, dict):
+            return {
+                k: remove_nulls(v)
+                for k, v in obj.items()
+                if v is not None
+            }
+        # Remove None inside list
+        if isinstance(obj, list):
+            return [remove_nulls(v) for v in obj if v is not None]
+        return obj
+
+    serialized = json.loads(json.dumps(config, default=default))
+    return remove_nulls(serialized)
