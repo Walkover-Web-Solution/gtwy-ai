@@ -341,12 +341,7 @@ class BaseService:
                 *({"url": u, "type": "pdf"} for u in (self.files or [])),
                 *({"url": u, "type": "audio"} for u in (self.audio_data or [])),
             ],
-            "AiConfig": json.loads(
-                json.dumps(
-                    self.customConfig,
-                    default=lambda o: o.model_dump() if hasattr(o, "model_dump") else str(o) # Because Gemini Config is not serializable
-                )
-            ),
+            "AiConfig": self.customConfig,
             "firstAttemptError": model_response.get("firstAttemptError") or "",
             "annotations": _.get(model_response, self.modelOutputConfig.get("annotations")) or [],
             "fallback_model": (
@@ -412,7 +407,6 @@ class BaseService:
 
                 # Flatening JSON Schema
                 if "response_mime_type" in new_config and isinstance(new_config['response_mime_type'], dict):
-                    print(f"\nResponse Config: {new_config['response_mime_type']}\n")
                     match new_config["response_mime_type"]["type"]:
                         case "text":
                             del new_config["response_mime_type"]
@@ -424,8 +418,11 @@ class BaseService:
 
                 # Build config_params excluding "model", and remove None values
                 config_params = {k: v for k, v in new_config.items() if v is not None and k not in {"model", "tool_choice", "parallel_tool_calls"}}
-                del new_config["system_instruction"]
-                new_config['config'] = types.GenerateContentConfig(**config_params)
+                
+                new_config = {
+                    "model": new_config["model"],
+                    "config": types.GenerateContentConfig(**config_params)
+                }
 
             return new_config
         except Exception as e:

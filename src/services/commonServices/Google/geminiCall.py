@@ -7,6 +7,7 @@ from src.services.utils.ai_middleware_format import Response_formatter
 from google.genai import types
 from urllib.parse import urlparse
 import mimetypes
+from src.services.commonServices.baseService.utils import serialize_config
 
 class GeminiHandler(BaseService):
     async def execute(self):
@@ -103,6 +104,7 @@ class GeminiHandler(BaseService):
 
                 if not self.playground:
                     transfer_config = functionCallRes.get('transfer_agent_config') if functionCallRes else None
+                    self.customConfig = serialize_config(self.customConfig) 
                     historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
         
         result = {'success': True, 'modelResponse': model_response, 'historyParams': historyParams, 'response': response}

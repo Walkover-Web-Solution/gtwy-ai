@@ -672,6 +672,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         "tools_id": "$config.tools_id",
                         "pre_tool_id": "$config.pre_tool_id",
                         "variables_path": {"$ifNull": ["$config.variables_path", {}]},
+                        "folder_prompt": "$config.prompt",
                     }
                 },
             ]
@@ -720,6 +721,16 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 # Merge folder variables_path into bridge's variables_path
                 bridge_data["variables_path"].update(folder_variables_path)
 
+            # Inject folder customPrompt into bridge prompt if conditions are met
+            folder_prompt = folder_result[0].get("folder_prompt") if folder_result else None
+            if (
+                isinstance(folder_prompt, dict)
+                and folder_prompt.get("useDefaultPrompt") is False
+                and folder_prompt.get("customPrompt")
+            ):
+                bridge_prompt = bridge_data.get("configuration", {}).get("prompt")
+                if isinstance(bridge_prompt, dict):
+                    bridge_data["configuration"]["prompt"]["customPrompt"] = folder_prompt["customPrompt"]
             # Extract folder metadata
             if folder_result and folder_result[0].get("type"):
                 bridge_data["folder_type"] = folder_result[0]["type"]

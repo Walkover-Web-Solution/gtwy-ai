@@ -356,35 +356,6 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
     }
 
 
-def add_anthropic_json_schema(service, configuration, tools):
-    """Add JSON schema response format for Anthropic service"""
-    if (
-        service != "anthropic"
-        or not isinstance(configuration.get("response_type"), dict)
-        or not configuration["response_type"].get("json_schema")
-    ):
-        return
-
-    # Remove required field if it exists
-    if configuration["response_type"]["json_schema"].get("required") is not None:
-        del configuration["response_type"]["json_schema"]["required"]
-
-    # Add JSON schema tool
-    tools.append(
-        {
-            "name": "JSON_Schema_Response_Format",
-            "description": "return the response in json schema format",
-            "input_schema": configuration.get("response_type").get("json_schema").get("schema"),
-        }
-    )
-
-    # Update configuration
-    configuration["response_type"] = "default"
-    configuration["prompt"] += (
-        "\n Always return the response in JSON SChema by calling the function JSON_Schema_Response_Format and if no values available then return json with dummy or default vaules"
-    )
-
-
 def add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_flag):
     """Add connected agents as tools"""
     connected_agents = result.get("bridges", {}).get("connected_agents", {})
