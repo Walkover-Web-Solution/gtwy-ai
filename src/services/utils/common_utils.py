@@ -338,7 +338,8 @@ async def handle_pre_tools(parsed_data,custom_config):
         if optimiser_response.get("status") == 1:
             raw = optimiser_response.get("response", {})
             optimised_query = (
-                raw.get("data", {}).get("content")
+                raw.get("response", {}).get("data", {}).get("content")
+                or raw.get("data", {}).get("content")
                 or raw.get("content")
                 or parsed_data["user"]
             )
@@ -516,15 +517,14 @@ def build_service_params(
     bridge_configurations=None,
 ):
     token_calculator = TokenCalculator(parsed_data["service"], model_output_config)
-
     return {
         "customConfig": custom_config,
         "configuration": parsed_data["configuration"],
         "apikey": parsed_data["apikey"],
         "variables": parsed_data["variables"],
         # "user": parsed_data["user"],
-        "user": parsed_data.get("optimised_user") or parsed_data["user"], 
-        "original_user": parsed_data["user"],    
+        "user":parsed_data["user"], 
+        "original_user": parsed_data.get("original_user",parsed_data["user"]),    
         "tools": parsed_data["tools"],
         "org_id": parsed_data["org_id"],
         "bridge_id": parsed_data["bridge_id"],

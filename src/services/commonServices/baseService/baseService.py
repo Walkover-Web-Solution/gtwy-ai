@@ -41,8 +41,8 @@ class BaseService:
         self.apikey = params.get("apikey")
         self.variables = params.get("variables")
         # self.user = params.get("user")
-        self.user = params.get("original_user") or params.get("user")  
-        self.llm_user = params.get("user")   
+        self.user = params.get("user")  
+        self.original_user =params.get("original_user", params.get("user"))  
         self.tool_call = params.get("tools")
         self.org_id = params.get("org_id")
         self.bridge_id = params.get("bridge_id")
@@ -246,7 +246,7 @@ class BaseService:
                 {
                     "thread_id": self.thread_id,
                     "sub_thread_id": self.sub_thread_id,
-                    "user": self.user if self.user else json.dumps(self.tool_call),
+                    "user": self.original_user if self.original_user else json.dumps(self.tool_call),
                     "message": "",
                     "org_id": self.org_id,
                     "bridge_id": self.bridge_id,
@@ -311,7 +311,7 @@ class BaseService:
         return {
             "thread_id": self.thread_id,
             "sub_thread_id": self.sub_thread_id,
-            "user": self.user if self.user else "",
+            "user": self.original_user if self.original_user else "",
             "message": original_message,
             "org_id": self.org_id,
             "bridge_id": self.bridge_id,
