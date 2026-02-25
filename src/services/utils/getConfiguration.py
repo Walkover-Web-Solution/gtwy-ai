@@ -144,6 +144,7 @@ async def _prepare_configuration_response(
             pre_tools_name = api_data.get("script_id")
             pre_tools_data_for_later = api_data
 
+    query_refiner = bridge.get("query_refiner", False)            
     rag_data = bridge.get("doc_ids")
     gpt_memory_context = bridge.get("gpt_memory_context")
     gpt_memory = result.get("bridges", {}).get("gpt_memory")
@@ -175,7 +176,18 @@ async def _prepare_configuration_response(
 
     base_config = {
         "configuration": configuration,
-        "pre_tools": {"name": pre_tools_name, "args": pre_tools_args} if pre_tools_name else None,
+        # "pre_tools": {"name": pre_tools_name, "args": pre_tools_args} if pre_tools_name else None,
+        "query_refiner": query_refiner,
+        "pre_tools": {
+    "name": pre_tools_name,
+    "args": pre_tools_args,
+    "rag_doc_ids": bridge.get("pre_tools_doc_ids") or [],
+    "resource_to_collection_mapping": {
+        d.get("resource_id"): d.get("collection_id")
+        for d in (bridge.get("pre_tools_doc_ids") or [])
+        if isinstance(d, dict) and d.get("resource_id")
+    },
+} if pre_tools_name else None,
         "pre_tools_data": pre_tools_data_for_later,  # Store pre_tools_data for later processing
         "service": service,
         "apikey": apikey,

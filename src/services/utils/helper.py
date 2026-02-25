@@ -549,4 +549,4 @@ class Helper:
             custom_config["response_type"] = new_response_type
         
         if user_message := response_data.get(agent_config_update_keys["_user_message"]):
-            parsed_data["user"] = user_message
+            parsed_data["optimised_user"] = user_message

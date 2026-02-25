@@ -63,6 +63,7 @@ async def send_data_middleware(request: Request, botId: str):
 
         request.state.chatbot = {
             "bridge_id": str(bridges.get("_id", "")),
+            "version_id": str(bridges.get("published_version_id")) if bridges.get("published_version_id") else None,
             "user": message,
             "thread_id": threadId,
             "sub_thread_id": subThreadId,

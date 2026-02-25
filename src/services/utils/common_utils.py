@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from config import Config
 import src.db_services.ConfigurationServices as ConfigurationService
 from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger, try_catch
@@ -207,6 +208,7 @@ def parse_request_body(request_body):
         "chatbot_auto_answers": body.get("chatbot_auto_answers"),
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
+        "query_refiner": body.get("query_refiner"),
     }
 
 
@@ -320,6 +322,28 @@ async def handle_fine_tune_model(parsed_data, custom_config):
 
 
 async def handle_pre_tools(parsed_data,custom_config):
+    rag_doc_ids = []
+    if parsed_data.get("query_refiner"):
+        optimiser_response = await axios_work(
+            {
+                "user": parsed_data["user"],
+                "bridge_id": Config.QUERY_REFINER_BRIDGE_ID,
+                "variables": parsed_data.get("variables", {}),
+            },
+            {
+                "url": "https://api.gtwy.ai/api/v2/model/chat/completion",
+                "headers": {"pauthkey": Config.GTWY_PAUTH_KEY, "Content-Type": "application/json"},
+            },
+        )
+        if optimiser_response.get("status") == 1:
+            raw = optimiser_response.get("response", {})
+            optimised_query = (
+                raw.get("data", {}).get("content")
+                or raw.get("content")
+                or parsed_data["user"]
+            )
+            parsed_data["user"] = optimised_query
+
     if parsed_data["pre_tools"]:
         if parsed_data["pre_tools"].get("args") is None:
             parsed_data["pre_tools"]["args"] = {}
@@ -498,7 +522,9 @@ def build_service_params(
         "configuration": parsed_data["configuration"],
         "apikey": parsed_data["apikey"],
         "variables": parsed_data["variables"],
-        "user": parsed_data["user"],
+        # "user": parsed_data["user"],
+        "user": parsed_data.get("optimised_user") or parsed_data["user"], 
+        "original_user": parsed_data["user"],    
         "tools": parsed_data["tools"],
         "org_id": parsed_data["org_id"],
         "bridge_id": parsed_data["bridge_id"],
