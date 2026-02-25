@@ -122,25 +122,6 @@ async def handle_agent_transfer(
 
     return transfer_result
 
-
-def _resolve_owner_id(state, body):
-    owner_id = state.get("profile", {}).get("owner_id")
-    if not owner_id:
-        return owner_id
-    org_id = state.get("profile", {}).get("org", {}).get("id")
-    if owner_id == org_id:
-        user_id = body.get("user_id")
-        folder_id = body.get("folder_id")
-        is_embed = body.get("is_embed")
-        if is_embed and user_id:
-            if folder_id:
-                return f"{org_id}_{folder_id}_{user_id}"
-            return f"{org_id}_{user_id}"
-        elif folder_id and user_id:
-            return f"{org_id}_{folder_id}_{user_id}"
-    return owner_id
-
-
 def parse_request_body(request_body):
     body = request_body.get("body", {})
     state = request_body.get("state", {})
@@ -224,7 +205,7 @@ def parse_request_body(request_body):
         "orchestrator_flag": body.get("orchestrator_flag"),
         "batch_variables": body.get("batch_variables"),
         "chatbot_auto_answers": body.get("chatbot_auto_answers"),
-        "owner_id": _resolve_owner_id(state, body),
+        "owner_id":  state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
     }
 
@@ -374,6 +355,7 @@ async def handle_pre_tools(parsed_data,custom_config):
                 )
                 if rag_result.get("status") == 1:
                     all_chunks.append(rag_result.get("response", ""))
+    if all_chunks:
             parsed_data["variables"]["pre_function_rag"] = "\n".join(all_chunks)
 
 async def manage_threads(parsed_data):
