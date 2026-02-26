@@ -177,6 +177,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                 "apikey": 1,
                                 "apikey_limit": {"$ifNull": ["$apikey_limit", 0]},
                                 "apikey_usage": {"$ifNull": ["$apikey_usage", 0]},
+                                "apikey_limit_reset_period": {"$ifNull": ["$apikey_limit_reset_period", "monthly"]},
+                                "apikey_limit_start_date": {"$ifNull": ["$apikey_limit_start_date", None]},
                                 "status": {"$ifNull": ["$status", None]},
                             }
                         },
@@ -195,45 +197,46 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                     "$map": {
                                         "input": "$apikeys_array",
                                         "as": "item",
-                                        "in": {
-                                            "k": "$$item.k",
-                                            "v": {
-                                                "$let": {
-                                                    "vars": {
-                                                        "doc": {
-                                                            "$arrayElemAt": [
-                                                                {
-                                                                    "$filter": {
-                                                                        "input": "$apikeys_docs",
-                                                                        "as": "d",
-                                                                        "cond": {
-                                                                            "$eq": [
-                                                                                "$$d._id",
-                                                                                {
-                                                                                    "$convert": {
-                                                                                        "input": "$$item.v",
-                                                                                        "to": "objectId",
-                                                                                        "onError": None,
-                                                                                        "onNull": None,
-                                                                                    }
-                                                                                },
-                                                                            ]
-                                                                        },
-                                                                    }
-                                                                },
-                                                                0,
-                                                            ]
+                                        "in": [
+                                            "$$item.k",  # Service name as the key
+                                            {
+                                                "$arrayElemAt": [
+                                                    {
+                                                        "$map": {
+                                                            "input": {
+                                                                "$filter": {
+                                                                    "input": "$apikeys_docs",
+                                                                    "as": "doc",
+                                                                    "cond": {
+                                                                        "$eq": [
+                                                                            "$$doc._id",
+                                                                            {
+                                                                                "$convert": {
+                                                                                    "input": "$$item.v",
+                                                                                    "to": "objectId",
+                                                                                    "onError": None,
+                                                                                    "onNull": None,
+                                                                                }
+                                                                            },
+                                                                        ]
+                                                                    },
+                                                                }
+                                                            },
+                                                            "as": "matched_doc",
+                                                            "in": {
+                                                                "apikey": "$$matched_doc.apikey",
+                                                                "apikey_limit": "$$matched_doc.apikey_limit",
+                                                                "apikey_usage": "$$matched_doc.apikey_usage",
+                                                                "apikey_limit_reset_period": "$$matched_doc.apikey_limit_reset_period",
+                                                                "apikey_limit_start_date": "$$matched_doc.apikey_limit_start_date",
+                                                                "status": "$$matched_doc.status",
+                                                            },
                                                         }
                                                     },
-                                                    "in": {
-                                                        "apikey":       "$$doc.apikey",
-                                                        "apikey_limit": "$$doc.apikey_limit",
-                                                        "apikey_usage": "$$doc.apikey_usage",
-                                                        "status":       {"$ifNull": ["$$doc.status", None]},
-                                                    },
-                                                }
+                                                    0,  # Get the first matched apikey
+                                                ]
                                             },
-                                        }
+                                        ],
                                     }
                                 }
                             },
@@ -456,6 +459,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         "has_apikeys": {"$cond": [{"$eq": [{"$type": "$apikey_object_id"}, "object"]}, True, False]},
                         "folder_limit": {"$ifNull": ["$folder_limit", 0]},
                         "folder_usage": {"$ifNull": ["$folder_usage", 0]},
+                        "folder_limit_reset_period": {"$ifNull": ["$folder_limit_reset_period", "monthly"]},
+                        "folder_limit_start_date": {"$ifNull": ["$folder_limit_start_date", None]},
                     }
                 },
                 {
@@ -540,6 +545,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                                             "apikey": "$$matched.apikey",
                                                             "apikey_limit": {"$ifNull": ["$$matched.apikey_limit", 0]},
                                                             "apikey_usage": {"$ifNull": ["$$matched.apikey_usage", 0]},
+                                                            "apikey_limit_reset_period": {"$ifNull": ["$$matched.apikey_limit_reset_period", "monthly"]},
+                                                            "apikey_limit_start_date": {"$ifNull": ["$$matched.apikey_limit_start_date", None]},
                                                             "status": {"$ifNull": ["$$matched.status", None]},
                                                         },
                                                     }
@@ -677,10 +684,13 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         "wrapper_id": 1,
                         "folder_limit": {"$ifNull": ["$folder_limit", 0]},
                         "folder_usage": {"$ifNull": ["$folder_usage", 0]},
+                        "folder_limit_reset_period": {"$ifNull": ["$folder_limit_reset_period", "monthly"]},
+                        "folder_limit_start_date": {"$ifNull": ["$folder_limit_start_date", None]},
                         "apikey_object_id": 1,
                         "tools_id": "$config.tools_id",
                         "pre_tool_id": "$config.pre_tool_id",
                         "variables_path": {"$ifNull": ["$config.variables_path", {}]},
+                        "folder_prompt": "$config.prompt",
                     }
                 },
             ]
@@ -733,6 +743,16 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 # Merge folder variables_path into bridge's variables_path
                 bridge_data["variables_path"].update(folder_variables_path)
 
+            # Inject folder customPrompt into bridge prompt if conditions are met
+            folder_prompt = folder_result[0].get("folder_prompt") if folder_result else None
+            if (
+                isinstance(folder_prompt, dict)
+                and folder_prompt.get("useDefaultPrompt") is False
+                and folder_prompt.get("customPrompt")
+            ):
+                bridge_prompt = bridge_data.get("configuration", {}).get("prompt")
+                if isinstance(bridge_prompt, dict):
+                    bridge_data["configuration"]["prompt"]["customPrompt"] = folder_prompt["customPrompt"]
             # Extract folder metadata
             if folder_result and folder_result[0].get("type"):
                 bridge_data["folder_type"] = folder_result[0]["type"]
@@ -743,6 +763,16 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 bridge_data["folder_limit"] = folder_result[0]["folder_limit"]
             else:
                 bridge_data["folder_limit"] = 0
+
+            if folder_result and folder_result[0].get("folder_limit_reset_period"):
+                bridge_data["folder_limit_reset_period"] =folder_result["folder_limit_start_date"]
+            else:
+                bridge_data["folder_limit_reset_period"] = "monthly"
+
+            if folder_result and folder_result[0].get("folder_limit_start_date"):
+                bridge_data["folder_limit_start_date"] =folder_result["folder_limit_start_date"]
+            else:
+                bridge_data["folder_limit_start_date"] = None
 
             if folder_result and folder_result[0].get("folder_usage"):
                 bridge_data["folder_usage"] = folder_result[0]["folder_usage"]

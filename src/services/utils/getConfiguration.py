@@ -5,7 +5,6 @@ from models.mongo_connection import db
 from src.services.utils.common_utils import updateVariablesWithTimeZone
 
 from .getConfiguration_utils import (
-    add_anthropic_json_schema,
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
@@ -99,6 +98,7 @@ async def _prepare_configuration_response(
     if folder_apikeys_dict:
         result["bridges"]["folder_apikeys"] = _normalize_apikeys(folder_apikeys_dict, "Folder API")
 
+    apikey_src = apikeys_dict or folder_apikeys_dict or {}
     apikey = setup_api_key(service, result, apikey, chatbot)
     apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
     apikey_status = result.get('bridges', {}).get('apikey_status')
@@ -165,8 +165,6 @@ async def _prepare_configuration_response(
         built_in_tools or result.get("bridges", {}).get("built_in_tools"),
         gtwy_web_search_filters,
     )
-    add_anthropic_json_schema(service, configuration, tools)
-
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
 
@@ -211,6 +209,23 @@ async def _prepare_configuration_response(
         "web_search_filters": web_search_filters_value,
         "chatbot_auto_answers": bridge_data.get("bridges", {}).get("chatbot_auto_answers"),
         "richui_templates": result.get("bridges", {}).get("richui_templates"),
+        "limit": {
+            "bridge": {
+                "limit": bridge_data.get("bridges", {}).get("bridge_limit"),
+                "limit_start_date": bridge_data.get("bridges", {}).get("bridge_limit_start_date"),
+                "limit_reset_period": bridge_data.get("bridges", {}).get("bridge_limit_reset_period"),
+            },
+            "folder": {
+                "limit": bridge_data.get("bridges", {}).get("folder_limit"),
+                "limit_start_date": bridge_data.get("bridges", {}).get("folder_limit_start_date"),
+                "limit_reset_period": bridge_data.get("bridges", {}).get("folder_limit_reset_period"),
+            },
+            "apikey": {
+                "limit": apikey_src.get(service,{}).get("apikey_limit"),
+                "limit_start_date": apikey_src.get(service,{}).get("apikey_limit_start_date"),
+                "limit_reset_period": apikey_src.get(service,{}).get("apikey_limit_reset_period"),
+            },
+        },
     }
 
     return None, base_config, result, resolved_bridge_id

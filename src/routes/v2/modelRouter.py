@@ -11,6 +11,8 @@ from src.services.commonServices.queueService.queueService import queue_obj
 
 from ...middlewares.getDataUsingBridgeId import add_configuration_data_to_body
 from ...middlewares.middleware import jwt_middleware
+from src.middlewares.openai_sdk_middleware import openai_sdk_middleware
+from src.services.utils.openai_sdk_utils import run_openai_chat_and_format
 
 router = APIRouter()
 
@@ -54,6 +56,9 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         result = await chat_multiple_agents(data_to_send)
         return result
 
+@router.post('/openai/responses', dependencies=[Depends(openai_sdk_middleware)])
+async def openai_sdk_responses(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+    return await run_openai_chat_and_format(request, db_config, chat_completion)
 
 @router.post("/playground/chat/completion/{bridge_id}", dependencies=[Depends(auth_and_rate_limit)])
 async def playground_chat_completion_bridge(

@@ -56,7 +56,7 @@ async def process_batch_file(batch_input_file, apiKey):
             openAI = AsyncOpenAI(api_key=apiKey, http_client=http_client)
 
             result = await openAI.batches.create(
-                input_file_id=batch_input_file_id, endpoint="/v1/chat/completions", completion_window="24h"
+                input_file_id=batch_input_file_id, endpoint="/v1/responses", completion_window="24h"
             )
             print(result)
             return result
