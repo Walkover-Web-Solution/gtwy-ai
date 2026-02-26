@@ -207,6 +207,7 @@ def parse_request_body(request_body):
         "chatbot_auto_answers": body.get("chatbot_auto_answers"),
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
+        "limit": body.get("limit"),
     }
 
 
@@ -538,6 +539,7 @@ def build_service_params(
         "folder_id": parsed_data.get("folder_id"),
         "bridge_configurations": bridge_configurations,
         "owner_id": parsed_data.get("owner_id"),
+        "limit": parsed_data.get("limit"),
     }
 
 

@@ -1,10 +1,15 @@
+import asyncio
 import json
 import logging
 from datetime import datetime
 
 from src.configs.constant import limit_types, redis_keys
 
-from ..cache_service import delete_in_cache, find_in_cache, store_in_cache
+from ..cache_service import delete_in_cache, find_in_cache, store_in_cache, verify_ttl
+from .apiservice import fetch
+from .limit_ttl_utils import calculate_limit_ttl
+
+_THRESHOLD_WEBHOOK_URL = "https://flow.sokt.io/func/scri87toel4G"
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +79,17 @@ async def _check_limit(limit_type, data, version_id):
                 if bridge_id and bridge_id not in bridges:
                     bridges.append(bridge_id)
 
-                    # Different data structure based on limit_type
-                    if limit_type == "bridge":
-                        updated_data = {"usage_value": usage_value, "versions": versions}
-                    else:
-                        updated_data = {"usage_value": usage_value, "versions": versions, "bridges": bridges}
+                # Get stored reset_period and recalculate TTL
+                reset_period = currentusagedata.get("reset_period") or "monthly"
+                ttl = calculate_limit_ttl(reset_period)
 
-                    await store_in_cache(cache_key, updated_data)
+                # Different data structure based on limit_type
+                if limit_type == "bridge":
+                    updated_data = {"usage_value": usage_value, "versions": versions, "reset_period": reset_period}
+                else:
+                    updated_data = {"usage_value": usage_value, "versions": versions, "bridges": bridges, "reset_period": reset_period}
+
+                await store_in_cache(cache_key, updated_data, ttl=ttl)
             else:
                 # If data is not available in Redis, get it from bridge data
                 try:
@@ -95,12 +104,29 @@ async def _check_limit(limit_type, data, version_id):
                 except (ValueError, TypeError):
                     usage_value = 0.0
 
+                # Calculate TTL based on reset period
+                reset_period_field = f"{limit_type}_limit_reset_period"
+                setup_date_field = f"{limit_type}_limit_start_date"
+                
+                # Extract reset period and setup date from data
+                if limit_type == "apikey":
+                    reset_period = data.get("apikeys", {}).get(data.get("service"), {}).get(reset_period_field) or \
+                                   data.get("folder_apikeys", {}).get(data.get("service"), {}).get(reset_period_field)
+                    setup_date = data.get("apikeys", {}).get(data.get("service"), {}).get(setup_date_field) or \
+                                 data.get("folder_apikeys", {}).get(data.get("service"), {}).get(setup_date_field)
+                else:
+                    reset_period = data.get(reset_period_field) or data.get("bridges", {}).get(reset_period_field)
+                    setup_date = data.get(setup_date_field) or data.get("bridges", {}).get(setup_date_field)
+                
+                # Calculate TTL (defaults to monthly if not specified)
+                ttl = calculate_limit_ttl(reset_period or "monthly", setup_date)
+                
                 # Store in Redis with new data structure based on limit_type
                 if limit_type == "bridge":
-                    usage_data = {"usage_value": usage_value, "versions": [version_id]}
+                    usage_data = {"usage_value": usage_value, "versions": [version_id], "reset_period": reset_period}
                 else:
-                    usage_data = {"usage_value": usage_value, "versions": [version_id], "bridges": [bridge_id]}
-                await store_in_cache(cache_key, usage_data)
+                    usage_data = {"usage_value": usage_value, "versions": [version_id], "bridges": [bridge_id], "reset_period": reset_period}
+                await store_in_cache(cache_key, usage_data, ttl=ttl)
 
         except Exception:
             usage_value = 0.0
@@ -198,7 +224,7 @@ async def purge_related_bridge_caches(bridge_id: str, bridge_usage: int = -1):
         logger.error(f"Failed purging related bridge caches: {str(e)}")
 
 
-async def update_usage_cost_in_cache(cache_key, cost_increment, limit_type):
+async def update_usage_cost_in_cache(cache_key, cost_increment, limit_type, limit):
     try:
         cache_data = await find_in_cache(cache_key)
         if cache_data:
@@ -207,56 +233,88 @@ async def update_usage_cost_in_cache(cache_key, cost_increment, limit_type):
                 usage_value = float(currentusagedata.get("usage_value", 0)) if currentusagedata else 0.0
             except (json.JSONDecodeError, TypeError, ValueError):
                 usage_value = 0.0
+            # Key exists — use its current remaining TTL as-is, no recalculation
+            ttl = await verify_ttl(cache_key)
+            reset_period = currentusagedata.get("reset_period") or "monthly"
         else:
-            currentusagedata = None
+            currentusagedata = {}
             usage_value = 0.0
+            # Key is new — calculate TTL from limit metadata
+            limit_info = (limit or {}).get(limit_type, {})
+            reset_period = limit_info.get("limit_reset_period") or "monthly"
+            setup_date = limit_info.get("limit_start_date")
+            ttl = calculate_limit_ttl(reset_period, setup_date)
+
         new_usage = usage_value + cost_increment
 
         if limit_type == "bridge":
-            await store_in_cache(
-                cache_key,
-                {
-                    "usage_value": new_usage,
-                    "versions": currentusagedata.get("versions", []) if currentusagedata else [],
-                },
-            )
+            updated_data = {
+                "usage_value": new_usage,
+                "versions": currentusagedata.get("versions", []) if currentusagedata else [],
+                "reset_period": reset_period,
+            }
         else:
-            await store_in_cache(
-                cache_key,
-                {
-                    "usage_value": new_usage,
-                    "versions": currentusagedata.get("versions", []) if currentusagedata else [],
-                    "bridges": currentusagedata.get("bridges", []) if currentusagedata else [],
-                },
-            )
+            updated_data = {
+                "usage_value": new_usage,
+                "versions": currentusagedata.get("versions", []) if currentusagedata else [],
+                "bridges": currentusagedata.get("bridges", []) if currentusagedata else [],
+                "reset_period": reset_period,
+            }
+        await store_in_cache(cache_key, updated_data, ttl=ttl)
+        return updated_data
 
     except Exception as e:
         logger.error(f"Error updating usage cost for key {cache_key}: {str(e)}")
+    return None
+
+
+async def _notify_cost_update(parsed_data, redis_usage=None):
+    """Fire webhook on every cost update with usage details."""
+    try:
+        payload = {
+            "org_id": parsed_data.get("org_id"),
+            "org_name": parsed_data.get("org_name"),
+            "user_id": parsed_data.get("user_id"),
+            "name": parsed_data.get("name"),
+            "limit": parsed_data.get("limit"),
+            "redis_usage": redis_usage,
+        }
+        await fetch(_THRESHOLD_WEBHOOK_URL, method="POST", headers={}, json_body=payload)
+    except Exception as e:
+        logger.warning(f"Failed to send cost update notification: {e}")
 
 
 async def update_cost(parsed_data):
     try:
         service = parsed_data.get("service")
         apikey_id = (parsed_data.get("apikey_object_id") or {}).get(service)
+        limit= parsed_data.get("limit")
 
         bridge_id = parsed_data.get("bridge_id")
         folder_id = parsed_data.get("folder_id")
         expected_cost = parsed_data.get("tokens", {}).get("total_cost", 0)
+        redis_usage = {}
 
         # Update bridge usage
         if bridge_id and expected_cost:
-            bridge_usage_key = f"{redis_keys['bridgeusedcost_']}{bridge_id}"
-            await update_usage_cost_in_cache(bridge_usage_key, expected_cost, "bridge")
+            bridge_data = await update_usage_cost_in_cache(f"{redis_keys['bridgeusedcost_']}{bridge_id}", expected_cost, "bridge",limit)
+            if bridge_data is not None:
+                redis_usage["bridge"] = bridge_data
 
         # Update folder usage
         if folder_id and expected_cost:
-            folder_usage_key = f"{redis_keys['folderusedcost_']}{folder_id}"
-            await update_usage_cost_in_cache(folder_usage_key, expected_cost, "folder")
+            folder_data = await update_usage_cost_in_cache(f"{redis_keys['folderusedcost_']}{folder_id}", expected_cost, "folder",limit)
+            if folder_data is not None:
+                redis_usage["folder"] = folder_data
 
         # Update API key usage
         if apikey_id and expected_cost:
-            api_usage_key = f"{redis_keys['apikeyusedcost_']}{apikey_id}"
-            await update_usage_cost_in_cache(api_usage_key, expected_cost, "apikey")
+            api_data = await update_usage_cost_in_cache(f"{redis_keys['apikeyusedcost_']}{apikey_id}", expected_cost, "apikey",limit)
+            if api_data is not None:
+                redis_usage["apikey"] = api_data
+
+        if expected_cost:
+            await _notify_cost_update(parsed_data, redis_usage)
 
     except Exception as e:
         logger.error(f"Error updating cost usage cache: {str(e)}")
