@@ -125,15 +125,6 @@ async def chat_bot_auth(request: Request):
                 if check_token.get("ispublic") is not None:
                     request.state.profile["ispublic"] = check_token["ispublic"]
 
-                # Set owner_id logic similar to middleware
-                org_id = str(check_token["org_id"])
-                user_id = str(check_token["user_id"])
-                request.state.profile["owner_id"] = org_id
-                if hasattr(request.state, "embed") and request.state.embed:
-                    request.state.profile["owner_id"] = org_id + "_" + user_id
-                elif hasattr(request.state, "folder_id") and request.state.folder_id:
-                    request.state.profile["owner_id"] = org_id + "_" + request.state.folder_id + "_" + user_id
-
                 return True
         raise HTTPException(status_code=401, detail="unauthorized user")
     except jwt.ExpiredSignatureError:
