@@ -1,3 +1,13 @@
+
+
+api_key_status = {
+    "working": "working",
+    "invalid": "invalid",
+    "unauthorized": "unauthorized",
+    "limited": "exhausted",
+    "service_down": "service_down"
+}
+
 service_name = {
     "openai": "openai",
     "gemini": "gemini",

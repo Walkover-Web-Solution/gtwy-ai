@@ -1,9 +1,11 @@
 import copy
 import traceback
-
 from src.configs.constant import service_name
-
+from src.services.commonServices.baseService.utils import serialize_config
 from ..utils.ai_middleware_format import send_alert
+from src.exceptions import ApiCallError
+
+
 
 
 async def execute_api_call(
@@ -69,9 +71,7 @@ async def execute_api_call(
                 "time_taken": timer.stop("API chat completion"),
             }
         )
-        print("execute_api_call error=>", e)
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+        raise ApiCallError(str(e), status_code=getattr(e, "status_code", None), service=service) from e
 
 
 async def check_space_issue(response, service=None):

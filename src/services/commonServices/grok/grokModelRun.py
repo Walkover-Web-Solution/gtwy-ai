@@ -1,6 +1,7 @@
 import traceback
 
 from globals import logger
+from src.exceptions import ApiCallError
 
 from ...utils.apiservice import fetch
 from ..api_executor import execute_api_call
@@ -59,6 +60,4 @@ async def grok_runmodel(
                 "time_taken": timer.stop("API chat completion"),
             }
         )
-        logger.error("Grok runmodel error=>", error)
-        traceback.print_exc()
-        return {"success": False, "error": str(error)}
+        raise ApiCallError(str(error), status_code=getattr(error, "status_code", None), service=service) from error

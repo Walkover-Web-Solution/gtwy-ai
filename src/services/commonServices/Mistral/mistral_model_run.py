@@ -3,6 +3,7 @@ import traceback
 from mistralai import Mistral
 
 from globals import logger
+from src.exceptions import ApiCallError
 
 from ..api_executor import execute_api_call
 
@@ -56,6 +57,4 @@ async def mistral_model_run(
                 "time_taken": timer.stop("API chat completion"),
             }
         )
-        logger.error("runModel error=>", error)
-        traceback.print_exc()
-        return {"success": False, "error": str(error)}
+        raise ApiCallError(str(error), status_code=getattr(error, "status_code", None), service=service) from error
