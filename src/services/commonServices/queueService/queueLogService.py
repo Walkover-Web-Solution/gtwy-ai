@@ -9,7 +9,7 @@ from src.services.utils.ai_middleware_format import validateResponse
 from src.services.utils.gpt_memory import handle_gpt_memory
 from src.services.utils.hippocampus_utils import save_conversation_to_hippocampus
 from src.services.utils.logger import logger
-from src.services.utils.send_error_webhook import send_error_to_webhook
+from src.services.utils.alert_utils import send_alert_notification
 
 
 class Queue2(BaseQueue):
@@ -55,7 +55,9 @@ class Queue2(BaseQueue):
         
         # Send broadcast response to webhook if configured
         if messages.get("broadcast_response_webhook"):
-            await send_error_to_webhook(**messages["broadcast_response_webhook"])
+            webhook_params = messages["broadcast_response_webhook"]
+            webhook_params["alert_type"] = webhook_params.pop("error_type", "broadcast_response")
+            await send_alert_notification(**webhook_params)
 
     async def consume_messages(self):
         try:

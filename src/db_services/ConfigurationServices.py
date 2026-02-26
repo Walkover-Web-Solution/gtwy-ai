@@ -175,6 +175,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                             "$project": {
                                 "service": 1,
                                 "apikey": 1,
+                                "name": 1,
                                 "apikey_limit": {"$ifNull": ["$apikey_limit", 0]},
                                 "apikey_usage": {"$ifNull": ["$apikey_usage", 0]},
                             }
@@ -222,6 +223,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                                             "as": "matched_doc",
                                                             "in": {
                                                                 "apikey": "$$matched_doc.apikey",
+                                                                "name": "$$matched_doc.name",
                                                                 "apikey_limit": "$$matched_doc.apikey_limit",
                                                                 "apikey_usage": "$$matched_doc.apikey_usage",
                                                             },

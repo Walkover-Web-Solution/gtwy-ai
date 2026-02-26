@@ -5,7 +5,6 @@ from src.configs.constant import redis_keys
 
 from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_prefix, release_lock
 from ..commonServices.baseService.baseService import sendResponse
-from ..utils.send_error_webhook import create_response_format
 from .ai_middleware_format import process_batch_results
 from .batch_script_utils import get_batch_result_handler
 from .helper import Helper
@@ -49,7 +48,7 @@ async def check_batch_status():
 
             try:
                 if webhook.get("url") is not None:
-                    response_format = create_response_format(webhook.get("url"), webhook.get("headers"))
+                    response_format = {"type": "webhook", "cred": {"url": webhook.get("url"), "headers": webhook.get("headers")}}
 
                 try:
                     # Get the appropriate handler for this service

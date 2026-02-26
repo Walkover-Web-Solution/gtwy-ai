@@ -91,6 +91,8 @@ async def _prepare_configuration_response(
 
     # Normalize API keys
     apikeys_dict = result.get("bridges", {}).get("apikeys", {})
+    _active_apikey_data = apikeys_dict.get(service) if isinstance(apikeys_dict.get(service), dict) else {}
+    apikey_name = _active_apikey_data.get("name")
     if apikeys_dict:
         result["bridges"]["apikeys"] = _normalize_apikeys(apikeys_dict, "API")
 
@@ -183,6 +185,7 @@ async def _prepare_configuration_response(
         "service": service,
         "apikey": apikey,
         "apikey_object_id": apikey_object_id,
+        "apikey_name": apikey_name,
         "RTLayer": RTLayer,
         "template": template_content.get("template") if template_content else None,
         "user_reference": result.get("bridges", {}).get("user_reference", ""),

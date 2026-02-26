@@ -3,8 +3,6 @@ import traceback
 
 from src.configs.constant import service_name
 
-from ..utils.ai_middleware_format import send_alert
-
 
 async def execute_api_call(
     configuration,
@@ -45,20 +43,6 @@ async def execute_api_call(
             print("API call failed with error:", result["error"])
             traceback.print_exc()
 
-            # Send alert if required (even on failure)
-            if alert_on_retry:
-                await send_alert(
-                    data={
-                        "org_name": org_name,
-                        "bridge_name": name,
-                        "configuration": configuration,
-                        "message_id": message_id,
-                        "bridge_id": bridge_id,
-                        "org_id": org_id,
-                        "message": "API call failed - no retry attempted",
-                        "error": result.get("error"),
-                    }
-                )
 
             return result
 

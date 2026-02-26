@@ -5,7 +5,7 @@ from functools import wraps
 
 from fastapi.responses import JSONResponse
 
-from src.services.utils.send_error_webhook import send_error_to_webhook
+from src.services.utils.alert_utils import send_alert_notification
 
 
 def handle_exceptions(func):
@@ -19,10 +19,12 @@ def handle_exceptions(func):
             exc_type, exc_obj, exc_tb = sys.exc_info()
             path_params = request_body.get("path_params", {})
             state = request_body.get("state", {})
-            state.get("is_playground")
+            body = request_body.get("body", {})
+            
             tb = traceback.extract_tb(exc_tb)
             last_frame = tb[-1] if tb else None
-            (f"{last_frame.filename.split('/')[-1]}:{last_frame.lineno}" if last_frame else "unknown location")
+            error_location = f"{last_frame.filename.split('/')[-1]}:{last_frame.lineno}" if last_frame else "unknown location"
+            full_traceback = "".join(traceback.format_tb(exc_tb))
 
             if isinstance(exc, ValueError):
                 error_details = exc.args[0] if exc.args else str(exc)
@@ -42,23 +44,37 @@ def handle_exceptions(func):
             else:
                 error_json = {"error_message": str(error_details)}
 
+            error_json["error_type"] = exc_type.__name__
+            error_json["error_location"] = error_location
+            error_json["traceback"] = full_traceback
+
             bridge_id = path_params.get("bridge_id") or body.get("bridge_id")
             org_id = state.get("profile", {}).get("org", {}).get("id")
+            org_name = state.get("profile", {}).get("org", {}).get("name")
             bridge_name = body.get("name")
             is_embed = body.get("is_embed")
             user_id = body.get("user_id")
             thread_id = body.get("thread_id")
             service = body.get("service")
-            await send_error_to_webhook(
-                bridge_id,
-                org_id,
-                error_json,
-                error_type="Error",
+            message_id = body.get("message_id")
+            apikey_name = body.get("apikey_name")
+            apikey_object_id = body.get("apikey_object_id")
+
+            await send_alert_notification(
+                alert_type="code_error",
+                bridge_id=bridge_id,
+                org_id=org_id,
+                org_name=org_name,
                 bridge_name=bridge_name,
+                message_id=message_id,
+                error_log=error_json,
+                message=f"Code level exception: {exc_type.__name__} at {error_location}",
                 is_embed=is_embed,
                 user_id=user_id,
                 thread_id=thread_id,
                 service=service,
+                apikey_name=apikey_name,
+                apikey_object_id=apikey_object_id,
             )
             return JSONResponse(status_code=400, content=json.loads(json.dumps(error_json)))
 

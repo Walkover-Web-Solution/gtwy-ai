@@ -47,7 +47,6 @@ from src.services.utils.rich_text_support import process_chatbot_response
 
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
-from ..utils.send_error_webhook import send_error_to_webhook
 from .baseService.utils import sendResponse
 
 app = FastAPI()
@@ -198,6 +197,8 @@ async def chat(request_body):
                 user_id=parsed_data.get("user_id"),
                 thread_id=parsed_data.get("thread_id"),
                 service=parsed_data.get("service"),
+                apikey_name=parsed_data.get("apikey_name"),
+                apikey_object_id=parsed_data.get("apikey_object_id"),
             )
 
         # Step 8: Configure Custom Settings
@@ -212,7 +213,6 @@ async def chat(request_body):
             thread_info,
             timer,
             memory,
-            send_error_to_webhook,
             bridge_configurations,
         )
         # Step 10: json_schema service conversion
@@ -321,7 +321,6 @@ async def chat(request_body):
                         thread_info,
                         timer,
                         memory,
-                        send_error_to_webhook,
                         bridge_configurations,
                     )
                     # Step 9 : json_schema service conversion
@@ -348,7 +347,6 @@ async def chat(request_body):
                         model_config["configuration"], custom_config, parsed_data["service"]
                     )
 
-                # Execute with updated configuration
                 result = await class_obj.execute()
                 result["response"]["usage"] = params["token_calculator"].get_total_usage()
 
@@ -385,6 +383,8 @@ async def chat(request_body):
                 user_id=parsed_data.get("user_id"),
                 thread_id=parsed_data.get("thread_id"),
                 service=parsed_data.get("service"),
+                apikey_name=parsed_data.get("apikey_name"),
+                apikey_object_id=parsed_data.get("apikey_object_id"),
             )
 
         if parsed_data["configuration"]["type"] == "chat":
@@ -674,6 +674,8 @@ async def batch(request_body):
                 bridge_name=parsed_data.get("name"),
                 is_embed=parsed_data.get("is_embed"),
                 user_id=parsed_data.get("user_id"),
+                apikey_name=parsed_data.get("apikey_name"),
+                apikey_object_id=parsed_data.get("apikey_object_id"),
             )
 
         # Store processed prompts in parsed_data
@@ -775,7 +777,6 @@ async def image(request_body):
             thread_info,
             timer,
             None,
-            send_error_to_webhook,
             bridge_configurations,
         )
 

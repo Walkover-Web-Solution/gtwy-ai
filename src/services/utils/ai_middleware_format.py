@@ -3,6 +3,7 @@ import json
 from config import Config
 from src.configs.constant import service_name
 from src.services.utils.apiservice import fetch
+from .alert_utils import send_alert_notification
 
 
 async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False):
@@ -389,21 +390,15 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
 
 async def validateResponse(alert_flag, configration, bridgeId, message_id, org_id):
     if alert_flag:
-        await send_alert(
-            data={
-                "response": "\n..\n",
-                "configration": configration,
-                "message_id": message_id,
-                "bridge_id": bridgeId,
-                "org_id": org_id,
-                "message": "\n issue occurs",
-            }
+        await send_alert_notification(
+            alert_type="llm_hallucination",
+            configuration=configration,
+            message_id=message_id,
+            bridge_id=bridgeId,
+            org_id=org_id,
+            message="LLM returned empty or whitespace-only response",
+            error_log="\n..\n",
         )
-
-
-async def send_alert(data):
-    dataTosend = {**data, "ENVIROMENT": Config.ENVIROMENT} if Config.ENVIROMENT else data
-    await fetch("https://flow.sokt.io/func/scriYP8m551q", method="POST", json_body=dataTosend)
 
 
 def finish_reason_mapping(finish_reason):

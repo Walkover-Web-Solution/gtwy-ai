@@ -15,9 +15,8 @@ from src.services.cache_service import find_in_cache, make_json_serializable
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
-from src.services.utils.ai_middleware_format import send_alert
+from src.services.utils.alert_utils import send_alert_notification
 from src.services.utils.apiservice import fetch
-from src.services.utils.send_error_webhook import send_error_to_webhook
 from src.services.utils.time import Timer
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
@@ -166,6 +165,7 @@ def parse_request_body(request_body):
         "usage": {},
         "type": body.get("configuration", {}).get("type"),
         "apikey_object_id": body.get("apikey_object_id"),
+        "apikey_name": body.get("apikey_name"),
         "audios": [
             url.get("url")
             for url in body.get("user_urls", [])
@@ -488,7 +488,6 @@ def build_service_params(
     thread_info=None,
     timer=None,
     memory=None,
-    send_error_to_webhook=None,
     bridge_configurations=None,
 ):
     token_calculator = TokenCalculator(parsed_data["service"], model_output_config)
@@ -523,13 +522,13 @@ def build_service_params(
         "type": parsed_data["configuration"].get("type"),
         "token_calculator": token_calculator,
         "apikey_object_id": parsed_data["apikey_object_id"],
+        "apikey_name": parsed_data.get("apikey_name"),
         "images": parsed_data["images"],
         "audios": parsed_data.get("audios"),
         "tool_call_count": parsed_data["tool_call_count"],
         "rag_data": parsed_data["rag_data"],
         "name": parsed_data["name"],
         "org_name": parsed_data["org_name"],
-        "send_error_to_webhook": send_error_to_webhook,
         "built_in_tools": parsed_data["built_in_tools"],
         "files": parsed_data["files"],
         "file_data": parsed_data["file_data"],
@@ -642,19 +641,23 @@ async def process_background_tasks(
 
 
 async def process_background_tasks_for_error(parsed_data, error):
+    # Skip code_error alert for LLM-originated errors — those are already sent as llm_error
+    is_llm_error = isinstance(error, ValueError) and "error occurs from" in str(error)
     # Combine the tasks into a single asyncio.gather call
     tasks = [
-        send_alert(
-            data={
-                "org_name": parsed_data["org_name"],
-                "bridge_name": parsed_data["name"],
-                "configuration": parsed_data["configuration"],
-                "error": str(error),
-                "message_id": parsed_data["message_id"],
-                "bridge_id": parsed_data["bridge_id"],
-                "message": "Exception for the code",
-                "org_id": parsed_data["org_id"],
-            }
+        None if is_llm_error else send_alert_notification(
+            alert_type="code_error",
+            org_name=parsed_data["org_name"],
+            bridge_name=parsed_data["name"],
+            configuration=parsed_data["configuration"],
+            error_log=str(error),
+            message_id=parsed_data["message_id"],
+            bridge_id=parsed_data["bridge_id"],
+            message="Exception for the code",
+            org_id=parsed_data["org_id"],
+            service=parsed_data.get("service"),
+            apikey_name=parsed_data.get("apikey_name"),
+            apikey_object_id=parsed_data.get("apikey_object_id"),
         ),
         create([parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]),
         save_sub_thread_id_and_name(
@@ -742,6 +745,7 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "reasoning_model": parsed_data["reasoning_model"],
         "type": parsed_data["configuration"].get("type"),
         "apikey_object_id": parsed_data["apikey_object_id"],
+        "apikey_name": parsed_data.get("apikey_name"),
         "batch": parsed_data["batch"],
         "webhook": parsed_data["batch_webhook"],
         "folder_id": parsed_data.get("folder_id"),
@@ -815,18 +819,22 @@ def send_error(
     user_id=None,
     thread_id=None,
     service=None,
+    apikey_name=None,
+    apikey_object_id=None,
 ):
     asyncio.create_task(
-        send_error_to_webhook(
-            bridge_id,
-            org_id,
-            error_message,
-            error_type=error_type,
+        send_alert_notification(
+            alert_type=error_type,
+            bridge_id=bridge_id,
+            org_id=org_id,
+            error_message=error_message,
             bridge_name=bridge_name,
             is_embed=is_embed,
             user_id=user_id,
             thread_id=thread_id,
             service=service,
+            apikey_name=apikey_name,
+            apikey_object_id=apikey_object_id,
         )
     )
 
