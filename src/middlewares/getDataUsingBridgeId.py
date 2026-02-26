@@ -74,6 +74,10 @@ async def add_configuration_data_to_body(request: Request):
         batch = body.get("batch") or []
         if user is None and len(images) == 0 and len(batch) == 0:
             raise HTTPException(status_code=400, detail={"success": False, "error": "User message is compulsory"})
+        
+        if model == "auto": # Skip Model validation if Auto is selected
+            return db_config
+
         if not (service in model_config_document and model in model_config_document[service]):
             raise HTTPException(status_code=400, detail={"success": False, "error": "model or service does not exist!"})
         if model_config_document[service][model].get("org_id"):
