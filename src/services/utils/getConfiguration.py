@@ -100,6 +100,7 @@ async def _prepare_configuration_response(
 
     apikey = setup_api_key(service, result, apikey, chatbot)
     apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
+    apikey_status = result.get('bridges', {}).get('apikey_status')
 
     # Handle image type early return
     if configuration["type"] == "image":
@@ -180,6 +181,7 @@ async def _prepare_configuration_response(
         "service": service,
         "apikey": apikey,
         "apikey_object_id": apikey_object_id,
+        "apikey_status": apikey_status,
         "RTLayer": RTLayer,
         "template": template_content.get("template") if template_content else None,
         "user_reference": result.get("bridges", {}).get("user_reference", ""),

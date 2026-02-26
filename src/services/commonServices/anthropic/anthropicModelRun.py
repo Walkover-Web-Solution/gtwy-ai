@@ -5,6 +5,7 @@ from anthropic import AsyncAnthropic
 
 # from src.services.utils.unified_token_validator import validate_anthropic_token_limit
 from globals import logger
+from src.exceptions import ApiCallError
 
 from ..api_executor import execute_api_call
 
@@ -194,6 +195,4 @@ async def anthropic_runmodel(
                 "time_taken": timer.stop("API chat completion"),
             }
         )
-        logger.error("Anthropic runmodel error=>", e)
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+        raise ApiCallError(str(e), status_code=getattr(e, "status_code", None), service=service) from e

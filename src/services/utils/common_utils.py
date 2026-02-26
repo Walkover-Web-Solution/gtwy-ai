@@ -28,6 +28,9 @@ from .helper import Helper
 
 UTC = timezone.utc
 
+from src.services.utils.rich_text_support import process_chatbot_response
+from src.db_services.orchestrator_history_service import orchestrator_collector
+from src.services.utils.api_key_status_helper import mark_apikey_status_from_response
 
 def setup_agent_pre_tools(parsed_data, bridge_configurations):
     """
@@ -166,6 +169,7 @@ def parse_request_body(request_body):
         "usage": {},
         "type": body.get("configuration", {}).get("type"),
         "apikey_object_id": body.get("apikey_object_id"),
+        "apikey_status": body.get('apikey_status'),
         "audios": [
             url.get("url")
             for url in body.get("user_urls", [])
@@ -1153,10 +1157,7 @@ async def update_cost_and_last_used(parsed_data):
         logger.error(f"Error updating cost and last used: {str(e)}")
 
 
-async def update_cost_and_last_used_in_background(parsed_data):
-    """Kick off the async cost cache update using the data available on parsed_data."""
-    if not isinstance(parsed_data, dict):
-        logger.warning("Skipping background cost update due to invalid parsed data.")
-        return
-
-    asyncio.create_task(update_cost_and_last_used(parsed_data))
+async def update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, code, completion_success):
+    if completion_success:
+        asyncio.create_task(update_cost_and_last_used(parsed_data))
+    asyncio.create_task(mark_apikey_status_from_response(original_service, parsed_data, code))

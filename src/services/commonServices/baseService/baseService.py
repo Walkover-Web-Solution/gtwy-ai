@@ -30,6 +30,7 @@ from .utils import (
     tool_call_formatter,
     validate_tool_call,
 )
+from src.exceptions import ApiCallError
 
 executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
 
@@ -64,6 +65,7 @@ class BaseService:
         self.type = params.get("type")
         self.token_calculator = params.get("token_calculator")
         self.apikey_object_id = params.get("apikey_object_id")
+        self.apikey_status = params.get("apikey_status")
         self.image_data = params.get("images")
         self.audio_data = params.get("audios")
         self.tool_call_count = params.get("tool_call_count")
@@ -575,13 +577,17 @@ class BaseService:
                     self.token_calculator,
                 )
             if not response["success"]:
-                raise ValueError(response["error"])
+                raise ApiCallError(response["error"], status_code=response.get("status_code"), service=service)
             return {"success": True, "modelResponse": response["response"]}
         except Exception as e:
             logger.error(f"chats error=>, {str(e)}, {traceback.format_exc()}")
-            raise ValueError(
-                f"error occurs from {self.service} api {e.args[0]}", *e.args[1:], self.func_tool_call_data
-            ) from e
+            err = ApiCallError(
+                f"error occurs from {self.service} api: {e}",
+                status_code=getattr(e, "status_code", None),
+                service=self.service,
+            )
+            raise err from e
+
 
     async def replace_variables_in_args(self, codes_mapping):
         variables = self.variables

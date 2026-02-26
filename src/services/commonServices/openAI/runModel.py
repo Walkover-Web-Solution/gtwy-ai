@@ -5,6 +5,7 @@ from openai import AsyncOpenAI
 
 # from src.services.utils.unified_token_validator import validate_openai_token_limit
 from globals import logger
+from src.exceptions import ApiCallError
 
 from ..api_executor import execute_api_call
 
@@ -139,9 +140,7 @@ async def openai_response_model(
                 "time_taken": timer.stop("API chat completion"),
             }
         )
-        logger.error("runModel error=>", error)
-        traceback.print_exc()
-        return {"success": False, "error": str(error)}
+        raise ApiCallError(str(error), status_code=getattr(error, "status_code", None), service=service) from error
 
 
 async def openai_completion(
@@ -193,6 +192,4 @@ async def openai_completion(
                 "time_taken": timer.stop("API chat completion"),
             }
         )
-        logger.error("runModel error=>", error)
-        traceback.print_exc()
-        return {"success": False, "error": str(error)}
+        raise ApiCallError(str(error), status_code=getattr(error, "status_code", None), service=service) from error

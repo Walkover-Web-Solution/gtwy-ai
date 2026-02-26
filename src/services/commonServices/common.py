@@ -38,9 +38,9 @@ from src.services.utils.common_utils import (
     restructure_json_schema,
     send_error,
     setup_agent_pre_tools,
-    update_cost_and_last_used_in_background,
     update_usage_metrics,
-    process_batch_background_tasks
+    process_batch_background_tasks,
+    update_cost_usage_and_apikey_status_in_background,
 )
 from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
@@ -125,15 +125,21 @@ async def chat_multiple_agents(request_body):
 
 
 @handle_exceptions
-async def chat(request_body):
+async def chat(request_body): 
     result = {}
     class_obj = {}
+    first_execution_error_code = None
+    completion_success = True
+    original_service = None
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-
+        
+        # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
+        original_service = parsed_data["service"]
+        
         # Setup pre_tools for the current agent with its own variables
         setup_agent_pre_tools(parsed_data, bridge_configurations)
         await apply_prompt_wrapper(parsed_data)
@@ -277,6 +283,7 @@ async def chat(request_body):
             # Handle exceptions during execution
             execution_failed = True
             original_error = str(execution_exception)
+            first_execution_error_code = execution_exception.status_code
             original_exception = execution_exception
             logger.error(
                 f"Initial execution failed with {parsed_data['service']}/{parsed_data['model']}: {original_error}"
@@ -289,7 +296,6 @@ async def chat(request_body):
                 # Store original configuration
                 fallback_config = parsed_data["fall_back"]
                 original_model = parsed_data["model"]
-                original_service = parsed_data["service"]
 
                 # Update parsed_data with fallback configuration
                 parsed_data["model"] = fallback_config.get("model", parsed_data["model"])
@@ -507,7 +513,7 @@ async def chat(request_body):
                 result["response"]["testcase_result"] = testcase_result
             else:
                 await process_background_tasks_for_playground(result, parsed_data)
-        await update_cost_and_last_used_in_background(parsed_data)
+        
 
         # Save agent bridge_id to Redis for 3 days (259200 seconds)
         thread_id = parsed_data.get("thread_id")
@@ -573,7 +579,10 @@ async def chat(request_body):
                 success=False,
                 variables=parsed_data.get("variables", {}),
             )
+        completion_success = False
         raise ValueError(error_object) from None
+    finally:
+        await update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, first_execution_error_code, completion_success)
 
 
 @handle_exceptions
