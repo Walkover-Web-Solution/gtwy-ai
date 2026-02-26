@@ -858,9 +858,15 @@ def restructure_json_schema(response_type, service):
                      }
                  }
     
+    # Validate json_schema for all services: if present, it must not be None
+    schema = response_type.get("json_schema")
+    if schema is None and "json_schema" in response_type:
+        raise ValueError(
+            "You have selected response_type: json_schema but its value is not valid."
+        )
+
     match service:
         case "openai":
-            schema = response_type.get("json_schema", {})
             del response_type["json_schema"]
             for key, value in schema.items():
                 response_type[key] = value
