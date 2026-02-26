@@ -753,12 +753,12 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 bridge_data["folder_limit"] = 0
 
             if folder_result and folder_result[0].get("folder_limit_reset_period"):
-                bridge_data["folder_limit_reset_period"] =folder_result["folder_limit_start_date"]
+                bridge_data["folder_limit_reset_period"] = folder_result[0].get("folder_limit_reset_period")
             else:
                 bridge_data["folder_limit_reset_period"] = "monthly"
 
             if folder_result and folder_result[0].get("folder_limit_start_date"):
-                bridge_data["folder_limit_start_date"] =folder_result["folder_limit_start_date"]
+                bridge_data["folder_limit_start_date"] = folder_result[0].get("folder_limit_start_date")
             else:
                 bridge_data["folder_limit_start_date"] = None
 
