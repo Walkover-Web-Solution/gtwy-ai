@@ -157,7 +157,7 @@ def parse_request_body(request_body):
         "variables_path": body.get("variables_path") or {},
         "tool_id_and_name_mapping": body.get("tool_id_and_name_mapping"),
         "suggest": body.get("suggest", False),
-        "message_id": str(uuid.uuid1()),
+        "message_id": body.get("message_id"),
         "reasoning_model": body.get("configuration", {}).get("model") in {"o1-preview", "o1-mini"},
         "gpt_memory": body.get("gpt_memory"),
         "version_id": body.get("version_id"),
@@ -641,24 +641,7 @@ async def process_background_tasks(
 
 
 async def process_background_tasks_for_error(parsed_data, error):
-    # Skip code_error alert for LLM-originated errors — those are already sent as llm_error
-    is_llm_error = isinstance(error, ValueError) and "error occurs from" in str(error)
-    # Combine the tasks into a single asyncio.gather call
-    tasks = [
-        None if is_llm_error else send_alert_notification(
-            alert_type="code_error",
-            org_name=parsed_data["org_name"],
-            bridge_name=parsed_data["name"],
-            configuration=parsed_data["configuration"],
-            error_log=str(error),
-            message_id=parsed_data["message_id"],
-            bridge_id=parsed_data["bridge_id"],
-            message="Exception for the code",
-            org_id=parsed_data["org_id"],
-            service=parsed_data.get("service"),
-            apikey_name=parsed_data.get("apikey_name"),
-            apikey_object_id=parsed_data.get("apikey_object_id"),
-        ),
+    await asyncio.gather(
         create([parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]),
         save_sub_thread_id_and_name(
             parsed_data["thread_id"],
@@ -669,9 +652,8 @@ async def process_background_tasks_for_error(parsed_data, error):
             parsed_data["bridge_id"],
             parsed_data["user"],
         ),
-    ]
-    # Filter out None values
-    await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)
+        return_exceptions=True,
+    )
 
 
 async def process_batch_background_tasks(parsed_data, result, processed_prompts, batch_variables):
@@ -873,6 +855,20 @@ def restructure_json_schema(response_type, service):
             for key, value in schema.items():
                 response_type[key] = value
             return response_type
+        case "anthropic":
+            # ServiceKeys renames response_type -> output_config; value must be API output_config payload (no extra nesting)
+            json_schema = response_type.get("json_schema") or {}
+            if not isinstance(json_schema, dict):
+                return response_type
+            schema = json_schema.get("schema") if "schema" in json_schema else json_schema
+            if not schema or not isinstance(schema, dict):
+                return response_type
+            return {
+                "format": {
+                    "type": "json_schema",
+                    "schema": schema,
+                }
+            }
         case _:
             return response_type
 

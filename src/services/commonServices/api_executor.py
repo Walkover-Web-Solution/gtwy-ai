@@ -1,7 +1,7 @@
 import copy
 import traceback
-
 from src.configs.constant import service_name
+from src.services.commonServices.baseService.utils import serialize_config
 
 
 async def execute_api_call(
@@ -12,7 +12,6 @@ async def execute_api_call(
     bridge_id=None,
     message_id=None,
     org_id=None,
-    alert_on_retry=False,
     name="",
     org_name="",
     service="",
@@ -43,7 +42,6 @@ async def execute_api_call(
             print("API call failed with error:", result["error"])
             traceback.print_exc()
 
-
             return result
 
     except Exception as e:
@@ -66,10 +64,13 @@ async def check_space_issue(response, service=None):
         or service == service_name["grok"]
         or service == service_name["open_router"]
         or service == service_name["mistral"]
-        or service == service_name["gemini"]
         or service == service_name["ai_ml"]
     ):
         content = response.get("choices", [{}])[0].get("message", {}).get("content", None)
+    
+    elif service == service_name["gemini"]:
+        content = response["candidates"][0]["content"]["parts"][0]["text"]
+
     elif service == service_name["anthropic"]:
         content = response.get("content", [{}])
         if content:
@@ -111,6 +112,8 @@ async def check_space_issue(response, service=None):
             or service == service_name["ai_ml"]
         ):
             response["choices"][0]["message"]["content"] = text
+        elif service == service_name["gemini"]:
+            response["candidates"][0]["content"]["parts"][0]["text"] = text
         elif service == service_name["anthropic"]:
             response["content"][0]["text"] = text
         elif service == service_name["openai"]:

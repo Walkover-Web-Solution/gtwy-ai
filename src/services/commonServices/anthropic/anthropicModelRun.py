@@ -179,7 +179,6 @@ async def anthropic_runmodel(
             bridge_id=bridge_id,
             message_id=None,  # Adjust if needed
             org_id=None,  # Adjust if needed
-            alert_on_retry=False,  # Adjust if needed
             name=name,
             org_name=org_name,
             service=service,

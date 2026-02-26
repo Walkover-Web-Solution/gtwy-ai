@@ -42,7 +42,6 @@ async def groq_runmodel(
             bridge_id=bridge_id,
             message_id=message_id,
             org_id=org_id,
-            alert_on_retry=False,
             name=name,
             org_name=org_name,
             service=service,

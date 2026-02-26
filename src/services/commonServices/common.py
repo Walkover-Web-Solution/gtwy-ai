@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from config import Config
+from exceptions.bad_request import LLMServiceError
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
@@ -282,6 +283,20 @@ async def chat(request_body):
                 f"Initial execution failed with {parsed_data['service']}/{parsed_data['model']}: {original_error}"
             )
             result = {"success": False, "error": original_error, "response": {"usage": {}}, "modelResponse": {}}
+            if parsed_data.get("fall_back") and parsed_data["fall_back"].get("is_enable", False):
+                send_error(
+                    parsed_data["bridge_id"],
+                    parsed_data["org_id"],
+                    original_error,
+                    error_type="retry_mechanism",
+                    bridge_name=parsed_data.get("name"),
+                    is_embed=parsed_data.get("is_embed"),
+                    user_id=parsed_data.get("user_id"),
+                    thread_id=parsed_data.get("thread_id"),
+                    service=parsed_data.get("service"),
+                    apikey_name=parsed_data.get("apikey_name"),
+                    apikey_object_id=parsed_data.get("apikey_object_id"),
+                )
 
         # Retry mechanism with fallback configuration
         if execution_failed and parsed_data.get("fall_back") and parsed_data["fall_back"].get("is_enable", False):
@@ -368,24 +383,9 @@ async def chat(request_body):
                 raise retry_error from original_exception
 
         if not result["success"]:
-            raise ValueError(result)
+            raise LLMServiceError(result)
         # Add message_id to response
         result["response"]["data"]["message_id"] = parsed_data["message_id"]
-
-        if original_error:
-            send_error(
-                parsed_data["bridge_id"],
-                parsed_data["org_id"],
-                original_error,
-                error_type="retry_mechanism",
-                bridge_name=parsed_data.get("name"),
-                is_embed=parsed_data.get("is_embed"),
-                user_id=parsed_data.get("user_id"),
-                thread_id=parsed_data.get("thread_id"),
-                service=parsed_data.get("service"),
-                apikey_name=parsed_data.get("apikey_name"),
-                apikey_object_id=parsed_data.get("apikey_object_id"),
-            )
 
         if parsed_data["configuration"]["type"] == "chat":
             if parsed_data["is_rich_text"] and parsed_data["bridgeType"] and not parsed_data["reasoning_model"]:
@@ -573,7 +573,7 @@ async def chat(request_body):
                 success=False,
                 variables=parsed_data.get("variables", {}),
             )
-        raise ValueError(error_object) from None
+        raise LLMServiceError(error_object) if isinstance(error, LLMServiceError) else ValueError(error_object)
 
 
 @handle_exceptions
@@ -863,4 +863,4 @@ async def image(request_body):
                 success=False,
                 variables=parsed_data.get("variables", {}),
             )
-        raise ValueError(error_object) from None
+        raise LLMServiceError(error_object) if isinstance(error, LLMServiceError) else ValueError(error_object)

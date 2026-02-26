@@ -5,6 +5,8 @@ from functools import wraps
 
 from fastapi.responses import JSONResponse
 
+from exceptions.bad_request import LLMServiceError
+from globals import logger
 from src.services.utils.alert_utils import send_alert_notification
 
 
@@ -60,15 +62,20 @@ def handle_exceptions(func):
             apikey_name = body.get("apikey_name")
             apikey_object_id = body.get("apikey_object_id")
 
+            is_llm_error = isinstance(exc, LLMServiceError)
+            alert_type = "llm_error" if is_llm_error else "code_error"
+
+            logger.info(f"handle_exceptions firing alert: alert_type={alert_type}, exc_type={exc_type.__name__}, bridge_id={bridge_id}, org_id={org_id}")
+
             await send_alert_notification(
-                alert_type="code_error",
+                alert_type=alert_type,
                 bridge_id=bridge_id,
                 org_id=org_id,
                 org_name=org_name,
                 bridge_name=bridge_name,
                 message_id=message_id,
                 error_log=error_json,
-                message=f"Code level exception: {exc_type.__name__} at {error_location}",
+                message=f"LLM service error from {service or 'unknown'} at {error_location}" if is_llm_error else f"Code level exception: {exc_type.__name__} at {error_location}",
                 is_embed=is_embed,
                 user_id=user_id,
                 thread_id=thread_id,

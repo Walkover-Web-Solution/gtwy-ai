@@ -41,7 +41,6 @@ async def ai_ml_model_run(
             bridge_id=bridge_id,
             message_id=message_id,
             org_id=org_id,
-            alert_on_retry=True,
             name=name,
             org_name=org_name,
             service=service,
