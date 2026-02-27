@@ -84,20 +84,20 @@ async def jwt_middleware(request: Request):
         elif request.headers.get("proxy_auth_token") or request.headers.get("pauthkey"):
             check_token = await make_data_if_proxy_token_given(request)
 
-            if check_token:
-                check_token['org']['id'] = str(check_token['org']['id'])
-                request.state.profile = check_token
-                request.state.org_id = str(check_token.get('org', {}).get('id'))
-                meta = check_token['user'].get('meta', {})
-                if isinstance(meta, dict):
-                    request.state.embed = meta.get('type', False) == 'embed' or False
-                else:
-                    request.state.embed = False
-                request.state.folder_id = check_token.get('extraDetails', {}).get('folder_id', None)
-                request.state.user_id = str(check_token['user'].get('id'))
-                return 
-            
-            raise HTTPException(status_code=404, detail="unauthorized user")        
+        if check_token:
+            check_token['org']['id'] = str(check_token['org']['id'])
+            request.state.profile = check_token
+            request.state.org_id = str(check_token.get('org', {}).get('id'))
+            meta = check_token['user'].get('meta', {})
+            if isinstance(meta, dict):
+                request.state.embed = meta.get('type', False) == 'embed' or False
+            else:
+                request.state.embed = False
+            request.state.folder_id = check_token.get('extraDetails', {}).get('folder_id', None)
+            request.state.user_id = str(check_token['user'].get('id'))
+            return 
+        
+        raise HTTPException(status_code=404, detail="unauthorized user")        
     except Exception as err:
             traceback.print_exc()
             logger.error(f"middleware error => {str(err)}")
