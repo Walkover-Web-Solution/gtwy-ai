@@ -56,8 +56,6 @@ class GeminiHandler(BaseService):
             else:
                 user_parts = []
 
-                user_parts.append(types.Part(text=self.user))
-
                 if self.image_data and isinstance(self.image_data, list):
                     for image_url in self.image_data:
                         mime_type, _ = mimetypes.guess_type(urlparse(image_url).path)
@@ -67,6 +65,8 @@ class GeminiHandler(BaseService):
                     for audio_url in self.audio_data:
                         mime_type, _ = mimetypes.guess_type(urlparse(audio_url).path)
                         user_parts.append(types.Part.from_uri(file_uri=audio_url, mime_type=mime_type))
+                
+                user_parts.append(types.Part(text=self.user))
 
                 if user_parts:
                     contents.append(types.Content(role='user', parts=user_parts))
