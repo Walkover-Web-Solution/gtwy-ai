@@ -164,6 +164,15 @@ async def chat(request_body):
         # Step 2: Initialize Timer
         timer = initialize_timer(parsed_data["state"])
 
+        # Check Auto Model Selection
+        if parsed_data["model"] == "auto":
+            from src.services.auto_router_service import find_best_model
+            
+            best_model = await find_best_model(parsed_data)
+            if best_model:
+                parsed_data["configuration"]["model"] = best_model
+                parsed_data["model"] = best_model
+
         # Step 3: Load Model Configuration
         model_config, custom_config, model_output_config = await load_model_configuration(
             parsed_data["model"],
