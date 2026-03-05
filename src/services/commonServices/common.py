@@ -49,6 +49,7 @@ from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
 from ..utils.send_error_webhook import send_error_to_webhook
 from .baseService.utils import sendResponse
+from .cache_response_service import try_handle_cached_response
 
 app = FastAPI()
 configurationModel = db["configurations"]
@@ -164,30 +165,47 @@ async def chat(request_body):
         # Step 2: Initialize Timer
         timer = initialize_timer(parsed_data["state"])
 
-        # Step 3: Load Model Configuration
-        model_config, custom_config, model_output_config = await load_model_configuration(
-            parsed_data["model"],
-            parsed_data["configuration"],
-            parsed_data["service"],
-        )
-        # Step 3: Load Model Configuration
-        await handle_fine_tune_model(parsed_data, custom_config)
-
-        # Step 4: Handle Pre-Tools Execution
-        await handle_pre_tools(parsed_data,custom_config)
-
-        # Step 5: Manage Threads
+        # Step 3: Manage Threads
         thread_info = await manage_threads(parsed_data)
-        # add Files from cache is Present
         if len(parsed_data["files"]) == 0:
             parsed_data["files"] = await add_files_to_parse_data(
                 parsed_data["thread_id"], parsed_data["sub_thread_id"], parsed_data["bridge_id"]
             )
 
-        # Step 6: Check and add default values for variables based on variable_state
+        # Step 4: Cache fast-path (request-driven via body.cache_on)
+        if (
+            parsed_data.get("cache_on")
+            and parsed_data.get("chatbot_auto_answers", False)
+            and parsed_data.get("configuration", {}).get("type") == "chat"
+            and parsed_data.get("user")
+            and not parsed_data.get("is_playground", False)
+        ):
+            cached_response = await try_handle_cached_response(
+                parsed_data=parsed_data,
+                timer=timer,
+                thread_info=thread_info,
+                transfer_request_id=transfer_request_id,
+                bridge_configurations=bridge_configurations,
+            )
+            if cached_response is not None:
+                return cached_response
+
+        # Step 5: Load Model Configuration
+        model_config, custom_config, model_output_config = await load_model_configuration(
+            parsed_data["model"],
+            parsed_data["configuration"],
+            parsed_data["service"],
+        )
+        # Step 5: Load Model Configuration
+        await handle_fine_tune_model(parsed_data, custom_config)
+
+        # Step 6: Handle Pre-Tools Execution
+        await handle_pre_tools(parsed_data,custom_config)
+
+        # Step 7: Check and add default values for variables based on variable_state
         process_variable_state(parsed_data)
 
-        # Step 7: Prepare Prompt, Variables and Memory
+        # Step 8: Prepare Prompt, Variables and Memory
         memory, missing_vars = await prepare_prompt(parsed_data, thread_info, model_config, custom_config)
 
         missing_vars = filter_missing_vars(missing_vars, parsed_data["variables_state"])
@@ -206,11 +224,11 @@ async def chat(request_body):
                 service=parsed_data.get("service"),
             )
 
-        # Step 8: Configure Custom Settings
+        # Step 9: Configure Custom Settings
         custom_config = await configure_custom_settings(
             model_config["configuration"], custom_config, parsed_data["service"]
         )
-        # Step 9: Execute Service Handler
+        # Step 10: Execute Service Handler
         params = build_service_params(
             parsed_data,
             custom_config,
@@ -221,7 +239,7 @@ async def chat(request_body):
             send_error_to_webhook,
             bridge_configurations,
         )
-        # Step 10: json_schema service conversion
+        # Step 11: json_schema service conversion
         if "response_type" in custom_config and custom_config["response_type"].get("type") == "json_schema":
             custom_config["response_type"] = restructure_json_schema(
                 custom_config["response_type"], parsed_data["service"]

@@ -574,7 +574,8 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "bridge_id": parsed_data.get("bridge_id"),
             "bridge_name": parsed_data.get("name", ""),
             "system_prompt": parsed_data.get("configuration", {}).get("prompt", ""),
-            "chatbot_auto_answers": parsed_data.get("chatbot_auto_answers", False)
+            "chatbot_auto_answers": parsed_data.get("chatbot_auto_answers", False),
+            "is_cache_hit": parsed_data.get("is_cache_hit", False),
         },
         "type": parsed_data.get("type"),
         "save_files_to_redis": {

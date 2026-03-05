@@ -209,6 +209,7 @@ def parse_request_body(request_body):
         "orchestrator_flag": body.get("orchestrator_flag"),
         "batch_variables": body.get("batch_variables"),
         "chatbot_auto_answers": body.get("chatbot_auto_answers"),
+        "cache_on": body.get("cache_on", False),
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
         "limit": body.get("limit"),

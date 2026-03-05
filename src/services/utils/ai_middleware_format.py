@@ -371,6 +371,34 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
         }
 
 
+def cached_response_formatter(cached_answer, cache_resource_id, cache_score, message_id):
+    return {
+        "success": True,
+        "modelResponse": {"alert_flag": False},
+        "response": {
+            "data": {
+                "content": cached_answer,
+                "role": "assistant",
+                "finish_reason": "completed",
+                "message_id": message_id,
+                "from_cache": True,
+                "cache": {
+                    "source": "agent_memory",
+                    "resource_id": cache_resource_id,
+                    "score": cache_score,
+                },
+                "cache_note": "Served from cache; no AI call was made.",
+            },
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost": 0,
+            },
+        },
+    }
+
+
 async def validateResponse(alert_flag, configration, bridgeId, message_id, org_id):
     if alert_flag:
         await send_alert(

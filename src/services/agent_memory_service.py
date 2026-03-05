@@ -5,10 +5,14 @@ Stores relevant conversations in Hippocampus and tracks frequency in MongoDB.
 Uses call_ai_middleware with the canonicalizer bridge for question processing.
 """
 
-import json
 import logging
 from typing import Optional, Tuple
 from config import Config
+from src.models.agent_memory_model import (
+    create_memory_record,
+    get_memory_record_by_resource_id,
+    increment_memory_frequency,
+)
 from src.services.utils.apiservice import fetch
 
 logger = logging.getLogger(__name__)
@@ -90,7 +94,6 @@ async def search_hippocampus_for_memories(
 async def update_frequency_in_mongodb(resource_id: str) -> bool:
 
     try:
-        from src.models.agent_memory_model import increment_memory_frequency
         success = await increment_memory_frequency(resource_id)
         
         if success:
@@ -105,6 +108,39 @@ async def update_frequency_in_mongodb(resource_id: str) -> bool:
         return False
 
 
+async def get_cached_agent_response(user_question: str, agent_id: str) -> dict:
+
+    try:
+        if not Config.HIPPOCAMPUS_API_KEY or not Config.HIPPOCAMPUS_COLLECTION_ID:
+            logger.warning("Agent Memory Service: Hippocampus not configured for cache lookup")
+            return {"found": False, "answer": None, "score": 0.0, "resource_id": None}
+
+        resource_id, score = await search_hippocampus_for_memories(
+            canonical_question=user_question,
+            agent_id=agent_id,
+            top_k=1,
+            limit=1,
+            minScore=0.85,
+        )
+
+        if not resource_id:
+            return {"found": False, "answer": None, "score": 0.0, "resource_id": None}
+
+        memory_record = await get_memory_record_by_resource_id(resource_id)
+        if not memory_record:
+            return {"found": False, "answer": None, "score": score, "resource_id": resource_id}
+
+        answer = memory_record.get("original_answer", "").strip()
+        if not answer:
+            return {"found": False, "answer": None, "score": score, "resource_id": resource_id}
+
+        return {"found": True, "answer": answer, "score": score, "resource_id": resource_id}
+
+    except Exception as e:
+        logger.error(f"Agent Memory Service: Error fetching cached response: {str(e)}")
+        return {"found": False, "answer": None, "score": 0.0, "resource_id": None}
+
+
 async def create_memory_in_hippocampus_and_mongodb(
     canonical_question: str,
     original_answer: Optional[str],
@@ -113,22 +149,12 @@ async def create_memory_in_hippocampus_and_mongodb(
 ) -> bool:
 
     try:
-        # Create in Hippocampus
-        content = json.dumps({
-            "question": canonical_question,
-            "answer": original_answer or ""  # Empty string if no answer
-        })
-        
+        # Create in Hippocampus with question-only content
         payload = {
             "collectionId": Config.HIPPOCAMPUS_COLLECTION_ID,
             "title": bridge_name if bridge_name else agent_id,
             "ownerId": agent_id,
-            "content": content,
-            "settings": {
-                "strategy": "custom",
-                "chunkingUrl": "https://flow.sokt.io/func/scriQywSNndU",
-                "chunkSize": 4000
-            }
+            "content": canonical_question,
         }
         
         headers = {
@@ -149,17 +175,15 @@ async def create_memory_in_hippocampus_and_mongodb(
             logger.error("Agent Memory Service: Failed to create resource in Hippocampus")
             return False
         
-        # Create in MongoDB (only store answer if provided)
-        from src.models.agent_memory_model import create_memory_record
+        # Create in MongoDB (metadata + original answer + frequency)
         await create_memory_record(
             resource_id=resource_id,
             agent_id=agent_id,
             canonical_question=canonical_question,
-            original_answer=original_answer  # Will be None if save_response=false
+            original_answer=original_answer or "",
         )
-        
-        answer_status = "with answer" if original_answer else "question only"
-        logger.info(f"Agent Memory Service: Created new memory ({answer_status}, frequency=1) for agent_id: {agent_id}")
+
+        logger.info(f"Agent Memory Service: Created new memory metadata (frequency=1) for agent_id: {agent_id}")
         return True
         
     except Exception as e:
@@ -217,14 +241,11 @@ async def save_to_agent_memory(
             logger.error("Agent Memory Service: Canonicalizer did not return canonical question")
             return False
         
-        # Determine if we should save the response
-        save_response = canonical_data.get('save_response', False)
-        
         # Step 5: Create new memory with canonical question
         logger.info(f"Agent Memory Service: Creating new memory for canonical question: '{canonical_question}'")
         return await create_memory_in_hippocampus_and_mongodb(
             canonical_question=canonical_question,
-            original_answer=assistant_answer if save_response else None,
+            original_answer=assistant_answer,
             agent_id=agent_id,
             bridge_name=bridge_name
         )

@@ -38,7 +38,7 @@ class Queue2(BaseQueue):
         agent_memory_data = messages.get("save_agent_memory", {})
         
         
-        if agent_memory_data.get("chatbot_auto_answers", False):
+        if agent_memory_data.get("chatbot_auto_answers", False) and not agent_memory_data.get("is_cache_hit", False):
             await save_to_agent_memory(
                 user_question=agent_memory_data.get("user_message", ""),
                 assistant_answer=agent_memory_data.get("assistant_message", ""),

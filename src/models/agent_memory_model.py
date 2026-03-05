@@ -65,3 +65,8 @@ async def increment_memory_frequency(resource_id: str) -> bool:
     )
     
     return result.modified_count > 0
+
+
+async def get_memory_record_by_resource_id(resource_id: str) -> dict:
+    """Fetch a memory record by Hippocampus resource ID."""
+    return await agent_memory_collection.find_one({"resource_id": resource_id})
