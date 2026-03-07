@@ -44,7 +44,7 @@ from src.services.utils.common_utils import (
 )
 from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
-
+from src.services.auto_router_service import apply_auto_model_selection
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
 from ..utils.send_error_webhook import send_error_to_webhook
@@ -163,6 +163,10 @@ async def chat(request_body):
         parsed_data["variables"] = add_user_in_variables(parsed_data["variables"], parsed_data["user"])
         # Step 2: Initialize Timer
         timer = initialize_timer(parsed_data["state"])
+
+        # Check Auto Model Selection
+        if parsed_data.get("auto_model_select", False):
+            await apply_auto_model_selection(parsed_data)
 
         # Step 3: Load Model Configuration
         model_config, custom_config, model_output_config = await load_model_configuration(

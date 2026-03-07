@@ -102,6 +102,24 @@ async def _prepare_configuration_response(
     apikey = setup_api_key(service, result, apikey, chatbot)
     apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
     apikey_status = result.get('bridges', {}).get('apikey_status')
+    auto_model_select = result.get("bridges", {}).get("auto_model_select")
+
+    service_apikeys = {}
+    merged_apikeys = {
+        **(result.get("bridges", {}).get("apikeys", {}) or {}),
+        **(result.get("bridges", {}).get("folder_apikeys", {}) or {}),
+    }
+
+    for service_name, encrypted_key in merged_apikeys.items():
+        if not encrypted_key:
+            continue
+        try:
+            service_apikeys[service_name] = Helper.decrypt(encrypted_key)
+        except Exception:
+            continue
+
+    if service and apikey:
+        service_apikeys[service] = apikey
 
     # Handle image type early return
     if configuration["type"] == "image":
@@ -181,6 +199,8 @@ async def _prepare_configuration_response(
         "pre_tools_data": pre_tools_data_for_later,  # Store pre_tools_data for later processing
         "service": service,
         "apikey": apikey,
+        "auto_model_select": auto_model_select,
+        "service_apikeys": service_apikeys,
         "apikey_object_id": apikey_object_id,
         "apikey_status": apikey_status,
         "RTLayer": RTLayer,
