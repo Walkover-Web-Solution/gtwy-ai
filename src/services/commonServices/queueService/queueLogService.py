@@ -10,6 +10,7 @@ from src.services.utils.gpt_memory import handle_gpt_memory
 from src.services.agent_memory_service import save_to_agent_memory
 from src.services.utils.logger import logger
 from src.services.utils.send_error_webhook import send_error_to_webhook
+from src.services.utils.events_service import send_api_hit_event
 
 
 class Queue2(BaseQueue):
@@ -45,6 +46,12 @@ class Queue2(BaseQueue):
                 agent_id=agent_memory_data.get("bridge_id", ""),
                 bridge_name=agent_memory_data.get("bridge_name", ""),
                 system_prompt=agent_memory_data.get("system_prompt", ""),
+            )
+        # Call event API only for successful requests (no alert/error)
+        if not messages["validateResponse"].get("alert_flag"):
+            await send_api_hit_event(
+                message_id=messages["validateResponse"].get("message_id"),
+                org_id=messages["validateResponse"].get("org_id"),
             )
 
         # await create(**messages['metrics_service'])
