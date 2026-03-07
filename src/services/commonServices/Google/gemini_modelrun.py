@@ -33,7 +33,7 @@ async def gemini_modelrun(
                 chat_completion = await client.aio.models.generate_content(**config)
                 return {'success': True, 'response': chat_completion.model_dump()}
             except Exception as error:
-                return {"success": False, "error": str(error), "status_code": getattr(error, "status_code", None)}
+                return {"success": False, "error": str(error), "status_code": getattr(error, "code", None)}
 
         # Execute API call with monitoring
         return await execute_api_call(
