@@ -9,7 +9,6 @@ from fastapi import Request
 from globals import logger, traceback
 from src.configs.constant import inbuild_tools, redis_keys, service_name
 from src.controllers.rag_controller import get_text_from_vectorsQuery
-from src.db_services.ConfigurationServices import get_bridges_without_tools, update_bridge
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, store_in_cache
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
@@ -604,33 +603,6 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
 def makeFunctionName(name):
     return re.sub(r"[^a-zA-Z0-9_-]", "", name)
 
-
-async def total_token_calculation(tokens, bridge_id):
-    total_tokens = tokens.get("inputTokens", 0) + tokens.get("outputTokens", 0)
-    bridge_data = (await get_bridges_without_tools(bridge_id, org_id=None)).get("bridges")
-    if bridge_data and "total_tokens" in bridge_data:
-        total_tokens = bridge_data["total_tokens"] + total_tokens
-    else:
-        total_tokens = total_tokens
-
-    # Fix: update_bridge expects update_fields as a dictionary parameter
-    await update_bridge(bridge_id=bridge_id, update_fields={"total_tokens": total_tokens})
-
-
-async def save_files_to_redis(thread_id, sub_thread_id, bridge_id, files):
-    cache_key = f"{redis_keys['files_']}{bridge_id}_{thread_id}_{sub_thread_id}"
-    existing_cache = await find_in_cache(cache_key)
-    if existing_cache:
-        try:
-            cached_files = json.loads(existing_cache)
-            if cached_files == files:
-                await client.expire(f"{REDIS_PREFIX}{cache_key}", 604800)
-            else:
-                await store_in_cache(cache_key, files, 604800)
-        except (json.JSONDecodeError, Exception):
-            await store_in_cache(cache_key, files, 604800)
-    else:
-        await store_in_cache(cache_key, files, 604800)
 
 async def unknown_error_handler(data):
     return await fetch(

@@ -23,10 +23,6 @@ async def consume_messages_in_executor():
     await queue_obj.consume_messages()
 
 
-async def consume_sub_messages_in_executor():
-    await sub_queue_obj.consume_messages()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events."""
@@ -39,10 +35,8 @@ async def lifespan(app: FastAPI):
     await sub_queue_obj.create_queue_if_not_exists()
 
     consume_task = None
-    consume_sub_task = None
     if Config.CONSUMER_STATUS.lower() == "true":
         consume_task = asyncio.create_task(consume_messages_in_executor())
-        consume_sub_task = asyncio.create_task(consume_sub_messages_in_executor())
 
     asyncio.create_task(init_async_dbservice()) if Config.ENVIROMENT == "LOCAL" else await init_async_dbservice()
 
@@ -61,8 +55,6 @@ async def lifespan(app: FastAPI):
 
     if consume_task:
         consume_task.cancel()
-    if consume_sub_task:
-        consume_sub_task.cancel()
 
     await queue_obj.disconnect()
     await sub_queue_obj.disconnect()
@@ -70,8 +62,6 @@ async def lifespan(app: FastAPI):
     try:
         if consume_task:
             await consume_task
-        if consume_sub_task:
-            await consume_sub_task
     except asyncio.CancelledError:
         logger.error("Consumer task was cancelled during shutdown.")
 

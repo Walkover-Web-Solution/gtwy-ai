@@ -1,15 +1,5 @@
-import asyncio
-
 from config import Config
-from src.controllers.conversationController import save_sub_thread_id_and_name
-from src.services.commonServices.baseService.utils import save_files_to_redis, total_token_calculation
 from src.services.commonServices.queueService.baseQueue import BaseQueue
-from src.services.commonServices.suggestion import chatbot_suggestions
-from src.services.utils.ai_middleware_format import validateResponse
-from src.services.utils.gpt_memory import handle_gpt_memory
-from src.services.agent_memory_service import save_to_agent_memory
-from src.services.utils.logger import logger
-from src.services.utils.send_error_webhook import send_error_to_webhook
 
 
 class Queue2(BaseQueue):
@@ -25,61 +15,6 @@ class Queue2(BaseQueue):
         queue_name = Config.LOG_QUEUE_NAME or f"AI-MIDDLEARE-DATA-QUEUE-{Config.ENVIROMENT}"
         super().__init__(queue_name)
         print("Queue2 Service Initialized")
-
-    async def process_messages(self, messages):
-        """Implement your batch processing logic here."""
-        await save_sub_thread_id_and_name(**messages["save_sub_thread_id_and_name"])
-
-        # If message type is 'image', only run save_sub_thread_id_and_name
-        if messages.get("type") == "image":
-            return
-
-        # Save Agent to Hippocampus for chatbot bridge types
-        agent_memory_data = messages.get("save_agent_memory", {})
-        
-        
-        if agent_memory_data.get("chatbot_auto_answers", False):
-            await save_to_agent_memory(
-                user_question=agent_memory_data.get("user_message", ""),
-                assistant_answer=agent_memory_data.get("assistant_message", ""),
-                agent_id=agent_memory_data.get("bridge_id", ""),
-                bridge_name=agent_memory_data.get("bridge_name", ""),
-                system_prompt=agent_memory_data.get("system_prompt", ""),
-            )
-
-        # await create(**messages['metrics_service'])
-        await validateResponse(**messages["validateResponse"])
-        await total_token_calculation(**messages["total_token_calculation"])
-        if messages["check_handle_gpt_memory"]["gpt_memory"]:
-            await handle_gpt_memory(**messages["handle_gpt_memory"])
-        if messages["check_chatbot_suggestions"]["bridgeType"]:
-            await chatbot_suggestions(**messages["chatbot_suggestions"])
-        await save_files_to_redis(**messages["save_files_to_redis"])
-        
-        # Send broadcast response to webhook if configured
-        if messages.get("broadcast_response_webhook"):
-            await send_error_to_webhook(**messages["broadcast_response_webhook"])
-
-    async def consume_messages(self):
-        try:
-            if await self._ensure_connection():
-                await self.channel.set_qos(prefetch_count=int(self.prefetch_count))
-                primary_queue = await self.channel.declare_queue(self.queue_name, durable=True)
-
-                print(f"Started consuming from queue {self.queue_name}")
-                logger.info(f"Started consuming from queue {self.queue_name}")
-
-                # Using the message handler wrapper from BaseQueue with direct reference to process_messages
-                await primary_queue.consume(
-                    lambda message: self._message_handler_wrapper(message, self.process_messages)
-                )
-
-                while True:
-                    await asyncio.sleep(
-                        1
-                    )  # Keeps the consumer running indefinitely, can do something work too if needed
-        except Exception as e:
-            logger.error(f"Error while consuming messages: {e}")
 
 
 sub_queue_obj = Queue2()
