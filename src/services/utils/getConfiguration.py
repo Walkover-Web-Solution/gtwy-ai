@@ -130,21 +130,55 @@ async def _prepare_configuration_response(
 
     template_content = await ConfigurationService.get_template_by_id(template_id) if template_id else None
 
-    # Pre-tools will be set up later in chat_multiple_agents with agent-specific variables
-    pre_tools_name, pre_tools_args = None, None
-    # Store pre_tools_data for later processing
-    pre_tools_data_for_later = None
-    if bridge.get("pre_tools"):
-        pre_tools_list = result.get("bridges", {}).get("pre_tools_data") or []
-        api_data = pre_tools_list[0] if pre_tools_list else {}
-        api_data.pop("_id", None)
-        if api_data.get("bridge_ids"):
-            del api_data["bridge_ids"]
-        if api_data.get("folder_id"):
-            del api_data["folder_id"]
-        if api_data:
-            pre_tools_name = api_data.get("script_id")
-            pre_tools_data_for_later = api_data
+    # Pre-tools — build list for later processing in chat_multiple_agents
+    pre_tools_data_for_later = []
+    raw_pre_tools = bridge.get("pre_tools", [])
+
+    if raw_pre_tools:
+        # pre_tools_data is populated by DB lookup for custom_function types
+        custom_function_data_list = result.get("bridges", {}).get("pre_tools_data") or []
+
+    for tool_entry in raw_pre_tools:
+        # Backward compat: old format was a plain string (function ID)
+        if isinstance(tool_entry, str):
+            api_data = custom_function_data_list[0] if custom_function_data_list else {}
+            api_data = {k: v for k, v in api_data.items() if k not in ("_id", "bridge_ids", "folder_id")}
+            if api_data:
+                pre_tools_data_for_later.append({
+                    "_type": "custom_function",
+                    "function_data": api_data,
+                    "config": {},
+                    "args": {},
+                })
+        else:
+            tool_type = tool_entry.get("type")
+            tool_config = tool_entry.get("config", {})
+            tool_args = tool_entry.get("args", {})
+
+            if tool_type == "custom_function":
+                fn_id = tool_config.get("function_id")          
+                if tool_config.get("script_id"):
+                      api_data = {"script_id": tool_config.get("script_id"),  "required_params": tool_config.get("required_params", [])}
+                else:
+                      api_data = next(
+                          (d for d in custom_function_data_list if str(d.get("_id")) == str(fn_id)),
+                          {}
+                      )
+                api_data = {k: v for k, v in api_data.items() if k not in ("_id", "bridge_ids", "folder_id")}
+                if api_data:
+                    pre_tools_data_for_later.append({
+                        "_type": "custom_function",
+                        "function_data": api_data,
+                        "config": tool_config,
+                        "args": tool_args,
+                    })
+            else:
+                # Built-in types — all data is inline
+                pre_tools_data_for_later.append({
+                    "_type": tool_type,
+                    "config": tool_config,
+                    "args": tool_args,
+                })
 
     rag_data = bridge.get("doc_ids")
     gpt_memory_context = bridge.get("gpt_memory_context")
@@ -177,8 +211,7 @@ async def _prepare_configuration_response(
 
     base_config = {
         "configuration": configuration,
-        "pre_tools": {"name": pre_tools_name, "args": pre_tools_args} if pre_tools_name else None,
-        "pre_tools_data": pre_tools_data_for_later,  # Store pre_tools_data for later processing
+        "pre_tools_data": pre_tools_data_for_later,
         "service": service,
         "apikey": apikey,
         "apikey_object_id": apikey_object_id,

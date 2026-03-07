@@ -3,8 +3,8 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
-import src.db_services.ConfigurationServices as ConfigurationService
+from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
+from src.controllers.rag_controller import get_text_from_vectorsQuery
 from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger, try_catch
 from src.configs.model_configuration import model_config_document
@@ -35,46 +35,52 @@ from src.services.utils.api_key_status_helper import mark_apikey_status_from_res
 def setup_agent_pre_tools(parsed_data, bridge_configurations):
     """
     Setup pre_tools for the current agent with its own variables.
-    This function populates pre_tools args based on the agent's specific variables.
-
-    Args:
-        parsed_data: The parsed request data containing bridge_id, variables, and pre_tools
-        bridge_configurations: Dictionary of all agent configurations
+    Populates resolved args for each pre-tool from agent variables.
     """
     current_bridge_id = parsed_data.get("bridge_id")
     if not current_bridge_id or not bridge_configurations:
         return
 
     current_config = bridge_configurations.get(current_bridge_id, {})
-    pre_tools_data = current_config.get("pre_tools_data")
+    pre_tools_list = current_config.get("pre_tools_data") or []
     agent_variables = parsed_data.get("variables", {})
+    if not pre_tools_list:
+        return
+    resolved_pre_tools = []
+    for pre_tool in pre_tools_list:
+        tool_type = pre_tool.get("_type")
+        tool_config = pre_tool.get("config", {})
+        tool_args_mapping = pre_tool.get("args", {})  # param -> agent_variable_name
+        resolved_args = dict(tool_config)
 
-    if pre_tools_data and parsed_data.get("pre_tools"):
-        # Get required params from pre_tools_data
-        required_params = pre_tools_data.get("required_params", [])
+        for param, var_name in tool_args_mapping.items():
+            if var_name in agent_variables:
+                resolved_args[param] = agent_variables[var_name]
+            elif var_name:
+                # var_name provided but not in agent_variables — leave as-is or skip
+                resolved_args[param] = var_name
 
-        # Get variables_path mapping for the current agent
-        script_id = pre_tools_data.get("script_id")
-        variables_path = current_config.get("variables_path", {}).get(script_id, {}) if script_id else {}
+        if tool_type == "custom_function":
+            function_data = pre_tool.get("function_data", {})
+            # For custom_function, also resolve required_params directly from agent_variables
+            # if not already covered by args mapping
+            required_params = function_data.get("required_params", [])
+            for param in required_params:
+                if param not in resolved_args:
+                    if param in agent_variables:
+                        resolved_args[param] = agent_variables[param]
+            resolved_pre_tools.append({
+                "type": "custom_function",
+                "name": function_data.get("script_id"),
+                "args": resolved_args,
+            })
+        else:
+            resolved_pre_tools.append({
+                "type": tool_type,
+                "args": resolved_args,
+            })
 
-        # Build args from agent's own variables
-        args = {}
-        for param in required_params:
-            # Check if there's a mapping in variables_path for this param
-            if variables_path and param in variables_path:
-                # Get the mapped variable name
-                mapped_variable = variables_path[param]
-                # Use the mapped variable to get value from agent_variables
-                if mapped_variable in agent_variables:
-                    args[param] = agent_variables[mapped_variable]
-            elif param in agent_variables:
-                # If no mapping exists, use param directly
-                args[param] = agent_variables[param]
-
-        # Update the pre_tools args with agent-specific variables
-        parsed_data["pre_tools"]["args"] = args
-        logger.info(f"Set up pre_tools for agent {current_bridge_id} with args: {args}")
-
+    parsed_data["pre_tools"] = resolved_pre_tools
 
 async def handle_agent_transfer(
     result, request_body, bridge_configurations, chat_function, current_bridge_id=None, transfer_request_id=None
@@ -324,26 +330,92 @@ async def handle_fine_tune_model(parsed_data, custom_config):
         custom_config["model"] = parsed_data["fine_tune_model"]
 
 
-async def handle_pre_tools(parsed_data,custom_config):
-    if parsed_data["pre_tools"]:
-        if parsed_data["pre_tools"].get("args") is None:
-            parsed_data["pre_tools"]["args"] = {}
-        parsed_data["pre_tools"]["args"]["user"] = parsed_data["user"]
-        parsed_data["pre_tools"]["args"]["_response_type"] = parsed_data["configuration"]["response_type"]
-        pre_function_response = await axios_work(
-            parsed_data["pre_tools"].get("args", {}),
-            {"url": f"https://flow.sokt.io/func/{parsed_data['pre_tools'].get('name')}"},
-        )
-        if pre_function_response.get("status") == 0:
-            parsed_data["variables"]["pre_function"] = (
-                f"Error while calling prefunction. Error message: {pre_function_response.get('response')}"
-            )
-        else:
-            parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
-            response_data = pre_function_response.get("response", {})
-            
-            Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
+async def handle_pre_tools(parsed_data, custom_config):
+    pre_tools = parsed_data.get("pre_tools") or []
+    if not pre_tools:
+        return
 
+    for tool in pre_tools:
+        tool_type = tool.get("type")
+        args = dict(tool.get("args", {}))
+        args["user"] = parsed_data["user"]
+        args["_response_type"] = parsed_data["configuration"]["response_type"]
+
+        if tool_type == "custom_function":
+            pre_function_response = await axios_work(
+                args,
+                {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
+            )
+            if pre_function_response.get("status") == 0:
+                parsed_data["variables"]["pre_function"] = (
+                    f"Error while calling prefunction. Error message: {pre_function_response.get('response')}"
+                )
+            else:
+                parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
+                response_data = pre_function_response.get("response", {})
+                Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
+
+        elif tool_type == "query_refiner":
+            prompt = args.get("prompt", "")
+            user_query = parsed_data["user"]
+            variables = {**parsed_data.get("variables", {})}
+            if prompt:
+                variables["prompt"] = prompt
+            refined = await axios_work(
+                {
+                    "user": user_query,
+                    "bridge_id": Config.QUERY_REFINER_BRIDGE_ID,
+                    "variables": variables,
+                },
+                {
+                    "url": "https://api.gtwy.ai/api/v2/model/chat/completion",
+                    "headers": {"pauthkey": Config.GTWY_PAUTH_KEY, "Content-Type": "application/json"},
+                },
+            )
+            if refined.get("status") == 1:
+                raw = refined.get("response", {})
+                optimised_query = (
+                    raw.get("response", {}).get("data", {}).get("content")
+                    or raw.get("data", {}).get("content")
+                    or raw.get("content")
+                    or user_query
+                )
+                parsed_data["user"] = optimised_query
+        
+        elif tool_type == "rag_knowledgebase":
+            resource_id = args.get("resource_id")
+            collection_id = args.get("collection_id")
+            owner_id = parsed_data.get("owner_id")
+            resource_to_collection_mapping = {resource_id: collection_id} if resource_id and collection_id else {}
+            if not resource_id or not collection_id:
+                parsed_data["variables"]["rag_pre_result"] = ""
+                logger.warning(f"rag_knowledgebase pre-tool missing resource_id or collection_id for bridge {parsed_data.get('bridge_id')}")
+                continue
+            rag_response = await get_text_from_vectorsQuery(
+                {
+                    "resource_id": resource_id,
+                    "query": parsed_data["user"],
+                    "top_k": args.get("top_k", 3),
+                    "minScore": args.get("minScore", 0.1),
+                },
+                Flag=True,
+                owner_id=owner_id,
+                resource_to_collection_mapping=resource_to_collection_mapping,
+            )
+            if rag_response.get("status") == 1:
+                parsed_data["variables"]["rag_pre_result"] = rag_response.get("response")
+            else:
+                parsed_data["variables"]["rag_pre_result"] = f"Error: {rag_response.get('response', 'unknown error')}"
+        
+        elif tool_type == "gtwy_web_search":
+             web_response = await call_firecrawl_scrape(args)
+             if web_response.get("status") == 1:
+                parsed_data["variables"]["web_search_pre_result"] = web_response.get("response")
+             else:
+                response = web_response.get('response')
+                error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
+                parsed_data["variables"]["web_search_pre_result"] = error_msg
+        
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
     sub_thread_id = parsed_data["sub_thread_id"]
@@ -504,6 +576,7 @@ def build_service_params(
         "apikey": parsed_data["apikey"],
         "variables": parsed_data["variables"],
         "user": parsed_data["user"],
+        "original_user": parsed_data.get("original_user", parsed_data["user"]),
         "tools": parsed_data["tools"],
         "org_id": parsed_data["org_id"],
         "bridge_id": parsed_data["bridge_id"],
