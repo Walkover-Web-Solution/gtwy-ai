@@ -9,7 +9,7 @@ from src.services.utils.auto_router_utils import (
     get_supported_services,
 )
 
-client = AsyncNotDiamond(api_key=Config.NOTDIAMOND_API_KEY)
+client = AsyncNotDiamond(api_key=Config.NOTDIAMOND_API_KEY) if Config.NOTDIAMOND_API_KEY else None
 
 INTERNAL_TO_NOTDIAMOND_PROVIDER = {value: key for key, value in PROVIDER_NAME_OVERRIDES.items()}
 
@@ -60,7 +60,7 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation):
             ):
                 providers.append({"provider": notdiamond_provider, "model": model})
 
-    if providers:
+    if providers and client:
         try: 
             result = await client.model_router.select_model(
                 messages=conversation_messages
