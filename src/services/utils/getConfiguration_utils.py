@@ -10,44 +10,40 @@ from src.services.utils.service_config_utils import tool_choice_function_name_fo
 apiCallModel = db["apicalls"]
 
 
-async def validate_bridge(bridge_data, result):
+async def validate_bridge(agent_data):
     """Validate bridge status and existence"""
-    bridge_status = bridge_data.get("bridges", {}).get("bridge_status") or bridge_data.get("bridge_status", 0)
+    if not agent_data.get("success"):
+        return {"success": False, "error": "bridge_id does not exist"}
+
+    bridge_status = agent_data.get("bridges", {}).get("bridge_status", 1)
     if bridge_status == 0:
         raise Exception("Bridge is Currently Paused")
 
-    if not result.get("success"):
-        return {"success": False, "error": "bridge_id does not exist"}
     return None
 
 
 async def get_bridge_data(bridge_id, org_id, version_id):
     """Fetch bridge data from database"""
-    result = await ConfigurationService.get_bridges_with_tools_and_apikeys(
+    agent_data = await ConfigurationService.get_bridges_with_tools_and_apikeys(
         bridge_id=bridge_id, org_id=org_id, version_id=version_id
     )
 
-    bridge_id = bridge_id or result.get("bridges", {}).get("parent_id")
+    bridge_id = bridge_id or agent_data.get("bridges", {}).get("parent_id")
 
-    if version_id:
-        bridge_data = await ConfigurationService.get_bridges_with_redis(bridge_id=bridge_id, org_id=org_id)
-    else:
-        bridge_data = result
-
-    return result, bridge_data, bridge_id
+    return agent_data, bridge_id
 
 
-def setup_configuration(configuration, result, service):
+def setup_configuration(configuration, agent_data, service):
     """Setup and merge configuration from database and input"""
-    db_configuration = result.get("bridges", {}).get("configuration", {})
-    service = service or (result.get("bridges", {}).get("service", "").lower())
+    db_configuration = agent_data.get("bridges", {}).get("configuration", {})
+    service = service or (agent_data.get("bridges", {}).get("service", "").lower())
 
     if configuration:
         db_configuration.update(configuration)
 
     # Convert prompt dict (role/goal/instruction) to a proper string prompt
     prompt = db_configuration.get("prompt")
-    folder_id = result.get("bridges", {}).get("folder_id")
+    folder_id = agent_data.get("bridges", {}).get("folder_id")
 
     if folder_id is not None and isinstance(prompt, dict):
         use_default = prompt.get("useDefaultPrompt")
@@ -73,22 +69,22 @@ def setup_configuration(configuration, result, service):
     return db_configuration, service
 
 
-def setup_tool_choice(configuration, result, service):
+def setup_tool_choice(configuration, agent_data, service):
     """Setup tool choice configuration"""
     tool_choice_ids = configuration.get("tool_choice", [])
     toolchoice = None
 
     # Find tool choice from API calls
-    for _, api_data in result.get("bridges", {}).get("apiCalls", {}).items():
-        if api_data["_id"] in tool_choice_ids:
-            toolchoice = api_data.get("title") or makeFunctionName(
-                api_data["endpoint_name"] or api_data["function_name"]
+    for _, api_call_data in agent_data.get("bridges", {}).get("apiCalls", {}).items():
+        if api_call_data["_id"] in tool_choice_ids:
+            toolchoice = api_call_data.get("title") or makeFunctionName(
+                api_call_data["endpoint_name"] or api_call_data["function_name"]
             )
             break
     if not toolchoice:
-        connected_agents = result.get("bridges", {}).get("connected_agents", {})
-        for agent_name, agent_data in connected_agents.items():
-            if tool_choice_ids == agent_data["bridge_id"]:
+        connected_agents = agent_data.get("bridges", {}).get("connected_agents", {})
+        for agent_name, agent_info in connected_agents.items():
+            if tool_choice_ids == agent_info["bridge_id"]:
                 toolchoice = makeFunctionName(agent_name)
                 break
 
@@ -178,13 +174,13 @@ def process_extra_tool(tool):
     return tool_format, tool_mapping, {tool_name: variable_path}
 
 
-def setup_tools(result, variables_path_bridge, extra_tools):
+def setup_tools(agent_data, variables_path_bridge, extra_tools):
     """Setup tools and tool mappings"""
     tools = []
     tool_id_and_name_mapping = {}
     variable_path = {}
     # Process API calls
-    for _, api_data in result.get("bridges", {}).get("apiCalls", {}).items():
+    for _, api_data in agent_data.get("bridges", {}).get("apiCalls", {}).items():
         tool_format, tool_mapping = process_api_call_tool(api_data, variables_path_bridge)
         if tool_format:
             name_of_function = tool_format["name"]
@@ -201,10 +197,10 @@ def setup_tools(result, variables_path_bridge, extra_tools):
     return tools, tool_id_and_name_mapping, {**variables_path_bridge, **variable_path}
 
 
-def setup_api_key(service, result, apikey, chatbot):
+def setup_api_key(service, agent_data, apikey, chatbot):
     """Setup API key for the service"""
-    db_apikeys = result.get("bridges", {}).get("apikeys", {})
-    db_apikeys_object_id = result.get("bridges", {}).get("apikey_object_id", {})
+    db_apikeys = agent_data.get("bridges", {}).get("apikeys", {})
+    db_apikeys_object_id = agent_data.get("bridges", {}).get("apikey_object_id", {})
     # Get API key for the service
     db_api_key = db_apikeys.get(service)
 
@@ -214,13 +210,13 @@ def setup_api_key(service, result, apikey, chatbot):
         db_api_key = db_apikeys.get("openai")
 
     # Check for folder API keys if folder_id exists
-    folder_api_key = result.get("bridges", {}).get("folder_apikeys", {}).get(service)
+    folder_api_key = agent_data.get("bridges", {}).get("folder_apikeys", {}).get(service)
     if folder_api_key:
         db_api_key = folder_api_key
 
     # Validate API key existence
     if chatbot and (service == "openai"):
-        model = result.get("bridges", {}).get("configuration", {}).get("model")
+        model = agent_data.get("bridges", {}).get("configuration", {}).get("model")
         # If both keys are not present
         if not (apikey or db_api_key):
             # Use Config.OPENAI_API_KEY only if model is gpt-5-nano
@@ -233,25 +229,25 @@ def setup_api_key(service, result, apikey, chatbot):
         raise Exception("Could not find api key or Agent is not Published")
 
     # Handle fallback configuration
-    fallback_config = result.get("bridges", {}).get("fall_back")
+    fallback_config = agent_data.get("bridges", {}).get("fall_back")
     if fallback_config:
         fallback_service = fallback_config.get("service")
         fallback_apikey = db_apikeys.get(fallback_service)
         if fallback_apikey:
-            result["bridges"]["fall_back"]["apikey"] = Helper.decrypt(fallback_apikey)
-            result["bridges"]["fall_back"]["apikey_object_id"] = db_apikeys_object_id.get(fallback_service)
+            agent_data["bridges"]["fall_back"]["apikey"] = Helper.decrypt(fallback_apikey)
+            agent_data["bridges"]["fall_back"]["apikey_object_id"] = db_apikeys_object_id.get(fallback_service)
 
     # Use provided API key or decrypt from database
     return apikey if apikey else Helper.decrypt(db_api_key)
 
 
-def setup_pre_tools(bridge, result, variables):
+def setup_pre_tools(bridge, agent_data, variables):
     """Setup pre-tools configuration"""
     pre_tools = bridge.get("pre_tools", [])
     if not pre_tools:
         return None, None
 
-    api_data = result.get("bridges", {}).get("pre_tools_data", [{}])[0]
+    api_data = agent_data.get("bridges", {}).get("pre_tools_data", [{}])[0]
     if api_data is None:
         raise Exception("Didn't find the pre_function")
 
@@ -356,16 +352,16 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
     }
 
 
-def add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_flag):
+def add_connected_agents(agent_data, tools, tool_id_and_name_mapping, orchestrator_flag):
     """Add connected agents as tools"""
-    connected_agents = result.get("bridges", {}).get("connected_agents", {})
-    connected_agent_details = result.get("bridges", {}).get("connected_agent_details", {})
+    connected_agents = agent_data.get("bridges", {}).get("connected_agents", {})
+    connected_agent_details = agent_data.get("bridges", {}).get("connected_agent_details", {})
 
     if not connected_agents:
         return
 
     # Check if type is orchestrator
-    is_orchestrator = orchestrator_flag or result.get("bridges", {}).get("orchestrator", False)
+    is_orchestrator = orchestrator_flag or agent_data.get("bridges", {}).get("orchestrator", False)
 
     for bridge_name, bridge_info in connected_agents.items():
         bridge_id_value = bridge_info.get("bridge_id", "")
