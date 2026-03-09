@@ -518,7 +518,7 @@ def build_service_params(
         "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data["response_format"],
-        "execution_time_logs": [],
+        "execution_time_logs": parsed_data.get("execution_time_logs", []),
         "function_time_logs": [],
         "timer": timer,
         "variables_path": parsed_data["variables_path"],

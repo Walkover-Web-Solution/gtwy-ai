@@ -1,5 +1,3 @@
-import traceback
-from globals import logger
 from config import Config
 from notdiamond import AsyncNotDiamond
 from src.configs.model_configuration import model_config_document
@@ -13,13 +11,16 @@ client = AsyncNotDiamond(api_key=Config.NOTDIAMOND_API_KEY)
 
 INTERNAL_TO_NOTDIAMOND_PROVIDER = {value: key for key, value in PROVIDER_NAME_OVERRIDES.items()}
 
-async def apply_auto_model_selection(parsed_data):
+async def apply_auto_model_selection(parsed_data, timer):
     configuration = parsed_data.get("configuration", {})
+    execution_time_logs = parsed_data.setdefault("execution_time_logs", [])
     best_model, best_service = await find_best_model(
         service_apikeys=parsed_data.get("service_apikeys") or {},
         prompt=configuration.get("prompt", ""),
         user_message=parsed_data.get("user", ""),
         conversation=configuration.get("conversation", []),
+        timer=timer,
+        execution_time_logs=execution_time_logs
     )
 
     if not best_model or not best_service:
@@ -35,7 +36,7 @@ async def apply_auto_model_selection(parsed_data):
     if selected_apikey:
         parsed_data["apikey"] = selected_apikey
 
-async def find_best_model(service_apikeys, prompt, user_message, conversation):
+async def find_best_model(service_apikeys, prompt, user_message, conversation, timer, execution_time_logs=None):
     available_services = list(service_apikeys.keys())
 
     conversation_messages = [
@@ -62,6 +63,7 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation):
 
     if providers:
         try: 
+            timer.start()
             result = await client.model_router.select_model(
                 messages=conversation_messages
                 + [
@@ -71,13 +73,20 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation):
                 llm_providers=providers,
                 tradeoff="cost"
             )
+            if execution_time_logs is not None:
+                execution_time_logs.append(
+                    {"step": "NotDiamond select_model", "time_taken": timer.stop("NotDiamond select_model")}
+                )
     
             best_model = result.providers[0].model
             best_service = PROVIDER_NAME_OVERRIDES.get(result.providers[0].provider, result.providers[0].provider)
             return best_model, best_service
     
-        except Exception as error:
-            logger.error(f"Error in Not Diamond: {str(error)}, {traceback.format_exc()}")
+        except Exception:    
+            if execution_time_logs is not None:
+                execution_time_logs.append(
+                    {"step": "NotDiamond select_model failed", "time_taken": timer.stop("NotDiamond select_model")}
+                )
             return None, None
     
     else:

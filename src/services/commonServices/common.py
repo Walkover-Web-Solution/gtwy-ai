@@ -166,7 +166,7 @@ async def chat(request_body):
 
         # Check Auto Model Selection
         if parsed_data.get("auto_model_select", False):
-            await apply_auto_model_selection(parsed_data)
+            await apply_auto_model_selection(parsed_data, timer)
 
         # Step 3: Load Model Configuration
         model_config, custom_config, model_output_config = await load_model_configuration(
