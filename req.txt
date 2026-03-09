@@ -114,3 +114,4 @@ opentelemetry-instrumentation-requests==0.37b0
 opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-asgi
 opentelemetry-instrumentation-httpx
+notdiamond
