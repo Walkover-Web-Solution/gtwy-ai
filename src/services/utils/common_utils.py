@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 from src.controllers.rag_controller import get_text_from_vectorsQuery
+from src.services.utils.ai_call_util import call_ai_middleware
+from src.configs.constant import bridge_ids
 from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger, try_catch
 from src.configs.model_configuration import model_config_document
@@ -147,6 +149,7 @@ def parse_request_body(request_body):
         "sub_thread_id": body.get("sub_thread_id") or body.get("thread_id"),
         "org_id": state.get("profile", {}).get("org", {}).get("id", "") or body.get("org_id"),
         "user": body.get("user"),
+        "original_user": body.get("user"),
         "tools": body.get("configuration", {}).get("tools"),
         "service": body.get("service"),
         "wrapper_id": body.get("wrapper_id"),
@@ -354,34 +357,26 @@ async def handle_pre_tools(parsed_data, custom_config):
                 parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
                 response_data = pre_function_response.get("response", {})
                 Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
-
+        
         elif tool_type == "query_refiner":
             prompt = args.get("prompt", "")
             user_query = parsed_data["user"]
             variables = {**parsed_data.get("variables", {})}
             if prompt:
                 variables["prompt"] = prompt
-            refined = await axios_work(
-                {
-                    "user": user_query,
-                    "bridge_id": Config.QUERY_REFINER_BRIDGE_ID,
-                    "variables": variables,
-                },
-                {
-                    "url": "https://api.gtwy.ai/api/v2/model/chat/completion",
-                    "headers": {"pauthkey": Config.GTWY_PAUTH_KEY, "Content-Type": "application/json"},
-                },
-            )
-            if refined.get("status") == 1:
-                raw = refined.get("response", {})
-                optimised_query = (
-                    raw.get("response", {}).get("data", {}).get("content")
-                    or raw.get("data", {}).get("content")
-                    or raw.get("content")
-                    or user_query
+            try:
+                optimised_query = await call_ai_middleware(
+                    user=user_query,
+                    bridge_id=bridge_ids["query_refiner"],
+                    variables=variables,
+                    response_type="text",
                 )
-                parsed_data["user"] = optimised_query
-        
+                optimised_query = optimised_query or user_query
+            except Exception as e:
+                optimised_query = user_query
+         
+            parsed_data["user"] = optimised_query
+            
         elif tool_type == "rag_knowledgebase":
             resource_id = args.get("resource_id")
             collection_id = args.get("collection_id")
@@ -408,10 +403,10 @@ async def handle_pre_tools(parsed_data, custom_config):
                 parsed_data["variables"]["rag_pre_result"] = f"Error: {rag_response.get('response', 'unknown error')}"
         
         elif tool_type == "gtwy_web_search":
-             web_response = await call_firecrawl_scrape(args)
-             if web_response.get("status") == 1:
+            web_response = await call_firecrawl_scrape(args)
+            if web_response.get("status") == 1:
                 parsed_data["variables"]["web_search_pre_result"] = web_response.get("response")
-             else:
+            else:
                 response = web_response.get('response')
                 error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
                 parsed_data["variables"]["web_search_pre_result"] = error_msg
@@ -576,8 +571,7 @@ def build_service_params(
         "apikey": parsed_data["apikey"],
         "variables": parsed_data["variables"],
         "user": parsed_data["user"],
-        "original_user": parsed_data.get("original_user", parsed_data["user"]),
-        "tools": parsed_data["tools"],
+        "original_user": parsed_data["original_user"],
         "org_id": parsed_data["org_id"],
         "bridge_id": parsed_data["bridge_id"],
         "bridge": parsed_data["bridge"],

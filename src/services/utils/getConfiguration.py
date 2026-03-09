@@ -135,35 +135,14 @@ async def _prepare_configuration_response(
     raw_pre_tools = bridge.get("pre_tools", [])
 
     if raw_pre_tools:
-        # pre_tools_data is populated by DB lookup for custom_function types
-        custom_function_data_list = result.get("bridges", {}).get("pre_tools_data") or []
-
-    for tool_entry in raw_pre_tools:
-        # Backward compat: old format was a plain string (function ID)
-        if isinstance(tool_entry, str):
-            api_data = custom_function_data_list[0] if custom_function_data_list else {}
-            api_data = {k: v for k, v in api_data.items() if k not in ("_id", "bridge_ids", "folder_id")}
-            if api_data:
-                pre_tools_data_for_later.append({
-                    "_type": "custom_function",
-                    "function_data": api_data,
-                    "config": {},
-                    "args": {},
-                })
-        else:
+        for tool_entry in raw_pre_tools:
             tool_type = tool_entry.get("type")
             tool_config = tool_entry.get("config", {})
             tool_args = tool_entry.get("args", {})
 
             if tool_type == "custom_function":
-                fn_id = tool_config.get("function_id")          
-                if tool_config.get("script_id"):
-                      api_data = {"script_id": tool_config.get("script_id"),  "required_params": tool_config.get("required_params", [])}
-                else:
-                      api_data = next(
-                          (d for d in custom_function_data_list if str(d.get("_id")) == str(fn_id)),
-                          {}
-                      )
+                api_data = {"script_id": tool_config.get("script_id"),  "required_params": tool_config.get("required_params", [])}
+              
                 api_data = {k: v for k, v in api_data.items() if k not in ("_id", "bridge_ids", "folder_id")}
                 if api_data:
                     pre_tools_data_for_later.append({

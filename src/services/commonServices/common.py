@@ -174,7 +174,6 @@ async def chat(request_body):
         await handle_fine_tune_model(parsed_data, custom_config)
 
         # Step 4: Handle Pre-Tools Execution
-        parsed_data["original_user"] = parsed_data["user"]
         await handle_pre_tools(parsed_data,custom_config)
 
         # Step 5: Manage Threads

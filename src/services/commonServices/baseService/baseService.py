@@ -42,7 +42,7 @@ class BaseService:
         self.apikey = params.get("apikey")
         self.variables = params.get("variables")
         self.user = params.get("user")
-        self.original_user = params.get("original_user", self.user)
+        self.original_user = params.get("original_user")
         self.tool_call = params.get("tools")
         self.org_id = params.get("org_id")
         self.bridge_id = params.get("bridge_id")
@@ -248,7 +248,7 @@ class BaseService:
                     "thread_id": self.thread_id,
                     "sub_thread_id": self.sub_thread_id,
                     # "user": self.user if self.user else json.dumps(self.tool_call),
-                    "user": self.original_user if self.original_user else json.dumps(self.tool_call),
+                    "user": self.original_user or json.dumps(self.tool_call),
                     "message": "",
                     "org_id": self.org_id,
                     "bridge_id": self.bridge_id,
@@ -310,12 +310,13 @@ class BaseService:
             agent_name = transfer_agent_config.get("tool_name", "the agent")
             original_message = f"Query is successfully transferred to agent {agent_name}"
         logger.info(f"[HISTORY] saving user={self.original_user!r} (original), llm_saw={self.user!r} (possibly refined)")
+        logger.info(f"[HISTORY] message={original_message!r}, bridge_id={self.bridge_id}, thread_id={self.thread_id}")
 
         return {
             "thread_id": self.thread_id,
             "sub_thread_id": self.sub_thread_id,
             # "user": self.user if self.user else "",
-            "user": self.original_user if self.original_user else "",
+            "user": self.original_user or "",
             "message": original_message,
             "org_id": self.org_id,
             "bridge_id": self.bridge_id,
