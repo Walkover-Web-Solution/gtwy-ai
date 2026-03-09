@@ -9,7 +9,7 @@ from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
-from src.utils.formatter import render_template_to_html
+from src.utils.formatter import apply_variables_to_template_json
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.common_utils import (
@@ -446,14 +446,19 @@ async def chat(request_body):
                         else:
                             logger.warning(f"Template with widget_id '{widget_id}' not found in richui_templates")
                         
-                    # Only render HTML if we have a matching template
+                    # Only render if we have a matching template
                     if base_template:
                         try:
-                            html_output = render_template_to_html(base_template, ai_data)
-                            # Update Result
-                            result['response']['type'] = 'template'
-                            result['response']['data']['content'] = html_output
-                            
+                            render_format = base_template.get('template_format', {})
+                            render_data = ai_data if isinstance(ai_data, dict) else {}
+                            filled_json = apply_variables_to_template_json(
+                                render_format,
+                                render_data
+                            )
+                            result['response']['type'] = 'richui_json'
+                            result['response']['data']['content'] = filled_json
+                            result['response']['data']['ai_response'] = render_data
+
                             # Store template data for history in chatbot_message
                             template_data = {
                                 'template_id': base_template.get('_id') or base_template.get('id'),
@@ -461,17 +466,15 @@ async def chat(request_body):
                                 'is_template': True
                             }
                         except Exception as render_err:
-                            logger.error(f"Template Rendering Failed in render function: {render_err}")
+                            logger.error(f"Template Rendering Failed: {render_err}")
                     else:
                         # No template found or matched, return data as-is (default behavior for greetings, etc.)
                         logger.info("No matching template found, returning data as-is")
-                        
             except Exception as e:
                 logger.error(f"Error rendering template: {str(e)}")
-        
         # Add template data to historyParams chatbot_message if template was used and not playground
         if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
-            result['historyParams']['chatbot_message'] = html_output
+            result['historyParams']['chatbot_message'] = json.dumps(result['response']['data']['ai_response'])
         # Send data to playground
         if parsed_data.get("is_playground") and parsed_data.get("body", {}).get("bridge_configurations", {}).get(
             "playground_response_format"
