@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Task Planner</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #15171a;
+            --bg-secondary: #1e2024;
+            --bg-tertiary: #262930;
+            --bg-hover: #2a2d35;
+            --border: #32363f;
+            --border-light: #3d4250;
+            --text-primary: #f0f2f5;
+            --text-secondary: #a0a6b1;
+            --text-muted: #6b7280;
+            --accent: #6c5ce7;
+            --accent-light: #a29bfe;
+            --accent-bg: rgba(108,92,231,0.12);
+            --success: #00b894;
+            --success-bg: rgba(0,184,148,0.12);
+            --warning: #fdcb6e;
+            --danger: #e17055;
+            --danger-bg: rgba(225,112,85,0.12);
+            --blue: #74b9ff;
+            --blue-bg: rgba(116,185,255,0.12);
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 760px;
+            padding: 48px 24px;
+        }
+
+        .header { margin-bottom: 36px; }
+
+        .header h1 {
+            font-size: 26px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            color: var(--text-primary);
+        }
+
+        .header h1 span {
+            background: linear-gradient(135deg, var(--accent), var(--accent-light));
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        /* Input Area */
+        .input-area {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 28px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 8px;
+            transition: border-color 0.2s;
+        }
+
+        .input-area:focus-within { border-color: var(--accent); }
+
+        .input-area textarea {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            padding: 8px 10px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            min-height: 40px;
+            max-height: 120px;
+            line-height: 1.5;
+        }
+
+        .input-area textarea::placeholder { color: var(--text-muted); }
+
+        .run-btn {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 10px 22px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            white-space: nowrap;
+            align-self: flex-end;
+        }
+
+        .run-btn:hover { background: #5b4bd5; }
+        .run-btn:active { transform: scale(0.97); }
+        .run-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+        /* Status Banner */
+        .status-banner {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            background: var(--accent-bg);
+            border: 1px solid rgba(108,92,231,0.2);
+            border-radius: var(--radius-sm);
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: var(--accent-light);
+        }
+
+        .status-banner.visible { display: flex; }
+
+        .spinner {
+            width: 16px; height: 16px;
+            border: 2px solid rgba(108,92,231,0.25);
+            border-top-color: var(--accent-light);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Question Card */
+        .question-card {
+            display: none;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .question-card.visible { display: block; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .question-icon {
+            width: 32px; height: 32px;
+            background: var(--accent-bg);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 14px;
+            font-size: 16px;
+        }
+
+        .question-text {
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text-primary);
+            line-height: 1.5;
+            margin-bottom: 18px;
+        }
+
+        .options-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .option-btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-size: 14px;
+            font-family: inherit;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .option-btn:hover {
+            background: var(--bg-hover);
+            border-color: var(--accent);
+            color: var(--accent-light);
+        }
+
+        .option-btn:active { transform: scale(0.99); }
+
+        .option-key {
+            width: 24px; height: 24px;
+            background: var(--bg-primary);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .option-btn:hover .option-key {
+            background: var(--accent-bg);
+            color: var(--accent-light);
+        }
+
+        /* Task Timeline */
+        .timeline { display: flex; flex-direction: column; }
+
+        .task-card {
+            position: relative;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 2px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+            overflow: hidden;
+        }
+
+        .task-card.in_progress {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px rgba(108,92,231,0.15);
+        }
+
+        .task-card.completed { border-color: var(--success); }
+        .task-card.failed { border-color: var(--danger); }
+
+        .task-header-bar {
+            display: flex;
+            align-items: center;
+            padding: 12px 14px 12px 40px;
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+            gap: 10px;
+            transition: background 0.15s;
+        }
+
+        .task-header-bar:hover { background: var(--bg-hover); }
+        .task-card.in_progress .task-header-bar { cursor: default; background: transparent; }
+
+        .task-dot {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            transition: background 0.3s, box-shadow 0.3s;
+        }
+
+        .task-card.in_progress .task-dot {
+            background: var(--accent);
+            box-shadow: 0 0 8px rgba(108,92,231,0.5);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        .task-card.completed .task-dot { background: var(--success); }
+        .task-card.failed .task-dot { background: var(--danger); }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 4px rgba(108,92,231,0.3); }
+            50% { box-shadow: 0 0 12px rgba(108,92,231,0.6); }
+        }
+
+        .task-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            flex: 1;
+            line-height: 1.4;
+        }
+
+        .task-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            flex-shrink: 0;
+        }
+
+        .badge-pending { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+        .badge-in_progress { background: var(--accent-bg); color: var(--accent-light); border: 1px solid rgba(108,92,231,0.25); }
+        .badge-completed { background: var(--success-bg); color: var(--success); border: 1px solid rgba(0,184,148,0.25); }
+        .badge-failed { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(225,112,85,0.25); }
+
+        .task-chevron {
+            width: 14px; height: 14px;
+            flex-shrink: 0;
+            transition: transform 0.25s ease;
+            color: var(--text-muted);
+        }
+
+        .task-card.expanded .task-chevron { transform: rotate(180deg); }
+        .task-card.in_progress .task-chevron { display: none; }
+
+        .task-body {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.35s ease;
+        }
+
+        .task-card.expanded .task-body,
+        .task-card.in_progress .task-body {
+            max-height: 2000px;
+        }
+
+        .task-body-inner { padding: 0 14px 14px 40px; }
+
+        .task-description {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin-bottom: 8px;
+        }
+
+        .task-output {
+            padding: 10px 12px;
+            background: var(--bg-primary);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            max-height: 280px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+        }
+
+        .task-output:empty { display: none; }
+
+        .task-connector {
+            width: 2px;
+            height: 6px;
+            background: var(--border);
+            margin-left: 18px;
+            margin-bottom: 2px;
+        }
+
+        /* Direct Response */
+        .direct-response {
+            display: none;
+            padding: 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--text-primary);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .direct-response.visible { display: block; }
+
+        /* Step Counter */
+        .step-counter {
+            display: none;
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            padding: 0 4px;
+        }
+        .step-counter.visible { display: flex; align-items: center; gap: 6px; }
+        .step-counter .done-count { color: var(--success); font-weight: 600; }
+
+        /* Final Answer */
+        .final-answer {
+            display: none;
+            margin-top: 16px;
+            padding: 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--accent);
+            border-radius: var(--radius);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .final-answer.visible { display: block; }
+
+        .final-answer-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--accent-light);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .final-answer-label::before {
+            content: '';
+            width: 6px; height: 6px;
+            background: var(--accent);
+            border-radius: 50%;
+        }
+
+        .final-answer-content {
+            font-size: 14px;
+            line-height: 1.8;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* Summary */
+        .summary-card {
+            display: none;
+            padding: 14px 18px;
+            background: var(--success-bg);
+            border: 1px solid rgba(0,184,148,0.2);
+            border-radius: var(--radius-sm);
+            margin-top: 12px;
+            font-size: 13px;
+            color: var(--success);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .summary-card.visible { display: block; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><span>AI Task Planner</span></h1>
+            <p class="subtitle">Describe your goal and watch AI break it down and execute step by step</p>
+        </div>
+
+        <div class="input-area">
+            <textarea id="goalInput" placeholder="What would you like to build or accomplish?" rows="1"></textarea>
+            <button class="run-btn" id="runBtn" onclick="runExperiment()">Run</button>
+        </div>
+
+        <div class="status-banner" id="statusBanner">
+            <div class="spinner" id="statusSpinner"></div>
+            <span id="statusText">Planning...</span>
+        </div>
+
+        <div class="question-card" id="questionCard">
+            <div class="question-icon">?</div>
+            <div class="question-text" id="questionText"></div>
+            <div class="options-grid" id="optionsGrid"></div>
+        </div>
+
+        <div class="direct-response" id="directResponse"></div>
+
+        <div class="step-counter" id="stepCounter">
+            <span>Steps: <span class="done-count" id="doneCount">0</span> / <span id="totalCount">0</span></span>
+        </div>
+
+        <div class="timeline" id="timeline"></div>
+
+        <div class="final-answer" id="finalAnswer">
+            <div class="final-answer-label">Final Output</div>
+            <div class="final-answer-content" id="finalAnswerContent"></div>
+        </div>
+
+        <div class="summary-card" id="summaryCard"></div>
+    </div>
+
+    <script>
+        const $ = id => document.getElementById(id);
+        const timeline = $('timeline');
+        const statusBanner = $('statusBanner');
+        const statusText = $('statusText');
+        const statusSpinner = $('statusSpinner');
+        const summaryCard = $('summaryCard');
+        const directResponse = $('directResponse');
+        const finalAnswer = $('finalAnswer');
+        const finalAnswerContent = $('finalAnswerContent');
+        const questionCard = $('questionCard');
+        const questionText = $('questionText');
+        const optionsGrid = $('optionsGrid');
+        const stepCounter = $('stepCounter');
+        const doneCount = $('doneCount');
+        const totalCount = $('totalCount');
+        const runBtn = $('runBtn');
+        const goalInput = $('goalInput');
+
+        let completedCount = 0;
+        let totalTasks = 0;
+        let originalGoal = '';
+
+        const chevronSvg = `<svg class="task-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>`;
+        const optionKeys = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+        goalInput.addEventListener('input', function () {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+
+        goalInput.addEventListener('keydown', function (e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runExperiment();
+        });
+
+        function showStatus(text) {
+            statusBanner.classList.add('visible');
+            statusSpinner.style.display = 'block';
+            statusText.textContent = text;
+        }
+
+        function hideStatus() { statusBanner.classList.remove('visible'); }
+
+        function updateStepCounter() {
+            doneCount.textContent = completedCount;
+            totalCount.textContent = totalTasks;
+        }
+
+        function resetUI() {
+            timeline.innerHTML = '';
+            summaryCard.classList.remove('visible');
+            directResponse.classList.remove('visible');
+            directResponse.textContent = '';
+            finalAnswer.classList.remove('visible');
+            finalAnswerContent.textContent = '';
+            questionCard.classList.remove('visible');
+            stepCounter.classList.remove('visible');
+            completedCount = 0;
+            totalTasks = 0;
+        }
+
+        function showQuestion(text, options) {
+            hideStatus();
+            questionText.textContent = text;
+            optionsGrid.innerHTML = '';
+            options.forEach((opt, i) => {
+                const btn = document.createElement('button');
+                btn.className = 'option-btn';
+                btn.innerHTML = `<span class="option-key">${optionKeys[i] || (i+1)}</span><span>${escapeHtml(opt)}</span>`;
+                btn.onclick = () => selectOption(opt);
+                optionsGrid.appendChild(btn);
+            });
+            questionCard.classList.add('visible');
+            questionCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function selectOption(option) {
+            questionCard.classList.remove('visible');
+            goalInput.value = originalGoal + '\n\nSelected: ' + option;
+            runExperiment();
+        }
+
+        function createTaskCard(task, index) {
+            if (index > 0) {
+                const conn = document.createElement('div');
+                conn.className = 'task-connector';
+                timeline.appendChild(conn);
+            }
+
+            const card = document.createElement('div');
+            card.className = `task-card ${task.status}`;
+            card.id = `task-${task.id}`;
+            card.innerHTML = `
+                <div class="task-header-bar" onclick="toggleCard('${task.id}')">
+                    <div class="task-dot"></div>
+                    <span class="task-title">${escapeHtml(task.title)}</span>
+                    <span class="task-badge badge-${task.status}">${task.status.replace('_', ' ')}</span>
+                    ${chevronSvg}
+                </div>
+                <div class="task-body">
+                    <div class="task-body-inner">
+                        <div class="task-description">${escapeHtml(task.description)}</div>
+                        <div class="task-output" id="output-${task.id}"></div>
+                    </div>
+                </div>
+            `;
+            return card;
+        }
+
+        function toggleCard(taskId) {
+            const card = document.getElementById(`task-${taskId}`);
+            if (!card || card.classList.contains('in_progress')) return;
+            card.classList.toggle('expanded');
+        }
+
+        function updateTaskStatus(taskId, status) {
+            const card = document.getElementById(`task-${taskId}`);
+            if (!card) return;
+            const wasInProgress = card.classList.contains('in_progress');
+            card.className = `task-card ${status}`;
+            const badge = card.querySelector('.task-badge');
+            badge.className = `task-badge badge-${status}`;
+            badge.textContent = status.replace('_', ' ');
+            if (status === 'in_progress') card.classList.add('expanded');
+            if ((status === 'completed' || status === 'failed') && wasInProgress) {
+                card.classList.remove('expanded');
+                if (status === 'completed') { completedCount++; updateStepCounter(); }
+            }
+        }
+
+        function appendTaskOutput(taskId, chunk) {
+            const output = document.getElementById(`output-${taskId}`);
+            if (!output) return;
+            output.textContent += chunk;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function runExperiment() {
+            const goal = goalInput.value.trim();
+            if (!goal) return;
+
+            if (!originalGoal || !goal.includes('Selected:')) originalGoal = goal;
+
+            resetUI();
+            runBtn.disabled = true;
+            runBtn.textContent = 'Running...';
+            showStatus('Analyzing your request...');
+
+            try {
+                const response = await fetch('/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ goal }),
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || 'Request failed');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let eventType = '';
+                let eventData = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            eventType = line.slice(6).trim();
+                        } else if (line.startsWith('data:')) {
+                            eventData = line.slice(5).trim();
+                        } else if (line.trim() === '') {
+                            if (eventType && eventData) {
+                                try { handleEvent(eventType, JSON.parse(eventData)); } catch(e) {}
+                            }
+                            eventType = '';
+                            eventData = '';
+                        }
+                    }
+                }
+
+                if (eventType && eventData) {
+                    try { handleEvent(eventType, JSON.parse(eventData)); } catch(e) {}
+                }
+
+            } catch (err) {
+                showStatus(`Error: ${err.message}`);
+                statusSpinner.style.display = 'none';
+            } finally {
+                runBtn.disabled = false;
+                runBtn.textContent = 'Run';
+            }
+        }
+
+        function handleEvent(event, data) {
+            switch (event) {
+                case 'planning':
+                    showStatus('Thinking...');
+                    break;
+
+                case 'question':
+                    showQuestion(data.text, data.options);
+                    break;
+
+                case 'plan_ready':
+                    showStatus('Executing steps...');
+                    totalTasks = data.tasks.length;
+                    completedCount = 0;
+                    updateStepCounter();
+                    stepCounter.classList.add('visible');
+                    data.tasks.forEach((task, i) => {
+                        timeline.appendChild(createTaskCard(task, i));
+                    });
+                    break;
+
+                case 'task_start':
+                    updateTaskStatus(data.task_id, 'in_progress');
+                    showStatus(`Working on: ${data.title}`);
+                    const activeCard = document.getElementById(`task-${data.task_id}`);
+                    if (activeCard) activeCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    break;
+
+                case 'task_progress':
+                    appendTaskOutput(data.task_id, data.chunk);
+                    break;
+
+                case 'task_done':
+                    updateTaskStatus(data.task_id, 'completed');
+                    break;
+
+                case 'task_failed':
+                    updateTaskStatus(data.task_id, 'failed');
+                    const failOutput = document.getElementById(`output-${data.task_id}`);
+                    if (failOutput) failOutput.textContent = `Error: ${data.error}`;
+                    break;
+
+                case 'direct_response':
+                    hideStatus();
+                    directResponse.textContent = data.message;
+                    directResponse.classList.add('visible');
+                    break;
+
+                case 'final_answer_start':
+                    showStatus('Preparing final output...');
+                    finalAnswer.classList.add('visible');
+                    finalAnswer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    break;
+
+                case 'final_answer_progress':
+                    finalAnswerContent.textContent += data.chunk;
+                    break;
+
+                case 'done':
+                    hideStatus();
+                    if (!finalAnswer.classList.contains('visible') && !directResponse.classList.contains('visible')) {
+                        summaryCard.textContent = data.summary;
+                        summaryCard.classList.add('visible');
+                    }
+                    break;
+
+                case 'error':
+                    showStatus(`Error: ${data.message}`);
+                    statusSpinner.style.display = 'none';
+                    break;
+            }
+        }
+    </script>
+</body>
+</html>
