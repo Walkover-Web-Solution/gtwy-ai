@@ -14,29 +14,7 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                     tools_data[key] = json.loads(value)
                 except json.JSONDecodeError:
                     pass
-    if (service == "openai" or service == "groq" or service == "mistral") and isBatch:
-        # Batch responses for OpenAI-compatible services (OpenAI, Groq, Mistral)
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
-                "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens"),
-            },
-        }
-    elif service == "gemini" and isBatch:
+    if service == "gemini" and isBatch:
         # Gemini batch responses have a different structure
         candidates = response.get("candidates", [{}])
         content_parts = candidates[0].get("content", {}).get("parts", [{}]) if candidates else [{}]
@@ -491,10 +469,10 @@ async def process_batch_results(results, service, batch_id, batch_variables, mes
             message_id = result_item.get("custom_id", None)
             result_data = result_item.get("response", {})
 
-        # Check for errors
+        # Check for errors (use truthy check: API often sends "error": null on success)
         has_error = False
         if service in {"openai", "groq"}:
-            has_error = status_code >= 400 or "error" in result_data
+            has_error = status_code >= 400 or bool(result_data.get("error"))
         elif service == "anthropic":
             has_error = result_data.get("type") == "error"
         else:

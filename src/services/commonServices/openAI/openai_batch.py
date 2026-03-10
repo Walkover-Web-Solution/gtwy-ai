@@ -77,27 +77,20 @@ class OpenaiBatch(BaseService):
             # This will be sent as custom_id to OpenAI API (required by their format)
             message_id = str(uuid.uuid4())
 
-            # Build messages array with system prompt first, then thread history, then user message
-            messages = []
-            
-            # Add system prompt first
-            messages.append({"role": "system", "content": self.processed_prompts[idx]})
-            
-            # Add thread history after system prompt (if available)
-            if thread_history:
-                messages.extend(thread_history)
-            
-            # Add current user message
-            messages.append({"role": "user", "content": message})
-            
-            # Set messages in body
-            body_data["messages"] = messages
+            # Build input array for /v1/responses: developer (system) + thread history + user message
+            developer = (
+                [{"role": "developer", "content": self.processed_prompts[idx]}]
+                if not getattr(self, "reasoning_model", False)
+                else []
+            )
+            input_items = developer + (thread_history or []) + [{"role": "user", "content": message}]
+            body_data["input"] = input_items
 
             # Construct one JSONL line for each message with message_id as custom_id
             request_obj = {
                 "custom_id": message_id,
                 "method": "POST",
-                "url": "/v1/chat/completions",
+                "url": "/v1/responses",
                 "body": body_data
             }
 
