@@ -371,20 +371,6 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
         }
 
 
-async def validateResponse(alert_flag, configration, bridgeId, message_id, org_id):
-    if alert_flag:
-        await send_alert(
-            data={
-                "response": "\n..\n",
-                "configration": configration,
-                "message_id": message_id,
-                "bridge_id": bridgeId,
-                "org_id": org_id,
-                "message": "\n issue occurs",
-            }
-        )
-
-
 async def send_alert(data):
     dataTosend = {**data, "ENVIROMENT": Config.ENVIROMENT} if Config.ENVIROMENT else data
     await fetch("https://flow.sokt.io/func/scriYP8m551q", method="POST", json_body=dataTosend)

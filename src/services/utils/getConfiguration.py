@@ -102,6 +102,24 @@ async def _prepare_configuration_response(
     apikey = setup_api_key(service, result, apikey, chatbot)
     apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
     apikey_status = result.get('bridges', {}).get('apikey_status')
+    auto_model_select = result.get("bridges", {}).get("auto_model_select")
+
+    service_apikeys = {}
+    merged_apikeys = {
+        **(result.get("bridges", {}).get("apikeys", {}) or {}),
+        **(result.get("bridges", {}).get("folder_apikeys", {}) or {}),
+    }
+
+    for service_name, encrypted_key in merged_apikeys.items():
+        if not encrypted_key:
+            continue
+        try:
+            service_apikeys[service_name] = Helper.decrypt(encrypted_key)
+        except Exception:
+            continue
+
+    if service and apikey:
+        service_apikeys[service] = apikey
 
     # Handle image type early return
     if configuration["type"] == "image":
@@ -139,25 +157,11 @@ async def _prepare_configuration_response(
             tool_type = tool_entry.get("type")
             tool_config = tool_entry.get("config", {})
             tool_args = tool_entry.get("args", {})
-
-            if tool_type == "custom_function":
-                api_data = {"script_id": tool_config.get("script_id"),  "required_params": tool_config.get("required_params", [])}
-              
-                api_data = {k: v for k, v in api_data.items() if k not in ("_id", "bridge_ids", "folder_id")}
-                if api_data:
-                    pre_tools_data_for_later.append({
-                        "_type": "custom_function",
-                        "function_data": api_data,
-                        "config": tool_config,
-                        "args": tool_args,
-                    })
-            else:
-                # Built-in types — all data is inline
-                pre_tools_data_for_later.append({
-                    "_type": tool_type,
-                    "config": tool_config,
-                    "args": tool_args,
-                })
+            pre_tools_data_for_later.append({
+                "_type": tool_type,
+                "config": tool_config,
+                "args": tool_args,
+            })
 
     rag_data = bridge.get("doc_ids")
     gpt_memory_context = bridge.get("gpt_memory_context")
@@ -193,6 +197,8 @@ async def _prepare_configuration_response(
         "pre_tools_data": pre_tools_data_for_later,
         "service": service,
         "apikey": apikey,
+        "auto_model_select": auto_model_select,
+        "service_apikeys": service_apikeys,
         "apikey_object_id": apikey_object_id,
         "apikey_status": apikey_status,
         "RTLayer": RTLayer,

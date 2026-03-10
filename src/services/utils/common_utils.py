@@ -58,15 +58,10 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
         for param, var_name in tool_args_mapping.items():
             if var_name in agent_variables:
                 resolved_args[param] = agent_variables[var_name]
-            elif var_name:
-                # var_name provided but not in agent_variables — leave as-is or skip
-                resolved_args[param] = var_name
 
         if tool_type == "custom_function":
             function_data = pre_tool.get("function_data", {})
-            # For custom_function, also resolve required_params directly from agent_variables
-            # if not already covered by args mapping
-            required_params = function_data.get("required_params", [])
+            required_params = tool_config.get("required_params", [])
             for param in required_params:
                 if param not in resolved_args:
                     if param in agent_variables:
@@ -154,11 +149,13 @@ def parse_request_body(request_body):
         "service": body.get("service"),
         "wrapper_id": body.get("wrapper_id"),
         "variables": body.get("variables") or {},
+        "service_apikeys": body.get("service_apikeys") or {},
         "bridgeType": body.get("chatbot"),
         "template": body.get("template"),
         "response_format": body.get("configuration", {}).get("response_format"),
         "response_type": body.get("configuration", {}).get("response_type"),
         "model": body.get("configuration", {}).get("model"),
+        "auto_model_select": body.get("auto_model_select", False),
         "is_playground": state.get("is_playground") or body.get("is_playground") or False,
         "bridge": body.get("bridge"),
         "pre_tools": body.get("pre_tools"),
@@ -583,7 +580,7 @@ def build_service_params(
         "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data["response_format"],
-        "execution_time_logs": [],
+        "execution_time_logs": parsed_data.get("execution_time_logs", []),
         "function_time_logs": [],
         "timer": timer,
         "variables_path": parsed_data["variables_path"],
