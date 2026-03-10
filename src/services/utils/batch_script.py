@@ -60,12 +60,15 @@ async def check_batch_status():
 
                     if is_completed:
                         # Batch has reached a terminal state (completed, failed, expired, cancelled)
-                        
+                        logger.info(f"\nBatch Completed: {results}\n")
+
                         if results:
                             # Process and format the results (could be success or error results)
                             formatted_results = await process_batch_results(
                                 results, service, batch_id, batch_variables, message_id_mapping
                             )
+
+                            logger.info(f"\nBatch  - Formatted Results: {results}\n")
 
                             # Check if all responses are errors
                             has_success = any(
