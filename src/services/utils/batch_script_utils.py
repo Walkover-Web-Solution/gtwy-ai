@@ -16,3 +16,21 @@ BATCH_RESULT_HANDLERS = {
 
 def get_batch_result_handler(service):
     return BATCH_RESULT_HANDLERS.get(service)
+
+
+def is_finalized_batch_item(item):
+    """
+    Returns True when a batch item is final and safe to send in webhook.
+    """
+    status_code = item.get("status_code")
+    if status_code is not None and status_code >= 400:
+        return True
+
+    if item.get("error"):
+        return True
+
+    data = item.get("data") or {}
+    content = data.get("content")
+    finish_reason = data.get("finish_reason")
+
+    return content is not None and finish_reason in {"completed", "truncated", "tool_call"}
