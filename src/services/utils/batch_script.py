@@ -7,7 +7,7 @@ from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_pr
 from ..commonServices.baseService.baseService import sendResponse
 from ..utils.send_error_webhook import create_response_format
 from .ai_middleware_format import process_batch_results
-from .batch_script_utils import get_batch_result_handler
+from .batch_script_utils import get_batch_result_handler, is_finalized_batch_item
 from .helper import Helper
 from globals import *
 from src.db_services.conversationDbService import updateConversationLogByBatchData, timescale_metrics
@@ -41,6 +41,8 @@ async def check_batch_status():
             version_id = batch_data.get('version_id')
             thread_id = batch_data.get('thread_id')
             
+            cache_key = f"{redis_keys['batch_']}{batch_id}"
+
             # Try to acquire lock for this batch
             lock_acquired = await acquire_lock(batch_id)
             if not lock_acquired:
@@ -60,7 +62,6 @@ async def check_batch_status():
 
                     if is_completed:
                         # Batch has reached a terminal state (completed, failed, expired, cancelled)
-                        logger.info(f"\nBatch Completed: {results}\n")
 
                         if results:
                             # Process and format the results (could be success or error results)
@@ -68,7 +69,13 @@ async def check_batch_status():
                                 results, service, batch_id, batch_variables, message_id_mapping
                             )
 
-                            logger.info(f"\nBatch  - Formatted Results: {results}\n")
+                            # Skip webhook for partial/incomplete snapshots; retry on next poll.
+                            if not all(is_finalized_batch_item(item) for item in formatted_results):
+                                logger.info(
+                                    f"Batch {batch_id} has non-finalized items (content null/finish_reason other). "
+                                    "Will retry on next poll."
+                                )
+                                continue
 
                             # Check if all responses are errors
                             has_success = any(
@@ -81,10 +88,15 @@ async def check_batch_status():
                             if webhook.get('url') is not None:
                                 try:
                                     webhook_response = await sendResponse(response_format, data=formatted_results, success=has_success)
+                                    logger.info(f"Batch {batch_id} - webhook sent")
                                 except Exception as webhook_err:
                                     webhook_error = str(webhook_err)
                                     logger.error(f"Error sending webhook for batch {batch_id}: {webhook_error}")
                             
+                            # Immediately delete Cache
+                            await delete_in_cache(cache_key)
+                            logger.info(f"Batch {batch_id} completed and removed from cache")
+
                             # Initialize TokenCalculator for batch cost calculation with 50% discount
                             token_calculator = TokenCalculator(service, {})
                             
@@ -125,9 +137,9 @@ async def check_batch_status():
                                         error_message = "Unknown error occurred"
                                 
                                 # Extract token counts
-                                input_tokens = usage.get('input_tokens', 0) if usage else 0
-                                output_tokens = usage.get('output_tokens', 0) if usage else 0
-                                total_tokens = usage.get('total_tokens', 0) if usage else 0
+                                input_tokens = usage.get('input_tokens') or 0 if usage else 0
+                                output_tokens = usage.get('output_tokens') or 0 if usage else 0
+                                total_tokens = usage.get('total_tokens') or 0 if usage else 0
                                 
                                 # Calculate usage and accumulate in token calculator
                                 if usage and is_success:
@@ -217,13 +229,14 @@ async def check_batch_status():
                             if webhook.get('url') is not None:
                                 try:
                                     await sendResponse(response_format, data=error_response, success=False)
+                                    logger.info(f"Batch {batch_id} no-results webhook sent")
                                 except Exception as webhook_err:
                                     logger.error(f"Error sending webhook for batch {batch_id} (no results case): {str(webhook_err)}")
+
+                            # Delete the key
+                            await delete_in_cache(cache_key)
+                            logger.info(f"Batch {batch_id} completed and removed from cache")
                         
-                        # Delete from cache after sending webhook
-                        cache_key = f"{redis_keys['batch_']}{batch_id}"
-                        await delete_in_cache(cache_key)
-                        logger.info(f"Batch {batch_id} completed and removed from cache")
                     else:
                         # Batch still in progress, will check again on next poll
                         logger.info(f"Batch {batch_id} still in progress")
