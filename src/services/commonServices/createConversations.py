@@ -1,4 +1,6 @@
+import mimetypes
 import traceback
+from urllib.parse import urlparse
 
 from globals import logger
 
@@ -274,13 +276,18 @@ class ConversationService:
                     if msg_content:
                         parts.append(types.Part(text=msg_content))
                     
-                    if 'urls' in message and isinstance(message['urls'], list):
-                        for url in message['urls']:
-                            if url.lower().endswith('.pdf'):
-                                parts.append(types.Part.from_url(file_uri=url, mime_type="application/pdf"))
+                    if 'user_urls' in message and isinstance(message['user_urls'], list):
+                        for url_info in message['user_urls']:
+                            url = url_info.get('url')
+                            url_type = url_info.get('type')
+                            if url_type == 'pdf' or url.lower().endswith('.pdf'):
+                                parts.append(types.Part.from_uri(file_uri=url, mime_type="application/pdf"))
+                            elif url_type == 'audio':
+                                mime_type, _ = mimetypes.guess_type(urlparse(url).path)
+                                parts.append(types.Part.from_uri(file_uri=url, mime_type=mime_type))
                             else:
-                                mime_type = "image/png" if url.lower().endswith(".png") else "image/jpeg"
-                                parts.append(types.Part.from_url(file_uri=url, mime_type=(mime_type)))
+                                mime_type, _ = mimetypes.guess_type(urlparse(url).path)
+                                parts.append(types.Part.from_uri(file_uri=url, mime_type=mime_type))
                     if parts:
                         contents.append(types.Content(role=gemini_role, parts=parts))
             
