@@ -592,6 +592,158 @@ async def chat(request_body):
         await update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, first_execution_error_code, completion_success)
 
 
+def _sse_event(event, data):
+    return {"event": event, "data": json.dumps(data)}
+
+
+async def chat_stream(request_body):
+    """
+    Async generator that yields SSE events for streaming chat responses.
+    Performs the same setup as chat(), streams text deltas via SSE,
+    then does post-processing (metrics, history) after stream completes.
+    """
+    parsed_data = {}
+    params = {}
+    timer = None
+    thread_info = None
+    result = {}
+    original_service = None
+    first_execution_error_code = None
+    completion_success = True
+
+    try:
+        bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
+        parsed_data = parse_request_body(request_body)
+        original_service = parsed_data["service"]
+
+        setup_agent_pre_tools(parsed_data, bridge_configurations)
+        await apply_prompt_wrapper(parsed_data)
+
+        transfer_request_id = parsed_data.get("transfer_request_id") or str(uuid.uuid1())
+        parsed_data["transfer_request_id"] = transfer_request_id
+        if transfer_request_id not in TRANSFER_HISTORY:
+            TRANSFER_HISTORY[transfer_request_id] = []
+
+        if parsed_data.get("guardrails", {}).get("is_enabled", False):
+            guardrails_result = await guardrails_check(parsed_data)
+            if guardrails_result is not None:
+                yield _sse_event("error", {"error": "Content blocked by guardrails"})
+                return
+
+        parsed_data["configuration"]["prompt"] = add_default_template(
+            parsed_data.get("configuration", {}).get("prompt", "")
+        )
+        parsed_data["variables"] = add_user_in_variables(parsed_data["variables"], parsed_data["user"])
+
+        timer = initialize_timer(parsed_data["state"])
+
+        if parsed_data.get("auto_model_select", False):
+            await apply_auto_model_selection(parsed_data, timer)
+
+        model_config, custom_config, model_output_config = await load_model_configuration(
+            parsed_data["model"], parsed_data["configuration"], parsed_data["service"],
+        )
+        await handle_fine_tune_model(parsed_data, custom_config)
+        await handle_pre_tools(parsed_data, custom_config)
+
+        thread_info = await manage_threads(parsed_data)
+        if len(parsed_data["files"]) == 0:
+            parsed_data["files"] = await add_files_to_parse_data(
+                parsed_data["thread_id"], parsed_data["sub_thread_id"], parsed_data["bridge_id"]
+            )
+
+        process_variable_state(parsed_data)
+        memory, missing_vars = await prepare_prompt(parsed_data, thread_info, model_config, custom_config)
+        missing_vars = filter_missing_vars(missing_vars, parsed_data["variables_state"])
+
+        if missing_vars:
+            send_error(
+                parsed_data["bridge_id"], parsed_data["org_id"], missing_vars,
+                error_type="Variable", bridge_name=parsed_data.get("name"),
+                is_embed=parsed_data.get("is_embed"), user_id=parsed_data.get("user_id"),
+                thread_id=parsed_data.get("thread_id"), service=parsed_data.get("service"),
+            )
+
+        custom_config = await configure_custom_settings(
+            model_config["configuration"], custom_config, parsed_data["service"]
+        )
+        params = build_service_params(
+            parsed_data, custom_config, model_output_config, thread_info,
+            timer, memory, send_error_to_webhook, bridge_configurations,
+        )
+
+        if "response_type" in custom_config and custom_config["response_type"].get("type") == "json_schema":
+            custom_config["response_type"] = restructure_json_schema(
+                custom_config["response_type"], parsed_data["service"]
+            )
+
+        class_obj = await Helper.create_service_handler(params, parsed_data["service"])
+
+        # Check if the service handler supports streaming
+        if not hasattr(class_obj, "execute_stream"):
+            yield _sse_event("error", {"error": f"Streaming not supported for service: {parsed_data['service']}"})
+            return
+
+        # Stream SSE events from execute_stream
+        async for event in class_obj.execute_stream():
+            event_name = event.get("event", "")
+
+            if event_name == "done":
+                # Final event with complete result - do post-processing
+                event_data = json.loads(event.get("data", "{}"))
+                result = event_data
+                break
+            elif event_name == "error":
+                yield event
+                completion_success = False
+                return
+            else:
+                # Forward delta/chunk events to client
+                yield event
+
+        if not result or not result.get("success"):
+            yield _sse_event("error", {"error": result.get("error", "Unknown error")})
+            completion_success = False
+            return
+
+        # Post-processing (same as chat())
+        result["response"]["usage"] = params["token_calculator"].get_total_usage()
+        result["response"]["data"]["message_id"] = parsed_data["message_id"]
+
+        if parsed_data.get("type") != "image":
+            parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
+                parsed_data["model"], parsed_data["service"]
+            )
+            result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
+
+        parsed_data["alert_flag"] = result.get("modelResponse", {}).get("alert_flag", False)
+
+        latency = create_latency_object(timer, params)
+        if not parsed_data["is_playground"]:
+            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+            result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
+            await process_background_tasks(
+                parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
+            )
+
+        # Yield the final done event with the complete response
+        yield _sse_event("done", {"success": True, "response": result["response"]})
+
+    except Exception as error:
+        logger.error(f"Error in chat_stream: {str(error)}, {traceback.format_exc()}")
+        completion_success = False
+        error_string = f"{str(error)} (Type: {type(error).__name__}). For more support contact us at support@gtwy.ai"
+        yield _sse_event("error", {"success": False, "error": error_string})
+    finally:
+        try:
+            if original_service and parsed_data:
+                await update_cost_usage_and_apikey_status_in_background(
+                    original_service, parsed_data, first_execution_error_code, completion_success
+                )
+        except Exception:
+            pass
+
+
 @handle_exceptions
 async def embedding(request_body):
     result = {}

@@ -21,7 +21,7 @@ from ..grok.grokModelRun import grok_runmodel
 from ..groq.groqModelRun import groq_runmodel
 from ..Mistral.mistral_model_run import mistral_model_run
 from ..openAI.image_model import OpenAIImageModel
-from ..openAI.runModel import openai_completion, openai_response_model
+from ..openAI.runModel import openai_completion, openai_response_model, openai_response_model_stream
 from ..openRouter.openRouter_modelrun import openrouter_modelrun
 from .utils import (
     make_code_mapping_by_service,
@@ -585,6 +585,31 @@ class BaseService:
             )
             raise err from e
 
+
+    async def chats_stream(self, configuration, apikey, service):
+        """Async generator that yields SSE events for streaming chat responses."""
+        try:
+            if service == service_name["openai"]:
+                async for event in openai_response_model_stream(
+                    configuration,
+                    apikey,
+                    self.execution_time_logs,
+                    self.bridge_id,
+                    self.timer,
+                    self.message_id,
+                    self.org_id,
+                    self.name,
+                    self.org_name,
+                    service,
+                    0,
+                    self.token_calculator,
+                ):
+                    yield event
+            else:
+                raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
+        except Exception as e:
+            logger.error(f"chats_stream error=>, {str(e)}, {traceback.format_exc()}")
+            raise
 
     async def replace_variables_in_args(self, codes_mapping):
         variables = self.variables

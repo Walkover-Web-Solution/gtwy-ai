@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Test — AI Middleware</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #15171a;
+            --bg-secondary: #1e2024;
+            --bg-tertiary: #262930;
+            --bg-hover: #2a2d35;
+            --border: #32363f;
+            --border-light: #3d4250;
+            --text-primary: #f0f2f5;
+            --text-secondary: #a0a6b1;
+            --text-muted: #6b7280;
+            --accent: #6c5ce7;
+            --accent-light: #a29bfe;
+            --accent-bg: rgba(108,92,231,0.12);
+            --success: #00b894;
+            --success-bg: rgba(0,184,148,0.12);
+            --warning: #fdcb6e;
+            --danger: #e17055;
+            --danger-bg: rgba(225,112,85,0.12);
+            --blue: #74b9ff;
+            --blue-bg: rgba(116,185,255,0.12);
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 820px;
+            padding: 36px 24px;
+        }
+
+        .header { margin-bottom: 28px; }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .header h1 span {
+            background: linear-gradient(135deg, var(--accent), var(--accent-light));
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle { color: var(--text-muted); font-size: 13px; }
+
+        /* Config Panel */
+        .config-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px;
+            margin-bottom: 20px;
+        }
+
+        .config-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .config-row:last-child { margin-bottom: 0; }
+
+        .config-field {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .config-field label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+
+        .config-field input {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            padding: 9px 12px;
+            font-size: 13px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .config-field input:focus { border-color: var(--accent); }
+        .config-field input::placeholder { color: var(--text-muted); }
+
+        /* Input Area */
+        .input-area {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 24px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 8px;
+            transition: border-color 0.2s;
+        }
+
+        .input-area:focus-within { border-color: var(--accent); }
+
+        .input-area textarea {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            padding: 8px 10px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            min-height: 40px;
+            max-height: 120px;
+            line-height: 1.5;
+        }
+
+        .input-area textarea::placeholder { color: var(--text-muted); }
+
+        .run-btn {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 10px 22px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            white-space: nowrap;
+            align-self: flex-end;
+        }
+
+        .run-btn:hover { background: #5b4bd5; }
+        .run-btn:active { transform: scale(0.97); }
+        .run-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+        /* Status Banner */
+        .status-banner {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            background: var(--accent-bg);
+            border: 1px solid rgba(108,92,231,0.2);
+            border-radius: var(--radius-sm);
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: var(--accent-light);
+        }
+
+        .status-banner.visible { display: flex; }
+
+        .spinner {
+            width: 16px; height: 16px;
+            border: 2px solid rgba(108,92,231,0.25);
+            border-top-color: var(--accent-light);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Question Card */
+        .question-card {
+            display: none;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 16px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .question-card.visible { display: block; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .question-icon {
+            width: 32px; height: 32px;
+            background: var(--accent-bg);
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            margin-bottom: 14px;
+            font-size: 16px;
+        }
+
+        .question-text {
+            font-size: 15px; font-weight: 500;
+            color: var(--text-primary);
+            line-height: 1.5; margin-bottom: 18px;
+        }
+
+        .options-grid { display: flex; flex-direction: column; gap: 8px; }
+
+        .option-btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-size: 14px; font-family: inherit;
+            cursor: pointer; text-align: left;
+            transition: all 0.15s ease;
+            display: flex; align-items: center; gap: 10px;
+        }
+
+        .option-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--accent-light); }
+
+        .option-key {
+            width: 24px; height: 24px;
+            background: var(--bg-primary);
+            border-radius: 6px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11px; font-weight: 600;
+            color: var(--text-muted); flex-shrink: 0;
+        }
+
+        .option-btn:hover .option-key { background: var(--accent-bg); color: var(--accent-light); }
+
+        /* Task Timeline */
+        .timeline { display: flex; flex-direction: column; }
+
+        .task-card {
+            position: relative;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 2px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+            overflow: hidden;
+        }
+
+        .task-card.in_progress { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(108,92,231,0.15); }
+        .task-card.completed { border-color: var(--success); }
+        .task-card.failed { border-color: var(--danger); }
+
+        .task-header-bar {
+            display: flex; align-items: center;
+            padding: 12px 14px 12px 40px;
+            cursor: pointer; user-select: none;
+            position: relative; gap: 10px;
+            transition: background 0.15s;
+        }
+
+        .task-header-bar:hover { background: var(--bg-hover); }
+        .task-card.in_progress .task-header-bar { cursor: default; background: transparent; }
+
+        .task-dot {
+            position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+            width: 10px; height: 10px; border-radius: 50%;
+            background: var(--text-muted);
+            transition: background 0.3s, box-shadow 0.3s;
+        }
+
+        .task-card.in_progress .task-dot {
+            background: var(--accent);
+            box-shadow: 0 0 8px rgba(108,92,231,0.5);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        .task-card.completed .task-dot { background: var(--success); }
+        .task-card.failed .task-dot { background: var(--danger); }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 4px rgba(108,92,231,0.3); }
+            50% { box-shadow: 0 0 12px rgba(108,92,231,0.6); }
+        }
+
+        .task-title { font-size: 13px; font-weight: 600; color: var(--text-primary); flex: 1; line-height: 1.4; }
+
+        .task-badge {
+            font-size: 10px; font-weight: 600;
+            padding: 2px 8px; border-radius: 10px;
+            text-transform: uppercase; letter-spacing: 0.4px; flex-shrink: 0;
+        }
+
+        .badge-pending { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+        .badge-in_progress { background: var(--accent-bg); color: var(--accent-light); border: 1px solid rgba(108,92,231,0.25); }
+        .badge-completed { background: var(--success-bg); color: var(--success); border: 1px solid rgba(0,184,148,0.25); }
+        .badge-failed { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(225,112,85,0.25); }
+
+        .task-chevron {
+            width: 14px; height: 14px; flex-shrink: 0;
+            transition: transform 0.25s ease; color: var(--text-muted);
+        }
+
+        .task-card.expanded .task-chevron { transform: rotate(180deg); }
+        .task-card.in_progress .task-chevron { display: none; }
+
+        .task-body { max-height: 0; overflow: hidden; transition: max-height 0.35s ease; }
+        .task-card.expanded .task-body, .task-card.in_progress .task-body { max-height: 2000px; }
+
+        .task-body-inner { padding: 0 14px 14px 40px; }
+        .task-description { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-bottom: 8px; }
+
+        .task-output {
+            padding: 10px 12px;
+            background: var(--bg-primary);
+            border-radius: var(--radius-sm);
+            font-size: 12px; line-height: 1.7;
+            color: var(--text-secondary);
+            max-height: 280px; overflow-y: auto;
+            white-space: pre-wrap; word-break: break-word;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .task-output:empty { display: none; }
+
+        .task-connector { width: 2px; height: 6px; background: var(--border); margin-left: 18px; margin-bottom: 2px; }
+
+        /* Direct / Streaming Response */
+        .direct-response {
+            display: none;
+            padding: 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+            font-size: 14px; line-height: 1.7;
+            color: var(--text-primary);
+            white-space: pre-wrap; word-break: break-word;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .direct-response.visible { display: block; }
+
+        /* Thinking Block */
+        .thinking-block {
+            display: none;
+            padding: 14px 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: var(--radius-sm);
+            margin-bottom: 12px;
+            font-size: 12px; line-height: 1.6;
+            color: var(--text-muted);
+            font-style: italic;
+            white-space: pre-wrap; word-break: break-word;
+            max-height: 200px; overflow-y: auto;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .thinking-block.visible { display: block; }
+
+        .thinking-label {
+            font-size: 10px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.6px;
+            color: var(--accent-light);
+            margin-bottom: 6px;
+            font-style: normal;
+        }
+
+        /* Activity / Tool Events */
+        .event-log {
+            margin-bottom: 16px;
+        }
+
+        .event-item {
+            display: flex; align-items: flex-start; gap: 8px;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            margin-bottom: 4px;
+            font-size: 12px; color: var(--text-secondary);
+            animation: fadeIn 0.2s ease;
+        }
+
+        .event-tag {
+            font-size: 10px; font-weight: 700;
+            padding: 1px 6px; border-radius: 4px;
+            text-transform: uppercase; letter-spacing: 0.3px;
+            flex-shrink: 0; margin-top: 1px;
+        }
+
+        .tag-tool_calls { background: var(--blue-bg); color: var(--blue); }
+        .tag-tool_result { background: var(--success-bg); color: var(--success); }
+        .tag-agent_transfer { background: var(--accent-bg); color: var(--accent-light); }
+        .tag-activity { background: rgba(253,203,110,0.12); color: var(--warning); }
+        .tag-planning { background: var(--accent-bg); color: var(--accent-light); }
+        .tag-error { background: var(--danger-bg); color: var(--danger); }
+
+        .event-content {
+            flex: 1;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            white-space: pre-wrap; word-break: break-word;
+            line-height: 1.5;
+        }
+
+        /* Step Counter */
+        .step-counter {
+            display: none;
+            font-size: 12px; color: var(--text-muted);
+            margin-bottom: 12px; padding: 0 4px;
+        }
+        .step-counter.visible { display: flex; align-items: center; gap: 6px; }
+        .step-counter .done-count { color: var(--success); font-weight: 600; }
+
+        /* Final Answer */
+        .final-answer {
+            display: none;
+            margin-top: 16px; padding: 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--accent);
+            border-radius: var(--radius);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .final-answer.visible { display: block; }
+
+        .final-answer-label {
+            font-size: 11px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.8px;
+            color: var(--accent-light);
+            margin-bottom: 12px;
+            display: flex; align-items: center; gap: 6px;
+        }
+
+        .final-answer-label::before {
+            content: ''; width: 6px; height: 6px;
+            background: var(--accent); border-radius: 50%;
+        }
+
+        .final-answer-content {
+            font-size: 14px; line-height: 1.8;
+            color: var(--text-primary);
+            white-space: pre-wrap; word-break: break-word;
+        }
+
+        /* Summary */
+        .summary-card {
+            display: none;
+            padding: 14px 18px;
+            background: var(--success-bg);
+            border: 1px solid rgba(0,184,148,0.2);
+            border-radius: var(--radius-sm);
+            margin-top: 12px;
+            font-size: 13px; color: var(--success);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .summary-card.visible { display: block; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+        /* Persist config toggle */
+        .persist-row {
+            display: flex; align-items: center; gap: 8px;
+            margin-top: 10px; font-size: 12px; color: var(--text-muted);
+        }
+
+        .persist-row input[type="checkbox"] { accent-color: var(--accent); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><span>Streaming Test</span> — Completion API</h1>
+            <p class="subtitle">Test the /v2/chat/completion streaming endpoint with planning, tasks, tool calls & more</p>
+        </div>
+
+        <div class="config-panel">
+            <div class="config-row">
+                <div class="config-field" style="flex:2">
+                    <label>API Base URL</label>
+                    <input type="text" id="apiUrl" placeholder="http://localhost:8080" />
+                </div>
+                <div class="config-field" style="flex:1">
+                    <label>Bridge ID</label>
+                    <input type="text" id="bridgeId" placeholder="your-bridge-id" />
+                </div>
+            </div>
+            <div class="config-row">
+                <div class="config-field">
+                    <label>Authorization Token (JWT)</label>
+                    <input type="text" id="authToken" placeholder="paste your token here" />
+                </div>
+            </div>
+            <div class="config-row">
+                <div class="config-field" style="flex:1">
+                    <label>Thread ID (optional)</label>
+                    <input type="text" id="threadId" placeholder="leave empty for new thread" />
+                </div>
+            </div>
+            <div class="persist-row">
+                <input type="checkbox" id="persistConfig" checked />
+                <label for="persistConfig">Remember config in browser</label>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <textarea id="userInput" placeholder="Type your message..." rows="1"></textarea>
+            <button class="run-btn" id="runBtn" onclick="runCompletion()">Send</button>
+        </div>
+
+        <div class="status-banner" id="statusBanner">
+            <div class="spinner" id="statusSpinner"></div>
+            <span id="statusText">Planning...</span>
+        </div>
+
+        <div class="thinking-block" id="thinkingBlock">
+            <div class="thinking-label">AI Thinking</div>
+            <div id="thinkingContent"></div>
+        </div>
+
+        <div class="question-card" id="questionCard">
+            <div class="question-icon">?</div>
+            <div class="question-text" id="questionText"></div>
+            <div class="options-grid" id="optionsGrid"></div>
+        </div>
+
+        <div class="event-log" id="eventLog"></div>
+
+        <div class="direct-response" id="directResponse"></div>
+
+        <div class="step-counter" id="stepCounter">
+            <span>Steps: <span class="done-count" id="doneCount">0</span> / <span id="totalCount">0</span></span>
+        </div>
+
+        <div class="timeline" id="timeline"></div>
+
+        <div class="final-answer" id="finalAnswer">
+            <div class="final-answer-label">Final Output</div>
+            <div class="final-answer-content" id="finalAnswerContent"></div>
+        </div>
+
+        <div class="summary-card" id="summaryCard"></div>
+    </div>
+
+    <script>
+        const $ = id => document.getElementById(id);
+        const timeline = $('timeline');
+        const statusBanner = $('statusBanner');
+        const statusText = $('statusText');
+        const statusSpinner = $('statusSpinner');
+        const summaryCard = $('summaryCard');
+        const directResponse = $('directResponse');
+        const finalAnswer = $('finalAnswer');
+        const finalAnswerContent = $('finalAnswerContent');
+        const questionCard = $('questionCard');
+        const questionText = $('questionText');
+        const optionsGrid = $('optionsGrid');
+        const stepCounter = $('stepCounter');
+        const doneCount = $('doneCount');
+        const totalCount = $('totalCount');
+        const runBtn = $('runBtn');
+        const userInput = $('userInput');
+        const eventLog = $('eventLog');
+        const thinkingBlock = $('thinkingBlock');
+        const thinkingContent = $('thinkingContent');
+
+        let completedCount = 0;
+        let totalTasks = 0;
+        let originalGoal = '';
+
+        const chevronSvg = `<svg class="task-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>`;
+        const optionKeys = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+        // Persist config
+        function loadConfig() {
+            if (localStorage.getItem('stream_test_persist') !== 'true') return;
+            $('apiUrl').value = localStorage.getItem('stream_test_apiUrl') || '';
+            $('bridgeId').value = localStorage.getItem('stream_test_bridgeId') || '';
+            $('authToken').value = localStorage.getItem('stream_test_authToken') || '';
+            $('threadId').value = localStorage.getItem('stream_test_threadId') || '';
+            $('persistConfig').checked = true;
+        }
+
+        function saveConfig() {
+            if ($('persistConfig').checked) {
+                localStorage.setItem('stream_test_persist', 'true');
+                localStorage.setItem('stream_test_apiUrl', $('apiUrl').value);
+                localStorage.setItem('stream_test_bridgeId', $('bridgeId').value);
+                localStorage.setItem('stream_test_authToken', $('authToken').value);
+                localStorage.setItem('stream_test_threadId', $('threadId').value);
+            } else {
+                localStorage.removeItem('stream_test_persist');
+                localStorage.removeItem('stream_test_apiUrl');
+                localStorage.removeItem('stream_test_bridgeId');
+                localStorage.removeItem('stream_test_authToken');
+                localStorage.removeItem('stream_test_threadId');
+            }
+        }
+
+        loadConfig();
+
+        userInput.addEventListener('input', function () {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+
+        userInput.addEventListener('keydown', function (e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runCompletion();
+        });
+
+        function showStatus(text) {
+            statusBanner.classList.add('visible');
+            statusSpinner.style.display = 'block';
+            statusText.textContent = text;
+        }
+
+        function hideStatus() { statusBanner.classList.remove('visible'); }
+
+        function updateStepCounter() {
+            doneCount.textContent = completedCount;
+            totalCount.textContent = totalTasks;
+        }
+
+        function resetUI() {
+            timeline.innerHTML = '';
+            eventLog.innerHTML = '';
+            summaryCard.classList.remove('visible');
+            directResponse.classList.remove('visible');
+            directResponse.textContent = '';
+            finalAnswer.classList.remove('visible');
+            finalAnswerContent.textContent = '';
+            questionCard.classList.remove('visible');
+            stepCounter.classList.remove('visible');
+            thinkingBlock.classList.remove('visible');
+            thinkingContent.textContent = '';
+            completedCount = 0;
+            totalTasks = 0;
+        }
+
+        function addEventItem(tag, content) {
+            const item = document.createElement('div');
+            item.className = 'event-item';
+            const tagClass = `tag-${tag}`;
+            item.innerHTML = `<span class="event-tag ${tagClass}">${escapeHtml(tag)}</span><span class="event-content">${escapeHtml(typeof content === 'string' ? content : JSON.stringify(content, null, 2))}</span>`;
+            eventLog.appendChild(item);
+            item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function showQuestion(text, options) {
+            hideStatus();
+            questionText.textContent = text;
+            optionsGrid.innerHTML = '';
+            (options || []).forEach((opt, i) => {
+                const btn = document.createElement('button');
+                btn.className = 'option-btn';
+                btn.innerHTML = `<span class="option-key">${optionKeys[i] || (i+1)}</span><span>${escapeHtml(opt)}</span>`;
+                btn.onclick = () => selectOption(opt);
+                optionsGrid.appendChild(btn);
+            });
+            questionCard.classList.add('visible');
+            questionCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function selectOption(option) {
+            questionCard.classList.remove('visible');
+            userInput.value = originalGoal + '\n\nSelected: ' + option;
+            runCompletion();
+        }
+
+        function createTaskCard(task, index) {
+            if (index > 0) {
+                const conn = document.createElement('div');
+                conn.className = 'task-connector';
+                timeline.appendChild(conn);
+            }
+            const card = document.createElement('div');
+            card.className = `task-card ${task.status}`;
+            card.id = `task-${task.id}`;
+            card.innerHTML = `
+                <div class="task-header-bar" onclick="toggleCard('${task.id}')">
+                    <div class="task-dot"></div>
+                    <span class="task-title">${escapeHtml(task.title)}</span>
+                    <span class="task-badge badge-${task.status}">${(task.status || '').replace('_', ' ')}</span>
+                    ${chevronSvg}
+                </div>
+                <div class="task-body">
+                    <div class="task-body-inner">
+                        <div class="task-description">${escapeHtml(task.description || '')}</div>
+                        <div class="task-output" id="output-${task.id}"></div>
+                    </div>
+                </div>
+            `;
+            return card;
+        }
+
+        function toggleCard(taskId) {
+            const card = document.getElementById(`task-${taskId}`);
+            if (!card || card.classList.contains('in_progress')) return;
+            card.classList.toggle('expanded');
+        }
+
+        function updateTaskStatus(taskId, status) {
+            const card = document.getElementById(`task-${taskId}`);
+            if (!card) return;
+            const wasInProgress = card.classList.contains('in_progress');
+            card.className = `task-card ${status}`;
+            const badge = card.querySelector('.task-badge');
+            badge.className = `task-badge badge-${status}`;
+            badge.textContent = status.replace('_', ' ');
+            if (status === 'in_progress') card.classList.add('expanded');
+            if ((status === 'completed' || status === 'failed') && wasInProgress) {
+                card.classList.remove('expanded');
+                if (status === 'completed') { completedCount++; updateStepCounter(); }
+            }
+        }
+
+        function appendTaskOutput(taskId, chunk) {
+            const output = document.getElementById(`output-${taskId}`);
+            if (!output) return;
+            output.textContent += chunk;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function runCompletion() {
+            const message = userInput.value.trim();
+            const apiUrl = $('apiUrl').value.trim() || 'http://localhost:8080';
+            const bridgeId = $('bridgeId').value.trim();
+            const authToken = $('authToken').value.trim();
+            const threadId = $('threadId').value.trim();
+
+            if (!message) return;
+            if (!bridgeId) { alert('Bridge ID is required'); return; }
+            if (!authToken) { alert('Authorization token is required'); return; }
+
+            if (!originalGoal || !message.includes('Selected:')) originalGoal = message;
+
+            saveConfig();
+            resetUI();
+            runBtn.disabled = true;
+            runBtn.textContent = 'Running...';
+            showStatus('Connecting...');
+
+            const requestBody = {
+                user: message,
+                bridge_id: bridgeId,
+                stream: true,
+            };
+
+            if (threadId) requestBody.thread_id = threadId;
+
+            try {
+                const response = await fetch(`${apiUrl}api/v2/model/chat/completion`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': authToken,
+                    },
+                    body: JSON.stringify(requestBody),
+                });
+
+                if (!response.ok) {
+                    let errMsg = `HTTP ${response.status}`;
+                    try { const err = await response.json(); errMsg = err.detail || err.error || errMsg; } catch(e) {}
+                    throw new Error(errMsg);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let eventType = '';
+                let eventData = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            eventType = line.slice(6).trim();
+                        } else if (line.startsWith('data:')) {
+                            eventData = line.slice(5).trim();
+                        } else if (line.trim() === '') {
+                            if (eventType && eventData) {
+                                try { handleEvent(eventType, JSON.parse(eventData)); } catch(e) { console.warn('Parse error:', e, eventData); }
+                            }
+                            eventType = '';
+                            eventData = '';
+                        }
+                    }
+                }
+
+                if (eventType && eventData) {
+                    try { handleEvent(eventType, JSON.parse(eventData)); } catch(e) {}
+                }
+
+            } catch (err) {
+                showStatus(`Error: ${err.message}`);
+                statusSpinner.style.display = 'none';
+                addEventItem('error', err.message);
+            } finally {
+                runBtn.disabled = false;
+                runBtn.textContent = 'Send';
+            }
+        }
+
+        function handleEvent(event, data) {
+            console.log(`[SSE] ${event}:`, data);
+
+            switch (event) {
+                case 'planning':
+                    if (data.message) showStatus(data.message);
+                    if (data.chunk) showStatus('Planning...');
+                    break;
+
+                case 'planning_thinking':
+                    showStatus('AI is reasoning...');
+                    break;
+
+                case 'thinking':
+                    thinkingBlock.classList.add('visible');
+                    thinkingContent.textContent += (data.chunk || '');
+                    thinkingBlock.scrollTop = thinkingBlock.scrollHeight;
+                    break;
+
+                case 'delta':
+                    hideStatus();
+                    directResponse.classList.add('visible');
+                    directResponse.textContent += (data.chunk || '');
+                    break;
+
+                case 'question':
+                    showQuestion(data.text, data.options);
+                    break;
+
+                case 'plan_ready':
+                    showStatus('Executing steps...');
+                    totalTasks = data.tasks.length;
+                    completedCount = 0;
+                    updateStepCounter();
+                    stepCounter.classList.add('visible');
+                    data.tasks.forEach((task, i) => {
+                        timeline.appendChild(createTaskCard(task, i));
+                    });
+                    break;
+
+                case 'task_start':
+                    updateTaskStatus(data.task_id, 'in_progress');
+                    showStatus(`Working on: ${data.title}`);
+                    const activeCard = document.getElementById(`task-${data.task_id}`);
+                    if (activeCard) activeCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    break;
+
+                case 'task_progress':
+                    appendTaskOutput(data.task_id, data.chunk);
+                    break;
+
+                case 'task_done':
+                    updateTaskStatus(data.task_id, 'completed');
+                    break;
+
+                case 'task_failed':
+                    updateTaskStatus(data.task_id, 'failed');
+                    const failOutput = document.getElementById(`output-${data.task_id}`);
+                    if (failOutput && data.error) failOutput.textContent = `Error: ${data.error}`;
+                    addEventItem('error', `Task failed: ${data.error || 'unknown'}`);
+                    break;
+
+                case 'tool_calls':
+                    addEventItem('tool_calls', (data.tools || []).map(t => `${t.name}(${t.arguments || ''})`).join(', '));
+                    showStatus('Calling tools...');
+                    break;
+
+                case 'tool_result':
+                    const preview = typeof data.content === 'string' ? data.content.slice(0, 300) : JSON.stringify(data.content).slice(0, 300);
+                    addEventItem('tool_result', `${data.name}: ${preview}`);
+                    break;
+
+                case 'agent_transfer':
+                    addEventItem('agent_transfer', `Transferring to agent: ${data.bridge_id || JSON.stringify(data)}`);
+                    showStatus('Agent transfer...');
+                    break;
+
+                case 'activity':
+                    addEventItem('activity', data.message || JSON.stringify(data));
+                    break;
+
+                case 'final_answer_start':
+                    showStatus('Preparing final output...');
+                    finalAnswer.classList.add('visible');
+                    finalAnswer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    break;
+
+                case 'final_answer_progress':
+                    finalAnswerContent.textContent += (data.chunk || '');
+                    break;
+
+                case 'done':
+                    hideStatus();
+                    if (data.response && data.response.data && data.response.data.content) {
+                        if (!directResponse.classList.contains('visible')
+                            && !finalAnswer.classList.contains('visible')
+                            && !timeline.children.length) {
+                            directResponse.textContent = data.response.data.content;
+                            directResponse.classList.add('visible');
+                        }
+                    }
+                    summaryCard.textContent = '✓ Stream completed';
+                    summaryCard.classList.add('visible');
+                    break;
+
+                case 'error':
+                    showStatus(`Error: ${data.error || data.message || 'Unknown'}`);
+                    statusSpinner.style.display = 'none';
+                    addEventItem('error', data.error || data.message || JSON.stringify(data));
+                    break;
+
+                default:
+                    addEventItem(event, data);
+            }
+        }
+    </script>
+</body>
+</html>

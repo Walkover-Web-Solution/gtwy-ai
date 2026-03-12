@@ -1,5 +1,4 @@
 from config import Config
-from notdiamond import AsyncNotDiamond
 from src.configs.model_configuration import model_config_document
 from src.services.utils.auto_router_utils import (
     PROVIDER_NAME_OVERRIDES,
@@ -7,7 +6,11 @@ from src.services.utils.auto_router_utils import (
     get_supported_services,
 )
 
-client = AsyncNotDiamond(api_key=Config.NOTDIAMOND_API_KEY) if Config.NOTDIAMOND_API_KEY else None
+try:
+    from notdiamond import AsyncNotDiamond
+    client = AsyncNotDiamond(api_key=Config.NOTDIAMOND_API_KEY) if Config.NOTDIAMOND_API_KEY else None
+except ImportError:
+    client = None
 
 INTERNAL_TO_NOTDIAMOND_PROVIDER = {value: key for key, value in PROVIDER_NAME_OVERRIDES.items()}
 

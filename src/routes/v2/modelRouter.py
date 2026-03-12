@@ -1,12 +1,13 @@
 from concurrent.futures import ThreadPoolExecutor
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sse_starlette.sse import EventSourceResponse
 
 from config import Config
 from globals import logger
 from src.middlewares.ratelimitMiddleware import rate_limit
 from src.services.commonServices.baseService.utils import make_request_data
-from src.services.commonServices.common import batch, chat_multiple_agents, embedding, image
+from src.services.commonServices.common import batch, chat_multiple_agents, chat_stream, embedding, image
 from src.services.commonServices.queueService.queueService import queue_obj
 
 from ...middlewares.getDataUsingBridgeId import add_configuration_data_to_body
@@ -53,6 +54,10 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         if type == "image":
             result = await image(data_to_send)
             return result
+        # Check if streaming is requested (stream flag is at body level, not inside configuration)
+        is_streaming = data_to_send.get("body", {}).get("stream", False)
+        if is_streaming:
+            return EventSourceResponse(chat_stream(data_to_send))
         result = await chat_multiple_agents(data_to_send)
         return result
 

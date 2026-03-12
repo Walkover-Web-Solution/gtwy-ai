@@ -5,7 +5,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from config import Config
 from globals import logger
@@ -105,6 +105,12 @@ async def validation_exception_handler(exc: RequestValidationError):
         status_code=400,
         content={"detail": "Custom error message", "errors": exc.errors()},
     )
+
+
+# Streaming test page (for development/testing only)
+@app.get("/stream-test")
+async def stream_test_page():
+    return FileResponse("static/stream_test.html", media_type="text/html")
 
 
 # Include routers
