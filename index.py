@@ -93,10 +93,13 @@ app.add_middleware(
 # Healthcheck route
 @app.get("/healthcheck")
 async def healthcheck():
+    # Non-blocking delay to simulate downstream readiness checks
+    await asyncio.sleep(5)
+
     return JSONResponse(
         status_code=200,
         content={
-            "status": "OK running good... v1.2",
+            "status": "OK",
         },
     )
 

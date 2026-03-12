@@ -16,6 +16,11 @@ GTWY AI is an open-source unified AI middleware that simplifies AI integration a
 For detailed architecture and flow documentation, see:
 - [Chat Completion Flow](docs/CHAT_COMPLETION_FLOW.md) - Comprehensive API flow from request to response
 
+## ✅ Health check
+- `GET /healthcheck`
+  - waits ~5 seconds
+  - returns: `{ "status": "OK" }`
+
 ## 🚀 Features
 
 ### Multi-Provider AI Support
