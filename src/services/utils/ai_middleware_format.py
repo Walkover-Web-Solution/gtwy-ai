@@ -1,11 +1,34 @@
 import json
+import uuid
 
 from config import Config
 from src.configs.constant import service_name
 from src.services.utils.apiservice import fetch
 
 
-async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False):
+async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False, isCache=False):
+    if isCache:
+        return  {
+            "data": {
+            "id": f"cache_{uuid.uuid4().hex}",
+            "content": response,
+            "model": None,
+            "role": "assistant",
+            "tools_data": {},
+            "images": None,
+                "annotations": None,
+                "fallback": False,
+                "firstAttemptError": "",
+                },
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost": 0,
+            },
+            "is_cached": True,
+        }
+
     tools_data = tools
     if isinstance(tools_data, dict):
         for key, value in tools_data.items():

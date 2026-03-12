@@ -38,6 +38,7 @@ async def add_configuration_data_to_body(request: Request):
             web_search_filters=body.get("web_search_filters"),
             orchestrator_flag=body.get("orchestrator_flag"),
             chatbot=body.get("chatbot", False),
+            override_fields=body
         )
 
         # Check if getConfiguration returned an error response

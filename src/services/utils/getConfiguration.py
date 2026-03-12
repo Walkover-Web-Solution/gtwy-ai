@@ -54,6 +54,7 @@ async def _prepare_configuration_response(
     web_search_filters=None,
     orchestrator_flag=None,
     chatbot=False,
+    override_fields={}
 ):
     """Internal helper to build configuration response for a single bridge."""
 
@@ -102,7 +103,11 @@ async def _prepare_configuration_response(
     apikey = setup_api_key(service, result, apikey, chatbot)
     apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
     apikey_status = result.get('bridges', {}).get('apikey_status')
-    auto_model_select = result.get("bridges", {}).get("auto_model_select")
+
+    # Overriding fields from Body (if Given)
+    auto_model_select = override_fields.get("auto_model_select") or result.get("bridges", {}).get("auto_model_select")
+    chatbot_auto_answers = override_fields.get("chatbot_auto_answers") or result.get("bridges", {}).get("chatbot_auto_answers")
+    cache_on = override_fields.get("cache_on") or result.get("bridges", {}).get("cache_on")
 
     service_apikeys = {}
     merged_apikeys = {
@@ -227,7 +232,8 @@ async def _prepare_configuration_response(
         "folder_id": result.get("bridges", {}).get("folder_id"),
         "wrapper_id": result.get("bridges", {}).get("wrapper_id"),
         "web_search_filters": web_search_filters_value,
-        "chatbot_auto_answers": bridge_data.get("bridges", {}).get("chatbot_auto_answers"),
+        "chatbot_auto_answers": chatbot_auto_answers,
+        "cache_on": cache_on,
         "richui_templates": result.get("bridges", {}).get("richui_templates"),
         "limit": {
             "bridge": {
@@ -348,6 +354,7 @@ async def getConfiguration(
     web_search_filters=None,
     orchestrator_flag=None,
     chatbot=False,
+    override_fields={}
 ):
     """
     Get configuration for a bridge with all necessary tools and settings.
@@ -369,6 +376,7 @@ async def getConfiguration(
         web_search_filters,
         orchestrator_flag,
         chatbot,
+        override_fields
     )
 
     if error:

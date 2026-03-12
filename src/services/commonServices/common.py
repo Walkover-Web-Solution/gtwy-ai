@@ -49,6 +49,7 @@ from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
 from ..utils.send_error_webhook import send_error_to_webhook
 from .baseService.utils import sendResponse
+from .response_caching_service import handle_response_caching
 
 app = FastAPI()
 configurationModel = db["configurations"]
@@ -236,7 +237,7 @@ async def chat(request_body):
 
         original_exception = None
         try:
-            result = await class_obj.execute()
+            result = await handle_response_caching(parsed_data=parsed_data,class_obj=class_obj)
 
             # Check if agent transfer is needed
             transfer_agent_config = result.get("transfer_agent_config")
@@ -287,7 +288,7 @@ async def chat(request_body):
             # Handle exceptions during execution
             execution_failed = True
             original_error = str(execution_exception)
-            first_execution_error_code = execution_exception.status_code
+            first_execution_error_code = getattr(execution_exception, "status_code", None)
             original_exception = execution_exception
             logger.error(
                 f"Initial execution failed with {parsed_data['service']}/{parsed_data['model']}: {original_error}"

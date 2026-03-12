@@ -299,7 +299,7 @@ class BaseService:
                         _.get(funcModelResponse, self.modelOutputConfig["tools"]),
                     )
 
-    def prepare_history_params(self, response, model_response, tools, transfer_agent_config=None):
+    def prepare_history_params(self, response, model_response, tools, transfer_agent_config=None, is_cached=False):
         # Get the original message content
         original_message = response.get("data", {}).get("content") or ""
 
@@ -355,6 +355,7 @@ class BaseService:
             "response": response,
             "folder_id": self.folder_id,
             "prompt": self.configuration.get("prompt"),
+            "is_cached": is_cached
         }
 
     def service_formatter(self, configuration: object, service: str):  # changes
