@@ -1,5 +1,8 @@
 fastapi>=0.111.0
 uvicorn>=0.30.0
 openai>=1.30.0
-sse-starlette>=2.0.0
 python-dotenv>=1.0.0
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+websockets>=12.0

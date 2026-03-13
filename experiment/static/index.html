@@ -26,6 +26,8 @@
             --danger-bg: rgba(225,112,85,0.12);
             --blue: #74b9ff;
             --blue-bg: rgba(116,185,255,0.12);
+            --orange: #e67e22;
+            --orange-bg: rgba(230,126,34,0.12);
             --radius: 12px;
             --radius-sm: 8px;
         }
@@ -72,23 +74,24 @@
         /* Input Area */
         .input-area {
             display: flex;
+            flex-direction: column;
             gap: 10px;
             margin-bottom: 28px;
             background: var(--bg-secondary);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 8px;
+            padding: 12px;
             transition: border-color 0.2s;
         }
 
         .input-area:focus-within { border-color: var(--accent); }
 
         .input-area textarea {
-            flex: 1;
+            width: 100%;
             background: transparent;
             border: none;
             color: var(--text-primary);
-            padding: 8px 10px;
+            padding: 8px 6px;
             font-size: 14px;
             font-family: inherit;
             resize: none;
@@ -100,24 +103,86 @@
 
         .input-area textarea::placeholder { color: var(--text-muted); }
 
+        .input-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .mode-buttons {
+            display: flex;
+            gap: 6px;
+        }
+
+        .mode-btn {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 7px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .mode-btn:hover {
+            background: var(--bg-hover);
+            border-color: var(--border-light);
+            color: var(--text-primary);
+        }
+
+        .mode-btn.active {
+            border-color: var(--accent);
+            color: var(--accent-light);
+            background: var(--accent-bg);
+        }
+
+        .mode-btn .mode-icon {
+            font-size: 14px;
+            line-height: 1;
+        }
+
         .run-btn {
             background: var(--accent);
             color: #fff;
             border: none;
             border-radius: var(--radius-sm);
-            padding: 10px 22px;
+            padding: 8px 24px;
             font-size: 13px;
             font-weight: 600;
             font-family: inherit;
             cursor: pointer;
             transition: background 0.2s, transform 0.1s;
             white-space: nowrap;
-            align-self: flex-end;
         }
 
         .run-btn:hover { background: #5b4bd5; }
         .run-btn:active { transform: scale(0.97); }
         .run-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+        /* Connection Indicator */
+        .ws-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+
+        .ws-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: var(--danger);
+            transition: background 0.3s;
+        }
+
+        .ws-dot.connected { background: var(--success); }
 
         /* Status Banner */
         .status-banner {
@@ -378,6 +443,8 @@
             font-size: 14px;
             line-height: 1.7;
             color: var(--text-primary);
+            white-space: pre-wrap;
+            word-break: break-word;
             animation: fadeIn 0.3s ease;
         }
 
@@ -460,12 +527,27 @@
     <div class="container">
         <div class="header">
             <h1><span>AI Task Planner</span></h1>
-            <p class="subtitle">Describe your goal and watch AI break it down and execute step by step</p>
+            <p class="subtitle">Describe your goal — choose Plan to break it down, or Direct for an instant answer</p>
+        </div>
+
+        <div class="ws-status">
+            <div class="ws-dot" id="wsDot"></div>
+            <span id="wsLabel">Disconnected</span>
         </div>
 
         <div class="input-area">
             <textarea id="goalInput" placeholder="What would you like to build or accomplish?" rows="1"></textarea>
-            <button class="run-btn" id="runBtn" onclick="runExperiment()">Run</button>
+            <div class="input-actions">
+                <div class="mode-buttons">
+                    <button class="mode-btn active" id="btnPlan" onclick="setMode('plan')">
+                        <span class="mode-icon">&#9776;</span> Plan
+                    </button>
+                    <button class="mode-btn" id="btnDirect" onclick="setMode('direct')">
+                        <span class="mode-icon">&#9889;</span> Direct
+                    </button>
+                </div>
+                <button class="run-btn" id="runBtn" onclick="sendGoal()">Run</button>
+            </div>
         </div>
 
         <div class="status-banner" id="statusBanner">
@@ -513,23 +595,103 @@
         const totalCount = $('totalCount');
         const runBtn = $('runBtn');
         const goalInput = $('goalInput');
+        const wsDot = $('wsDot');
+        const wsLabel = $('wsLabel');
+        const btnPlan = $('btnPlan');
+        const btnDirect = $('btnDirect');
 
         let completedCount = 0;
         let totalTasks = 0;
-        let originalGoal = '';
+        let currentMode = 'plan';
+        let ws = null;
+        let currentThreadId = null;
 
         const chevronSvg = `<svg class="task-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>`;
         const optionKeys = ['A', 'B', 'C', 'D', 'E', 'F'];
 
+        // --- Mode Selection ---
+        function setMode(mode) {
+            currentMode = mode;
+            btnPlan.classList.toggle('active', mode === 'plan');
+            btnDirect.classList.toggle('active', mode === 'direct');
+        }
+
+        // --- WebSocket Connection ---
+        function connectWebSocket() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+            ws.onopen = () => {
+                wsDot.classList.add('connected');
+                wsLabel.textContent = 'Connected';
+                runBtn.disabled = false;
+            };
+
+            ws.onclose = () => {
+                wsDot.classList.remove('connected');
+                wsLabel.textContent = 'Disconnected';
+                runBtn.disabled = true;
+                // Auto-reconnect after 2s
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onerror = () => {
+                wsDot.classList.remove('connected');
+                wsLabel.textContent = 'Connection error';
+            };
+
+            ws.onmessage = (evt) => {
+                try {
+                    const msg = JSON.parse(evt.data);
+                    handleEvent(msg.event, msg.data);
+                } catch (e) {
+                    console.error('WS parse error:', e);
+                }
+            };
+        }
+
+        // --- Send Goal ---
+        function sendGoal() {
+            const goal = goalInput.value.trim();
+            if (!goal || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            resetUI();
+            runBtn.disabled = true;
+            runBtn.textContent = 'Running...';
+            showStatus('Analyzing your request...');
+
+            ws.send(JSON.stringify({
+                action: 'start',
+                goal: goal,
+                mode: currentMode,
+            }));
+        }
+
+        // --- Send Answer (for question flow) ---
+        function sendAnswer(answer) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+            questionCard.classList.remove('visible');
+            showStatus('Processing your answer...');
+
+            ws.send(JSON.stringify({
+                action: 'answer',
+                answer: answer,
+                thread_id: currentThreadId,
+            }));
+        }
+
+        // --- Textarea auto-resize + keyboard shortcut ---
         goalInput.addEventListener('input', function () {
             this.style.height = 'auto';
             this.style.height = Math.min(this.scrollHeight, 120) + 'px';
         });
 
         goalInput.addEventListener('keydown', function (e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runExperiment();
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendGoal();
         });
 
+        // --- UI Helpers ---
         function showStatus(text) {
             statusBanner.classList.add('visible');
             statusSpinner.style.display = 'block';
@@ -546,6 +708,7 @@
         function resetUI() {
             timeline.innerHTML = '';
             summaryCard.classList.remove('visible');
+            summaryCard.textContent = '';
             directResponse.classList.remove('visible');
             directResponse.textContent = '';
             finalAnswer.classList.remove('visible');
@@ -564,17 +727,11 @@
                 const btn = document.createElement('button');
                 btn.className = 'option-btn';
                 btn.innerHTML = `<span class="option-key">${optionKeys[i] || (i+1)}</span><span>${escapeHtml(opt)}</span>`;
-                btn.onclick = () => selectOption(opt);
+                btn.onclick = () => sendAnswer(opt);
                 optionsGrid.appendChild(btn);
             });
             questionCard.classList.add('visible');
             questionCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-
-        function selectOption(option) {
-            questionCard.classList.remove('visible');
-            goalInput.value = originalGoal + '\n\nSelected: ' + option;
-            runExperiment();
         }
 
         function createTaskCard(task, index) {
@@ -638,79 +795,21 @@
             return div.innerHTML;
         }
 
-        async function runExperiment() {
-            const goal = goalInput.value.trim();
-            if (!goal) return;
-
-            if (!originalGoal || !goal.includes('Selected:')) originalGoal = goal;
-
-            resetUI();
-            runBtn.disabled = true;
-            runBtn.textContent = 'Running...';
-            showStatus('Analyzing your request...');
-
-            try {
-                const response = await fetch('/run', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ goal }),
-                });
-
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.detail || 'Request failed');
-                }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let eventType = '';
-                let eventData = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('event:')) {
-                            eventType = line.slice(6).trim();
-                        } else if (line.startsWith('data:')) {
-                            eventData = line.slice(5).trim();
-                        } else if (line.trim() === '') {
-                            if (eventType && eventData) {
-                                try { handleEvent(eventType, JSON.parse(eventData)); } catch(e) {}
-                            }
-                            eventType = '';
-                            eventData = '';
-                        }
-                    }
-                }
-
-                if (eventType && eventData) {
-                    try { handleEvent(eventType, JSON.parse(eventData)); } catch(e) {}
-                }
-
-            } catch (err) {
-                showStatus(`Error: ${err.message}`);
-                statusSpinner.style.display = 'none';
-            } finally {
-                runBtn.disabled = false;
-                runBtn.textContent = 'Run';
-            }
-        }
-
+        // --- Event Handler ---
         function handleEvent(event, data) {
             switch (event) {
-                case 'planning':
-                    showStatus('Thinking...');
+                case 'thread_created':
+                    currentThreadId = data.thread_id;
+                    break;
+
+                case 'status':
+                    showStatus(data.message);
                     break;
 
                 case 'question':
                     showQuestion(data.text, data.options);
+                    runBtn.disabled = false;
+                    runBtn.textContent = 'Run';
                     break;
 
                 case 'plan_ready':
@@ -731,7 +830,7 @@
                     if (activeCard) activeCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                     break;
 
-                case 'task_progress':
+                case 'task_chunk':
                     appendTaskOutput(data.task_id, data.chunk);
                     break;
 
@@ -745,26 +844,33 @@
                     if (failOutput) failOutput.textContent = `Error: ${data.error}`;
                     break;
 
-                case 'direct_response':
-                    hideStatus();
-                    directResponse.textContent = data.message;
-                    directResponse.classList.add('visible');
+                case 'direct_chunk':
+                    if (!directResponse.classList.contains('visible')) {
+                        hideStatus();
+                        directResponse.classList.add('visible');
+                    }
+                    directResponse.textContent += data.chunk;
                     break;
 
-                case 'final_answer_start':
-                    showStatus('Preparing final output...');
-                    finalAnswer.classList.add('visible');
-                    finalAnswer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                    break;
-
-                case 'final_answer_progress':
+                case 'final_chunk':
+                    if (!finalAnswer.classList.contains('visible')) {
+                        showStatus('Preparing final output...');
+                        finalAnswer.classList.add('visible');
+                        finalAnswer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
                     finalAnswerContent.textContent += data.chunk;
                     break;
 
                 case 'done':
                     hideStatus();
-                    if (!finalAnswer.classList.contains('visible') && !directResponse.classList.contains('visible')) {
-                        summaryCard.textContent = data.summary;
+                    runBtn.disabled = false;
+                    runBtn.textContent = 'Run';
+
+                    if (data.final_answer && !finalAnswer.classList.contains('visible') && !directResponse.classList.contains('visible')) {
+                        summaryCard.textContent = 'Completed successfully';
+                        summaryCard.classList.add('visible');
+                    } else {
+                        summaryCard.textContent = 'Completed successfully';
                         summaryCard.classList.add('visible');
                     }
                     break;
@@ -772,9 +878,14 @@
                 case 'error':
                     showStatus(`Error: ${data.message}`);
                     statusSpinner.style.display = 'none';
+                    runBtn.disabled = false;
+                    runBtn.textContent = 'Run';
                     break;
             }
         }
+
+        // --- Initialize ---
+        connectWebSocket();
     </script>
 </body>
 </html>
