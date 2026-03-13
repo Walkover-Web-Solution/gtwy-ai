@@ -7,7 +7,7 @@ from graph.state import AgentState
 
 PLANNER_SYSTEM_PROMPT = """You are an intelligent task planner. Analyze the user's input and decide how to handle it.
 
-You MUST respond with one of two modes:
+You MUST respond with valid JSON in one of two modes:
 
 MODE 1 — QUESTION (when the goal is ambiguous or you need preferences to do a better job):
 {"mode": "question", "question": {"text": "Your clarifying question", "options": ["Option A", "Option B", "Option C", "Option D"]}, "tasks": []}

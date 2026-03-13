@@ -27,9 +27,11 @@ async def synthesizer_node(state: AgentState) -> dict:
         model="gpt-4o-mini",
         api_key=state["api_key"],
         temperature=0.4,
+        streaming=True,
     )
 
-    response = await llm.ainvoke(
+    full_text = ""
+    async for chunk in llm.astream(
         [
             {
                 "role": "system",
@@ -39,6 +41,7 @@ async def synthesizer_node(state: AgentState) -> dict:
             },
             {"role": "user", "content": "Produce the final consolidated output now."},
         ]
-    )
+    ):
+        full_text += chunk.content
 
-    return {"final_answer": response.content}
+    return {"final_answer": full_text}

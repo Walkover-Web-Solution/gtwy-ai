@@ -22,3 +22,4 @@ class AgentState(TypedDict):
     question_text: Optional[str]
     question_options: Optional[list[str]]
     human_input: Optional[str]  # filled when user answers via WebSocket
+    plan_approved: bool  # True when user has approved the plan

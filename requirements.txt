@@ -1,0 +1,5 @@
+1. The solution must be implemented in Python.
+2. It should be able to handle input validation and error handling gracefully.
+3. The code must be well-documented with comments explaining the logic.
+4. Performance should be optimized for large datasets.
+5. The solution should include unit tests to verify functionality.

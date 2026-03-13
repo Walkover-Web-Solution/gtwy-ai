@@ -2,7 +2,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
 from graph.edges import route_after_executor, route_after_planner, route_after_router
-from graph.nodes.direct import direct_node
 from graph.nodes.executor import executor_node
 from graph.nodes.planner import planner_node
 from graph.nodes.router import router_node
@@ -18,21 +17,21 @@ def build_graph():
     graph.add_node("router", router_node)
     graph.add_node("planner", planner_node)
     graph.add_node("executor", executor_node)
-    graph.add_node("direct", direct_node)
     graph.add_node("synthesizer", synthesizer_node)
 
     # Entry point
     graph.set_entry_point("router")
 
-    # Router → mode-based split
+    # Router → planner (new plan) or executor (plan already approved)
     graph.add_conditional_edges("router", route_after_router, {
         "planner": "planner",
-        "direct": "direct",
+        "executor": "executor",
     })
 
-    # Planner → question (interrupt) or executor
+    # Planner → question (interrupt) OR wait for approval OR execute (if already approved)
     graph.add_conditional_edges("planner", route_after_planner, {
-        "wait_for_human": END,  # graph stops here, WebSocket sends question, waits for answer
+        "wait_for_human": END,      # graph stops, WebSocket sends question, waits for answer
+        "wait_for_approval": END,   # graph stops, WebSocket sends plan, waits for approval
         "executor": "executor",
     })
 
@@ -41,9 +40,6 @@ def build_graph():
         "executor": "executor",
         "synthesizer": "synthesizer",
     })
-
-    # Direct → END
-    graph.add_edge("direct", END)
 
     # Synthesizer → END
     graph.add_edge("synthesizer", END)

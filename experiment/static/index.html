@@ -71,6 +71,83 @@
             font-size: 14px;
         }
 
+        /* Plan Approval Card */
+        .approval-card {
+            display: none;
+            background: var(--bg-secondary);
+            border: 1px solid var(--accent);
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .approval-card.visible { display: block; }
+
+        .approval-header {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--accent-light);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .approval-header::before {
+            content: '';
+            width: 6px; height: 6px;
+            background: var(--accent);
+            border-radius: 50%;
+        }
+
+        .approval-hint {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }
+
+        .approval-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .approve-btn {
+            background: var(--success);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 9px 24px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .approve-btn:hover { opacity: 0.85; }
+
+        .reject-btn {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 9px 20px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .reject-btn:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
         /* Input Area */
         .input-area {
             display: flex;
@@ -106,45 +183,7 @@
         .input-actions {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-        }
-
-        .mode-buttons {
-            display: flex;
-            gap: 6px;
-        }
-
-        .mode-btn {
-            background: var(--bg-tertiary);
-            color: var(--text-secondary);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            padding: 7px 16px;
-            font-size: 12px;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-            transition: all 0.15s ease;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .mode-btn:hover {
-            background: var(--bg-hover);
-            border-color: var(--border-light);
-            color: var(--text-primary);
-        }
-
-        .mode-btn.active {
-            border-color: var(--accent);
-            color: var(--accent-light);
-            background: var(--accent-bg);
-        }
-
-        .mode-btn .mode-icon {
-            font-size: 14px;
-            line-height: 1;
+            justify-content: flex-end;
         }
 
         .run-btn {
@@ -432,23 +471,8 @@
             margin-bottom: 2px;
         }
 
-        /* Direct Response */
-        .direct-response {
-            display: none;
-            padding: 20px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            margin-bottom: 16px;
-            font-size: 14px;
-            line-height: 1.7;
-            color: var(--text-primary);
-            white-space: pre-wrap;
-            word-break: break-word;
-            animation: fadeIn 0.3s ease;
-        }
-
-        .direct-response.visible { display: block; }
+        /* Direct Response - kept for fallback */
+        .direct-response { display: none; }
 
         /* Step Counter */
         .step-counter {
@@ -527,7 +551,7 @@
     <div class="container">
         <div class="header">
             <h1><span>AI Task Planner</span></h1>
-            <p class="subtitle">Describe your goal — choose Plan to break it down, or Direct for an instant answer</p>
+            <p class="subtitle">Describe your goal — AI will create a plan for your approval before executing</p>
         </div>
 
         <div class="ws-status">
@@ -538,14 +562,6 @@
         <div class="input-area">
             <textarea id="goalInput" placeholder="What would you like to build or accomplish?" rows="1"></textarea>
             <div class="input-actions">
-                <div class="mode-buttons">
-                    <button class="mode-btn active" id="btnPlan" onclick="setMode('plan')">
-                        <span class="mode-icon">&#9776;</span> Plan
-                    </button>
-                    <button class="mode-btn" id="btnDirect" onclick="setMode('direct')">
-                        <span class="mode-icon">&#9889;</span> Direct
-                    </button>
-                </div>
                 <button class="run-btn" id="runBtn" onclick="sendGoal()">Run</button>
             </div>
         </div>
@@ -569,6 +585,15 @@
 
         <div class="timeline" id="timeline"></div>
 
+        <div class="approval-card" id="approvalCard">
+            <div class="approval-header">Plan Ready</div>
+            <p class="approval-hint">Review the plan above. Approve to start execution or regenerate to try again.</p>
+            <div class="approval-actions">
+                <button class="approve-btn" onclick="approvePlan()">&#10003; Approve &amp; Execute</button>
+                <button class="reject-btn" onclick="rejectPlan()">&#8635; Regenerate</button>
+            </div>
+        </div>
+
         <div class="final-answer" id="finalAnswer">
             <div class="final-answer-label">Final Output</div>
             <div class="final-answer-content" id="finalAnswerContent"></div>
@@ -590,6 +615,7 @@
         const questionCard = $('questionCard');
         const questionText = $('questionText');
         const optionsGrid = $('optionsGrid');
+        const approvalCard = $('approvalCard');
         const stepCounter = $('stepCounter');
         const doneCount = $('doneCount');
         const totalCount = $('totalCount');
@@ -597,24 +623,14 @@
         const goalInput = $('goalInput');
         const wsDot = $('wsDot');
         const wsLabel = $('wsLabel');
-        const btnPlan = $('btnPlan');
-        const btnDirect = $('btnDirect');
 
         let completedCount = 0;
         let totalTasks = 0;
-        let currentMode = 'plan';
         let ws = null;
         let currentThreadId = null;
 
         const chevronSvg = `<svg class="task-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>`;
         const optionKeys = ['A', 'B', 'C', 'D', 'E', 'F'];
-
-        // --- Mode Selection ---
-        function setMode(mode) {
-            currentMode = mode;
-            btnPlan.classList.toggle('active', mode === 'plan');
-            btnDirect.classList.toggle('active', mode === 'direct');
-        }
 
         // --- WebSocket Connection ---
         function connectWebSocket() {
@@ -663,7 +679,33 @@
             ws.send(JSON.stringify({
                 action: 'start',
                 goal: goal,
-                mode: currentMode,
+            }));
+        }
+
+        // --- Approve Plan ---
+        function approvePlan() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            approvalCard.classList.remove('visible');
+            showStatus('Starting execution...');
+            ws.send(JSON.stringify({
+                action: 'approve',
+                thread_id: currentThreadId,
+            }));
+        }
+
+        // --- Reject Plan (regenerate) ---
+        function rejectPlan() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            approvalCard.classList.remove('visible');
+            timeline.innerHTML = '';
+            stepCounter.classList.remove('visible');
+            completedCount = 0;
+            totalTasks = 0;
+            showStatus('Regenerating plan...');
+            const goal = goalInput.value.trim();
+            ws.send(JSON.stringify({
+                action: 'start',
+                goal: goal,
             }));
         }
 
@@ -714,6 +756,7 @@
             finalAnswer.classList.remove('visible');
             finalAnswerContent.textContent = '';
             questionCard.classList.remove('visible');
+            approvalCard.classList.remove('visible');
             stepCounter.classList.remove('visible');
             completedCount = 0;
             totalTasks = 0;
@@ -802,6 +845,9 @@
                     currentThreadId = data.thread_id;
                     break;
 
+                case 'plan_approved':
+                    break;
+
                 case 'status':
                     showStatus(data.message);
                     break;
@@ -813,7 +859,9 @@
                     break;
 
                 case 'plan_ready':
-                    showStatus('Executing steps...');
+                    hideStatus();
+                    // Clear any previous plan
+                    timeline.innerHTML = '';
                     totalTasks = data.tasks.length;
                     completedCount = 0;
                     updateStepCounter();
@@ -821,18 +869,38 @@
                     data.tasks.forEach((task, i) => {
                         timeline.appendChild(createTaskCard(task, i));
                     });
+                    // Show approval card below the plan
+                    approvalCard.classList.add('visible');
+                    stepCounter.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    runBtn.disabled = false;
+                    runBtn.textContent = 'Run';
                     break;
 
-                case 'task_start':
+                case 'task_start': {
                     updateTaskStatus(data.task_id, 'in_progress');
-                    showStatus(`Working on: ${data.title}`);
+                    showStatus(`Executing: ${data.title}`);
                     const activeCard = document.getElementById(`task-${data.task_id}`);
                     if (activeCard) activeCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                     break;
+                }
 
                 case 'task_chunk':
                     appendTaskOutput(data.task_id, data.chunk);
                     break;
+
+                case 'tool_call': {
+                    const output = document.getElementById(`output-${data.task_id}`);
+                    if (output) {
+                        const badge = document.createElement('span');
+                        badge.style.cssText = 'display:inline-block;background:rgba(116,185,255,0.15);color:#74b9ff;border:1px solid rgba(116,185,255,0.3);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600;margin:4px 0;font-family:inherit;';
+                        badge.textContent = `⚙ calling ${data.tool}...`;
+                        output.appendChild(badge);
+                        output.appendChild(document.createElement('br'));
+                        output.scrollTop = output.scrollHeight;
+                    }
+                    showStatus(`Tool: ${data.tool}`);
+                    break;
+                }
 
                 case 'task_done':
                     updateTaskStatus(data.task_id, 'completed');
@@ -842,14 +910,6 @@
                     updateTaskStatus(data.task_id, 'failed');
                     const failOutput = document.getElementById(`output-${data.task_id}`);
                     if (failOutput) failOutput.textContent = `Error: ${data.error}`;
-                    break;
-
-                case 'direct_chunk':
-                    if (!directResponse.classList.contains('visible')) {
-                        hideStatus();
-                        directResponse.classList.add('visible');
-                    }
-                    directResponse.textContent += data.chunk;
                     break;
 
                 case 'final_chunk':
@@ -867,12 +927,13 @@
                     runBtn.textContent = 'Run';
 
                     if (data.final_answer && !finalAnswer.classList.contains('visible') && !directResponse.classList.contains('visible')) {
-                        summaryCard.textContent = 'Completed successfully';
-                        summaryCard.classList.add('visible');
-                    } else {
-                        summaryCard.textContent = 'Completed successfully';
-                        summaryCard.classList.add('visible');
+                        finalAnswerContent.textContent = data.final_answer;
+                        finalAnswer.classList.add('visible');
+                        finalAnswer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                     }
+
+                    summaryCard.textContent = 'Completed successfully';
+                    summaryCard.classList.add('visible');
                     break;
 
                 case 'error':
