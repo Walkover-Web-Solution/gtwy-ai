@@ -14,6 +14,7 @@ from src.configs.model_configuration import background_listen_for_changes, init_
 from src.routes.chatBot_routes import router as chatbot_router
 from src.routes.image_process_routes import router as image_process_routes
 from src.routes.rag_routes import router as rag_routes
+from src.routes.time_routes import router as time_routes
 from src.routes.v2.modelRouter import router as v2_router
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueService import queue_obj
@@ -115,6 +116,7 @@ app.include_router(chatbot_router, prefix="/chatbot")
 app.include_router(image_process_routes, prefix="/image/processing")
 app.include_router(image_process_routes, prefix="/files")
 app.include_router(rag_routes, prefix="/rag")
+app.include_router(time_routes, prefix="/time")
 
 if __name__ == "__main__":
     PORT = int(Config.PORT)
