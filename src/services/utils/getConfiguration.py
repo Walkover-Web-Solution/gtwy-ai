@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import src.db_services.ConfigurationServices as ConfigurationService
@@ -64,7 +65,8 @@ async def _prepare_configuration_response(
 
     # Fetch bridge data
     agent_data, resolved_bridge_id = await get_bridge_data(bridge_id, org_id, version_id)
-    chatbot = agent_data.get("bridges", {}).get("bridgeType") == "chatbot"
+    bridges = agent_data.get("bridges", {})
+    chatbot = bridges.get("bridgeType") == "chatbot"
 
     # Validate bridge
     validation_result = await validate_bridge(agent_data)
@@ -77,38 +79,37 @@ async def _prepare_configuration_response(
         return limit_error, None, None, resolved_bridge_id
 
     # Setup configuration and service
-    configuration, service = setup_configuration(configuration, agent_data, service)
+    configuration, service = setup_configuration(configuration, bridges, service)
 
     if service == "openai_response":
         service = "openai"
-    if agent_data.get("bridges", {}).get("openai_completion"):
+    if bridges.get("openai_completion"):
         service = "openai_completion"
 
     service = service.lower() if service else ""
 
     # Capture raw API key dicts BEFORE normalization (needed for limit data in response)
-    raw_apikeys_dict = agent_data.get("bridges", {}).get("apikeys", {}) or {}
-    raw_folder_apikeys_dict = agent_data.get("bridges", {}).get("folder_apikeys", {}) or {}
+    raw_apikeys_dict = bridges.get("apikeys", {}) or {}
+    raw_folder_apikeys_dict = bridges.get("folder_apikeys", {}) or {}
     apikey_src = raw_apikeys_dict or raw_folder_apikeys_dict
 
     # Normalize API keys (strips all fields except apikey string)
     if raw_apikeys_dict:
-        agent_data["bridges"]["apikeys"] = _normalize_apikeys(raw_apikeys_dict, "API")
+        bridges["apikeys"] = _normalize_apikeys(raw_apikeys_dict, "API")
 
     # Normalize folder API keys (strips all fields except apikey string)
     if raw_folder_apikeys_dict:
-        agent_data["bridges"]["folder_apikeys"] = _normalize_apikeys(raw_folder_apikeys_dict, "Folder API")
+        bridges["folder_apikeys"] = _normalize_apikeys(raw_folder_apikeys_dict, "Folder API")
 
-    apikey_src = apikeys_dict or folder_apikeys_dict or {}
-    apikey = setup_api_key(service, result, apikey, chatbot)
-    apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
-    apikey_status = result.get('bridges', {}).get('apikey_status')
-    auto_model_select = agent_data.get("bridges", {}).get("auto_model_select")
+    apikey = setup_api_key(service, bridges, apikey, chatbot)
+    apikey_object_id = bridges.get("apikey_object_id")
+    apikey_status = bridges.get('apikey_status')
+    auto_model_select = bridges.get("auto_model_select")
 
     service_apikeys = {}
     merged_apikeys = {
-        **(agent_data.get("bridges", {}).get("apikeys", {}) or {}),
-        **(agent_data.get("bridges", {}).get("folder_apikeys", {}) or {}),
+        **(bridges.get("apikeys", {}) or {}),
+        **(bridges.get("folder_apikeys", {}) or {}),
     }
 
     for service_name, encrypted_key in merged_apikeys.items():
@@ -130,18 +131,17 @@ async def _prepare_configuration_response(
             "apikey": apikey,
             "apikey_object_id": apikey_object_id,
             "RTLayer": False,
-            "bridge_id": agent_data["bridges"].get("parent_id", agent_data["bridges"].get("_id")),
-            "version_id": version_id or agent_data.get("bridges", {}).get("published_version_id"),
+            "bridge_id": bridges.get("parent_id", bridges.get("_id")),
+            "version_id": version_id or bridges.get("published_version_id"),
         }
         return None, image_config, agent_data, resolved_bridge_id
 
     # Tool choice
-    configuration["tool_choice"] = setup_tool_choice(configuration, agent_data, service)
+    configuration["tool_choice"] = setup_tool_choice(configuration, bridges, service)
 
-    bridge = agent_data.get("bridges")
-    variables_path_bridge = bridge.get("variables_path", {})
+    variables_path_bridge = bridges.get("variables_path", {})
 
-    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(agent_data, variables_path_bridge, extra_tools)
+    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(bridges, variables_path_bridge, extra_tools)
     configuration.pop("tools", None)
     configuration["tools"] = tools
 
@@ -153,8 +153,8 @@ async def _prepare_configuration_response(
     pre_tools_name, pre_tools_args = None, None
     # Store pre_tools_data for later processing
     pre_tools_data_for_later = None
-    if bridge.get("pre_tools"):
-        pre_tools_list = agent_data.get("bridges", {}).get("pre_tools_data") or []
+    if bridges.get("pre_tools"):
+        pre_tools_list = bridges.get("pre_tools_data") or []
         api_data = pre_tools_list[0] if pre_tools_list else {}
         api_data.pop("_id", None)
         if api_data.get("bridge_ids"):
@@ -165,9 +165,9 @@ async def _prepare_configuration_response(
             pre_tools_name = api_data.get("script_id")
             pre_tools_data_for_later = api_data
 
-    rag_data = bridge.get("doc_ids")
-    gpt_memory_context = bridge.get("gpt_memory_context")
-    gpt_memory = agent_data.get("bridges", {}).get("gpt_memory")
+    rag_data = bridges.get("doc_ids")
+    gpt_memory_context = bridges.get("gpt_memory_context")
+    gpt_memory = bridges.get("gpt_memory")
 
     tone = configuration.get("tone", {})
     responseStyle = configuration.get("responseStyle", {})
@@ -177,11 +177,11 @@ async def _prepare_configuration_response(
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
 
-    gtwy_web_search_filters = web_search_filters or agent_data.get("bridges", {}).get("gtwy_web_search_filters") or {}
+    gtwy_web_search_filters = web_search_filters or bridges.get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
         tools,
         tool_id_and_name_mapping,
-        built_in_tools or agent_data.get("bridges", {}).get("built_in_tools"),
+        built_in_tools or bridges.get("built_in_tools"),
         gtwy_web_search_filters,
     )
     if rag_data:
@@ -189,10 +189,10 @@ async def _prepare_configuration_response(
 
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
-    add_connected_agents(agent_data, tools, tool_id_and_name_mapping, orchestrator_flag)
+    add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag)
 
-    guardrails_value = guardrails if guardrails is not None else (agent_data.get("bridges", {}).get("guardrails") or {})
-    web_search_filters_value = web_search_filters or agent_data.get("bridges", {}).get("web_search_filters") or {}
+    guardrails_value = guardrails if guardrails is not None else (bridges.get("guardrails") or {})
+    web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
 
     base_config = {
         "configuration": configuration,
@@ -206,45 +206,45 @@ async def _prepare_configuration_response(
         "apikey_status": apikey_status,
         "RTLayer": RTLayer,
         "template": template_content.get("template") if template_content else None,
-        "user_reference": agent_data.get("bridges", {}).get("user_reference", ""),
+        "user_reference": bridges.get("user_reference", ""),
         "variables_path": variables_path or variables_path_bridge,
         "tool_id_and_name_mapping": tool_id_and_name_mapping,
         "gpt_memory": gpt_memory,
-        "version_id": version_id or agent_data.get("bridges", {}).get("published_version_id"),
+        "version_id": version_id or bridges.get("published_version_id"),
         "gpt_memory_context": gpt_memory_context,
-        "tool_call_count": agent_data.get("bridges", {}).get("tool_call_count", 3),
+        "tool_call_count": bridges.get("tool_call_count", 3),
         "variables": variables,
         "rag_data": rag_data,
-        "actions": agent_data.get("bridges", {}).get("actions", []),
-        "name": agent_data.get("bridges", {}).get("name") or "",
+        "actions": bridges.get("actions", []),
+        "name": bridges.get("name") or "",
         "org_name": org_name,
-        "bridge_id": agent_data["bridges"].get("parent_id", agent_data["bridges"].get("_id")),
-        "variables_state": agent_data.get("bridges", {}).get("variables_state", {}),
-        "built_in_tools": built_in_tools or agent_data.get("bridges", {}).get("built_in_tools"),
-        "fall_back": agent_data.get("bridges", {}).get("fall_back") or {},
+        "bridge_id": bridges.get("parent_id", bridges.get("_id")),
+        "variables_state": bridges.get("variables_state", {}),
+        "built_in_tools": built_in_tools or bridges.get("built_in_tools"),
+        "fall_back": bridges.get("fall_back") or {},
         "guardrails": guardrails_value,
-        "is_embed": agent_data.get("bridges", {}).get("folder_type") == "embed",
-        "user_id": agent_data.get("bridges", {}).get("user_id"),
-        "folder_id": agent_data.get("bridges", {}).get("folder_id"),
-        "wrapper_id": agent_data.get("bridges", {}).get("wrapper_id"),
+        "is_embed": bridges.get("folder_type") == "embed",
+        "user_id": bridges.get("user_id"),
+        "folder_id": bridges.get("folder_id"),
+        "wrapper_id": bridges.get("wrapper_id"),
         "web_search_filters": web_search_filters_value,
-        "chatbot_auto_answers": agent_data.get("bridges", {}).get("chatbot_auto_answers"),
-        "richui_templates": agent_data.get("bridges", {}).get("richui_templates"),
+        "chatbot_auto_answers": bridges.get("chatbot_auto_answers"),
+        "richui_templates": bridges.get("richui_templates"),
         "limit": {
             "bridge": {
-                "limit": agent_data.get("bridges", {}).get("bridge_limit"),
-                "limit_start_date": agent_data.get("bridges", {}).get("bridge_limit_start_date"),
-                "limit_reset_period": agent_data.get("bridges", {}).get("bridge_limit_reset_period"),
+                "limit": bridges.get("bridge_limit"),
+                "limit_start_date": bridges.get("bridge_limit_start_date"),
+                "limit_reset_period": bridges.get("bridge_limit_reset_period"),
             },
             "folder": {
-                "limit": agent_data.get("bridges", {}).get("folder_limit"),
-                "limit_start_date": agent_data.get("bridges", {}).get("folder_limit_start_date"),
-                "limit_reset_period": agent_data.get("bridges", {}).get("folder_limit_reset_period"),
+                "limit": bridges.get("folder_limit"),
+                "limit_start_date": bridges.get("folder_limit_start_date"),
+                "limit_reset_period": bridges.get("folder_limit_reset_period"),
             },
             "apikey": {
-                "limit": apikey_src.get(service,{}).get("apikey_limit"),
-                "limit_start_date": apikey_src.get(service,{}).get("apikey_limit_start_date"),
-                "limit_reset_period": apikey_src.get(service,{}).get("apikey_limit_reset_period"),
+                "limit": apikey_src.get(service, {}).get("apikey_limit"),
+                "limit_start_date": apikey_src.get(service, {}).get("apikey_limit_start_date"),
+                "limit_reset_period": apikey_src.get(service, {}).get("apikey_limit_reset_period"),
             },
         },
     }
@@ -262,16 +262,22 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
     connected_agents = bridge_payload.get("connected_agents", {})
     connected_agent_details = bridge_payload.get("connected_agent_details", {})
 
-    aggregated_configs = {}
-
+    # Build list of agents to fetch (skip already visited)
+    pending = []
     for _, agent_info in connected_agents.items():
         bridge_id_value = agent_info.get("bridge_id")
         if not bridge_id_value or bridge_id_value in visited:
             continue
-
+        # Pre-populate visited before launching concurrent tasks to prevent duplicate fetches
+        visited.add(bridge_id_value)
         agent_details = connected_agent_details.get(bridge_id_value) or {}
         merged_info = {**agent_details, **agent_info}
+        pending.append((bridge_id_value, merged_info))
 
+    if not pending:
+        return {}
+
+    async def _fetch_agent(bridge_id_value, merged_info):
         version_id_value = merged_info.get("version_id")
         configuration_override = (
             merged_info.get("configuration") if isinstance(merged_info.get("configuration"), dict) else None
@@ -310,11 +316,21 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
             )
         except Exception as exc:
             logger.error(f"Error fetching configuration for connected agent {bridge_id_value}: {exc}")
-            continue
+            return bridge_id_value, None, None, None
 
         if error:
             logger.error(f"Skipping connected agent {bridge_id_value} due to error response: {error}")
-            child_agent_data = None
+            return bridge_id_value, None, None, None
+
+        return bridge_id_value, child_config, child_agent_data, resolved_child_id
+
+    # Fetch all sibling agents concurrently
+    results = await asyncio.gather(*[_fetch_agent(bid, info) for bid, info in pending])
+
+    aggregated_configs = {}
+
+    for bridge_id_value, child_config, child_agent_data, resolved_child_id in results:
+        if child_config is None:
             continue
 
         key = bridge_id_value or resolved_child_id
@@ -323,8 +339,6 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
         if resolved_id:
             child_config["bridge_id"] = resolved_id
             visited.add(resolved_id)
-        if bridge_id_value:
-            visited.add(bridge_id_value)
 
         aggregated_configs[key] = child_config
 

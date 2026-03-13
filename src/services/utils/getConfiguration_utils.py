@@ -33,17 +33,17 @@ async def get_bridge_data(bridge_id, org_id, version_id):
     return agent_data, bridge_id
 
 
-def setup_configuration(configuration, agent_data, service):
+def setup_configuration(configuration, bridges, service):
     """Setup and merge configuration from database and input"""
-    db_configuration = agent_data.get("bridges", {}).get("configuration", {})
-    service = service or (agent_data.get("bridges", {}).get("service", "").lower())
+    db_configuration = bridges.get("configuration", {})
+    service = service or (bridges.get("service", "").lower())
 
     if configuration:
         db_configuration.update(configuration)
 
     # Convert prompt dict (role/goal/instruction) to a proper string prompt
     prompt = db_configuration.get("prompt")
-    folder_id = agent_data.get("bridges", {}).get("folder_id")
+    folder_id = bridges.get("folder_id")
 
     if folder_id is not None and isinstance(prompt, dict):
         use_default = prompt.get("useDefaultPrompt")
@@ -69,20 +69,20 @@ def setup_configuration(configuration, agent_data, service):
     return db_configuration, service
 
 
-def setup_tool_choice(configuration, agent_data, service):
+def setup_tool_choice(configuration, bridges, service):
     """Setup tool choice configuration"""
     tool_choice_ids = configuration.get("tool_choice", [])
     toolchoice = None
 
     # Find tool choice from API calls
-    for _, api_call_data in agent_data.get("bridges", {}).get("apiCalls", {}).items():
+    for _, api_call_data in bridges.get("apiCalls", {}).items():
         if api_call_data["_id"] in tool_choice_ids:
             toolchoice = api_call_data.get("title") or makeFunctionName(
                 api_call_data["endpoint_name"] or api_call_data["function_name"]
             )
             break
     if not toolchoice:
-        connected_agents = agent_data.get("bridges", {}).get("connected_agents", {})
+        connected_agents = bridges.get("connected_agents", {})
         for agent_name, agent_info in connected_agents.items():
             if tool_choice_ids == agent_info["bridge_id"]:
                 toolchoice = makeFunctionName(agent_name)
@@ -174,13 +174,13 @@ def process_extra_tool(tool):
     return tool_format, tool_mapping, {tool_name: variable_path}
 
 
-def setup_tools(agent_data, variables_path_bridge, extra_tools):
+def setup_tools(bridges, variables_path_bridge, extra_tools):
     """Setup tools and tool mappings"""
     tools = []
     tool_id_and_name_mapping = {}
     variable_path = {}
     # Process API calls
-    for _, api_data in agent_data.get("bridges", {}).get("apiCalls", {}).items():
+    for _, api_data in bridges.get("apiCalls", {}).items():
         tool_format, tool_mapping = process_api_call_tool(api_data, variables_path_bridge)
         if tool_format:
             name_of_function = tool_format["name"]
@@ -197,10 +197,10 @@ def setup_tools(agent_data, variables_path_bridge, extra_tools):
     return tools, tool_id_and_name_mapping, {**variables_path_bridge, **variable_path}
 
 
-def setup_api_key(service, agent_data, apikey, chatbot):
+def setup_api_key(service, bridges, apikey, chatbot):
     """Setup API key for the service"""
-    db_apikeys = agent_data.get("bridges", {}).get("apikeys", {})
-    db_apikeys_object_id = agent_data.get("bridges", {}).get("apikey_object_id", {})
+    db_apikeys = bridges.get("apikeys", {})
+    db_apikeys_object_id = bridges.get("apikey_object_id", {})
     # Get API key for the service
     db_api_key = db_apikeys.get(service)
 
@@ -210,13 +210,13 @@ def setup_api_key(service, agent_data, apikey, chatbot):
         db_api_key = db_apikeys.get("openai")
 
     # Check for folder API keys if folder_id exists
-    folder_api_key = agent_data.get("bridges", {}).get("folder_apikeys", {}).get(service)
+    folder_api_key = bridges.get("folder_apikeys", {}).get(service)
     if folder_api_key:
         db_api_key = folder_api_key
 
     # Validate API key existence
     if chatbot and (service == "openai"):
-        model = agent_data.get("bridges", {}).get("configuration", {}).get("model")
+        model = bridges.get("configuration", {}).get("model")
         # If both keys are not present
         if not (apikey or db_api_key):
             # Use Config.OPENAI_API_KEY only if model is gpt-5-nano
@@ -229,13 +229,13 @@ def setup_api_key(service, agent_data, apikey, chatbot):
         raise Exception("Could not find api key or Agent is not Published")
 
     # Handle fallback configuration
-    fallback_config = agent_data.get("bridges", {}).get("fall_back")
+    fallback_config = bridges.get("fall_back")
     if fallback_config:
         fallback_service = fallback_config.get("service")
         fallback_apikey = db_apikeys.get(fallback_service)
         if fallback_apikey:
-            agent_data["bridges"]["fall_back"]["apikey"] = Helper.decrypt(fallback_apikey)
-            agent_data["bridges"]["fall_back"]["apikey_object_id"] = db_apikeys_object_id.get(fallback_service)
+            bridges["fall_back"]["apikey"] = Helper.decrypt(fallback_apikey)
+            bridges["fall_back"]["apikey_object_id"] = db_apikeys_object_id.get(fallback_service)
 
     # Use provided API key or decrypt from database
     return apikey if apikey else Helper.decrypt(db_api_key)
@@ -352,16 +352,16 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
     }
 
 
-def add_connected_agents(agent_data, tools, tool_id_and_name_mapping, orchestrator_flag):
+def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag):
     """Add connected agents as tools"""
-    connected_agents = agent_data.get("bridges", {}).get("connected_agents", {})
-    connected_agent_details = agent_data.get("bridges", {}).get("connected_agent_details", {})
+    connected_agents = bridges.get("connected_agents", {})
+    connected_agent_details = bridges.get("connected_agent_details", {})
 
     if not connected_agents:
         return
 
     # Check if type is orchestrator
-    is_orchestrator = orchestrator_flag or agent_data.get("bridges", {}).get("orchestrator", False)
+    is_orchestrator = orchestrator_flag or bridges.get("orchestrator", False)
 
     for bridge_name, bridge_info in connected_agents.items():
         bridge_id_value = bridge_info.get("bridge_id", "")
