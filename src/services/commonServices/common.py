@@ -479,7 +479,7 @@ async def chat(request_body):
                 logger.error(f"Error rendering template: {str(e)}")
         # Add template data to historyParams chatbot_message if template was used and not playground
         if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
-            result['historyParams']['chatbot_message'] = json.dumps(result['response']['data']['ai_response'])
+            result['historyParams']['chatbot_message'] = json.dumps(result['response']['data']['content'])
         # Send data to playground
         if parsed_data.get("is_playground") and parsed_data.get("body", {}).get("bridge_configurations", {}).get(
             "playground_response_format"
