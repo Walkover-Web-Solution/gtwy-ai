@@ -115,4 +115,3 @@ opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-asgi
 opentelemetry-instrumentation-httpx
 notdiamond
-sse-starlette>=1.6.0

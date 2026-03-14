@@ -1,8 +1,8 @@
+import pyroscope
 from globals import logger
 from config import Config
 
 try:
-    import pyroscope
     # Configure Pyroscope Profiling with tags
     pyroscope.configure(
         application_name=Config.OTEL_SERVICE_NAME,
