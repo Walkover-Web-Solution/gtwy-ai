@@ -1,4 +1,4 @@
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
 from graph.nodes.tools import TOOLS, TOOLS_BY_NAME
@@ -8,18 +8,18 @@ EXECUTOR_SYSTEM_PROMPT = """You are a task executor working on a subtask as part
 
 Overall goal: {goal}
 
-You have access to tools: read_file, write_file, run_shell, list_files, and send_webhook.
+You have access to tools: {tool_names}.
 
 RULES:
-- Use tools when needed to complete the task (read files, write files, run commands).
-- On the FINAL task (is_final_task=True), after producing the complete answer you MUST call send_webhook with the full consolidated final answer.
-- Only call send_webhook once, only on the final task, only after everything is done.
-- Do NOT call send_webhook on intermediate tasks.
+- Use tools when needed to complete the task (read files, write files, run commands, call APIs, delegate to sub-agents).
 - Be specific and produce real output, not just descriptions."""
 
 
-async def executor_node(state: AgentState) -> dict:
-    """Executes the current task using a ReAct loop with tool calling."""
+async def _run_executor(state: AgentState, model: str = "gpt-4o-mini", temperature: float = 0.5, tools: list = None, tools_by_name: dict = None, system_prompt_override: str = None) -> dict:
+    """Core executor logic, parameterized for reuse by both default and dynamic nodes."""
+    resolved_tools = tools or TOOLS
+    resolved_tools_by_name = tools_by_name or TOOLS_BY_NAME
+
     tasks = state["tasks"]
     idx = state["current_task_index"]
 
@@ -28,51 +28,48 @@ async def executor_node(state: AgentState) -> dict:
 
     task = tasks[idx]
     completed = state.get("completed_tasks", [])
-    is_final_task = (idx == len(tasks) - 1)
+
+    tool_names = ", ".join(resolved_tools_by_name.keys())
+    prompt = system_prompt_override or EXECUTOR_SYSTEM_PROMPT.format(goal=state["goal"], tool_names=tool_names)
 
     llm = ChatOpenAI(
-        model="gpt-4o-mini",
+        model=model,
         api_key=state["api_key"],
-        temperature=0.5,
+        temperature=temperature,
         streaming=True,
-    ).bind_tools(TOOLS)
+    ).bind_tools(resolved_tools)
 
     messages = [
-        {
-            "role": "system",
-            "content": EXECUTOR_SYSTEM_PROMPT.format(goal=state["goal"]),
-        },
+        SystemMessage(content=prompt),
     ]
 
     if completed:
         context_summary = "\n".join(
             [f"Step '{c['title']}':\n{c['result']}" for c in completed]
         )
-        messages.append(
-            {"role": "assistant", "content": f"Previously completed steps:\n{context_summary}"}
-        )
+        messages.append(AIMessage(content=f"Previously completed steps:\n{context_summary}"))
 
-    messages.append({
-        "role": "user",
-        "content": (
-            f"Execute this subtask:\n\nTitle: {task['title']}\nDescription: {task['description']}\n\n"
-            + ("is_final_task=True — after completing this task, call send_webhook with the full final answer." if is_final_task else "is_final_task=False — do NOT call send_webhook.")
-        ),
-    })
+    messages.append(HumanMessage(
+        content=f"Execute this subtask:\n\nTitle: {task['title']}\nDescription: {task['description']}",
+    ))
 
     result_text = ""
+    max_iterations = 15
 
     # ReAct loop: LLM → tool call → result → LLM → ... → final text answer
-    while True:
+    for _ in range(max_iterations):
         response = await llm.ainvoke(messages)
 
         if response.tool_calls:
             messages.append(response)
 
             for tool_call in response.tool_calls:
-                tool_fn = TOOLS_BY_NAME.get(tool_call["name"])
+                tool_fn = resolved_tools_by_name.get(tool_call["name"])
                 if tool_fn:
-                    tool_result = await tool_fn.ainvoke(tool_call["args"])
+                    try:
+                        tool_result = await tool_fn.ainvoke(tool_call["args"])
+                    except Exception as e:
+                        tool_result = f"Tool error: {e}"
                 else:
                     tool_result = f"Unknown tool: {tool_call['name']}"
 
@@ -95,3 +92,42 @@ async def executor_node(state: AgentState) -> dict:
         "completed_tasks": new_completed,
         "current_task_index": idx + 1,
     }
+
+
+async def executor_node(state: AgentState) -> dict:
+    """Default executor node — uses built-in tools and gpt-4o-mini."""
+    return await _run_executor(state)
+
+
+def make_executor_node(agent_config: dict, tools: list):
+    """Factory: creates an executor node with dynamic tools and agent config."""
+    model = agent_config.get("model", "gpt-4o-mini")
+    temperature = agent_config.get("temperature", 0.5)
+    agent_system_prompt = agent_config.get("system_prompt", "")
+
+    tools_by_name = {t.name: t for t in tools}
+    tool_names = ", ".join(tools_by_name.keys())
+
+    custom_prompt = None
+    if agent_system_prompt:
+        custom_prompt = (
+            f"{agent_system_prompt}\n\n"
+            f"You are executing a subtask as part of a larger goal: {{goal}}\n"
+            f"Available tools: {tool_names}\n\n"
+            f"RULES:\n"
+            f"- Use tools when needed to complete the task.\n"
+            f"- Be specific and produce real output, not just descriptions."
+        )
+
+    async def dynamic_executor_node(state: AgentState) -> dict:
+        prompt = custom_prompt.replace("{goal}", state["goal"]) if custom_prompt else None
+        return await _run_executor(
+            state,
+            model=model,
+            temperature=temperature,
+            tools=tools,
+            tools_by_name=tools_by_name,
+            system_prompt_override=prompt,
+        )
+
+    return dynamic_executor_node

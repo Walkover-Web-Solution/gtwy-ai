@@ -71,6 +71,127 @@
             font-size: 14px;
         }
 
+        /* FBAI Direct Mode Step Feed */
+        .step-feed {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .fbai-step {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px 18px;
+            animation: fadeIn 0.25s ease;
+        }
+
+        .fbai-step.type-trigger { border-left: 3px solid var(--accent); }
+        .fbai-step.type-action  { border-left: 3px solid var(--success); }
+        .fbai-step.type-text    { border-left: 3px solid var(--border-light); background: var(--bg-primary); }
+        .fbai-step.type-response { border-left: 3px solid var(--blue); }
+
+        .fbai-step-badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-bottom: 6px;
+        }
+
+        .badge-trigger  { background: var(--accent-bg); color: var(--accent-light); }
+        .badge-action   { background: var(--success-bg); color: var(--success); }
+        .badge-text     { background: var(--bg-tertiary); color: var(--text-muted); }
+        .badge-response { background: var(--blue-bg); color: var(--blue); }
+
+        .fbai-step-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: var(--text-primary);
+        }
+
+        .fbai-step-detail {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-top: 6px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .fbai-text-msg {
+            font-size: 14px;
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .next-step-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--warning);
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .next-step-bar .next-label {
+            flex: 1;
+            font-size: 13px;
+            color: var(--warning);
+            font-weight: 500;
+        }
+
+        .next-btn {
+            background: var(--warning);
+            color: #1a1a1a;
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 8px 20px;
+            font-size: 13px;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .next-btn:hover { opacity: 0.85; }
+
+        .mode-toggle {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+
+        .mode-btn {
+            background: var(--bg-tertiary);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 5px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-btn.active {
+            background: var(--accent-bg);
+            color: var(--accent-light);
+            border-color: rgba(108,92,231,0.4);
+        }
+
         /* Plan Approval Card */
         .approval-card {
             display: none;
@@ -545,18 +666,243 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+        /* Tab Navigation */
+        .tab-nav {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 24px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 4px;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 8px 16px;
+            background: transparent;
+            border: none;
+            border-radius: var(--radius-sm);
+            color: var(--text-muted);
+            font-size: 13px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+        .tab-btn.active { background: var(--accent); color: #fff; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Agent Selector */
+        .agent-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .agent-selector label { font-weight: 600; white-space: nowrap; }
+        .agent-selector select {
+            flex: 1;
+            padding: 7px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+        }
+        .agent-selector select:focus { border-color: var(--accent); }
+
+        /* Small Buttons */
+        .small-btn {
+            padding: 6px 14px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .small-btn:hover { border-color: var(--accent); color: var(--accent-light); }
+        .small-btn.accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .small-btn.accent:hover { opacity: 0.85; }
+        .small-btn.danger { color: var(--danger); border-color: var(--danger); background: transparent; }
+        .small-btn.danger:hover { background: var(--danger-bg); }
+
+        /* Panel Header */
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .panel-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), var(--accent-light));
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* Form Card */
+        .form-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease;
+        }
+        .form-card h3 {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 16px;
+        }
+        .form-group {
+            margin-bottom: 12px;
+            flex: 1;
+        }
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus { border-color: var(--accent); }
+        .form-group textarea { resize: vertical; min-height: 60px; }
+        .form-row { display: flex; gap: 12px; }
+        .form-actions { display: flex; gap: 10px; margin-top: 8px; }
+
+        /* Items List */
+        .items-list { display: flex; flex-direction: column; gap: 8px; }
+        .empty-msg { color: var(--text-muted); font-size: 13px; text-align: center; padding: 24px; }
+        .tab-desc { color: var(--text-muted); font-size: 13px; margin-bottom: 16px; line-height: 1.5; }
+
+        /* Item Card */
+        .item-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px 16px;
+            transition: border-color 0.2s;
+        }
+        .item-card:hover { border-color: var(--border-light); }
+        .item-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        .item-card-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .item-card-id {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+        .item-card-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+            margin-bottom: 8px;
+        }
+        .item-card-meta {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .meta-tag {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: var(--bg-tertiary);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+        .meta-tag.accent { background: var(--accent-bg); color: var(--accent-light); border-color: rgba(108,92,231,0.25); }
+        .meta-tag.success { background: var(--success-bg); color: var(--success); border-color: rgba(0,184,148,0.25); }
+        .item-card-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .a2a-link-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+        }
+        .a2a-arrow { color: var(--accent-light); font-size: 16px; flex-shrink: 0; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1><span>AI Task Planner</span></h1>
-            <p class="subtitle">Describe your goal — AI will create a plan for your approval before executing</p>
+            <h1><span>Agentic AI Platform</span></h1>
+            <p class="subtitle">Create agents, add tools, manage A2A — then execute goals</p>
         </div>
+
+        <!-- Tab Navigation -->
+        <div class="tab-nav">
+            <button class="tab-btn active" onclick="switchTab('chat')">Chat</button>
+            <button class="tab-btn" onclick="switchTab('agents')">Agents</button>
+            <button class="tab-btn" onclick="switchTab('tools')">Tools</button>
+            <button class="tab-btn" onclick="switchTab('a2a')">A2A</button>
+        </div>
+
+        <!-- ===== CHAT TAB ===== -->
+        <div class="tab-content active" id="tab-chat">
 
         <div class="ws-status">
             <div class="ws-dot" id="wsDot"></div>
             <span id="wsLabel">Disconnected</span>
+        </div>
+
+        <!-- Agent Selector -->
+        <div class="agent-selector">
+            <label for="agentSelect">Agent:</label>
+            <select id="agentSelect">
+                <option value="">Default (no agent)</option>
+            </select>
+            <button class="small-btn" onclick="loadAgentsList()">Refresh</button>
+        </div>
+
+        <!-- Mode toggle: Plan mode vs Direct mode (FBAI) -->
+        <div class="mode-toggle">
+            <button class="mode-btn active" id="modePlan" onclick="setMode('plan')">🗂 Plan mode</button>
+            <button class="mode-btn" id="modeDirect" onclick="setMode('direct')">⚡ Direct mode</button>
         </div>
 
         <div class="input-area">
@@ -585,6 +931,17 @@
 
         <div class="timeline" id="timeline"></div>
 
+        <!-- Direct mode: FBAI step feed -->
+        <div class="step-feed" id="stepFeed"></div>
+
+        <!-- Direct mode: Next Step button bar -->
+        <div class="next-step-bar" id="nextStepBar" style="display:none;">
+            <span class="next-label">⚡ Ready to build the next step</span>
+            <input id="nextStepMsg" type="text" placeholder="Add a message (optional)"
+                style="flex:1;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text-primary);font-family:inherit;font-size:13px;outline:none;">
+            <button class="next-btn" onclick="sendNextStep()">Next Step →</button>
+        </div>
+
         <div class="approval-card" id="approvalCard">
             <div class="approval-header">Plan Ready</div>
             <p class="approval-hint">Review the plan above. Approve to start execution or regenerate to try again.</p>
@@ -594,13 +951,305 @@
             </div>
         </div>
 
+        <!-- Step-by-step approval card (shown before each step executes) -->
+        <div class="approval-card" id="stepProposalCard" style="border-color:#fdcb6e;">
+            <div class="approval-header" style="color:#fdcb6e;">Next Step</div>
+            <div id="stepProposalMeta" style="font-size:11px;color:var(--text-muted);margin-bottom:6px;"></div>
+            <div id="stepProposalTitle" style="font-size:15px;font-weight:600;margin-bottom:6px;"></div>
+            <div id="stepProposalDesc" style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;"></div>
+            <div class="approval-actions" style="flex-wrap:wrap;gap:8px;">
+                <button class="approve-btn" onclick="approveStep()">&#10003; Run this step</button>
+                <button class="reject-btn" onclick="showStepRejectBox()" style="border-color:#fdcb6e;color:#fdcb6e;">&#10005; Skip</button>
+            </div>
+            <div id="stepRejectBox" style="display:none;margin-top:10px;">
+                <textarea id="stepRejectFeedback" rows="2"
+                    style="width:100%;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text-primary);font-family:inherit;font-size:13px;resize:none;"
+                    placeholder="Why are you skipping? (optional)"></textarea>
+                <div style="display:flex;gap:8px;margin-top:6px;">
+                    <button class="reject-btn" style="border-color:#e17055;color:#e17055;" onclick="confirmSkipStep()">Confirm Skip</button>
+                    <button class="reject-btn" onclick="hideStepRejectBox()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
         <div class="final-answer" id="finalAnswer">
             <div class="final-answer-label">Final Output</div>
             <div class="final-answer-content" id="finalAnswerContent"></div>
         </div>
 
         <div class="summary-card" id="summaryCard"></div>
-    </div>
+
+        </div><!-- /tab-chat -->
+
+        <!-- ===== AGENTS TAB ===== -->
+        <div class="tab-content" id="tab-agents">
+            <div class="panel-header">
+                <h2>Agents</h2>
+                <button class="small-btn accent" onclick="showCreateAgentForm()">+ Create Agent</button>
+            </div>
+
+            <!-- Create Agent Form (hidden by default) -->
+            <div class="form-card" id="createAgentForm" style="display:none;">
+                <h3>Create Agent</h3>
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" id="agentName" placeholder="e.g. Research Agent">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="agentDesc" placeholder="What does this agent do?">
+                </div>
+                <div class="form-group">
+                    <label>System Prompt</label>
+                    <textarea id="agentPrompt" rows="3" placeholder="You are a helpful AI assistant..."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Model</label>
+                        <select id="agentModel">
+                            <option value="gpt-4o-mini">gpt-4o-mini</option>
+                            <option value="gpt-4o">gpt-4o</option>
+                            <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                            <option value="gpt-4.1-nano">gpt-4.1-nano</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Temperature</label>
+                        <input type="number" id="agentTemp" value="0.3" min="0" max="2" step="0.1">
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="run-btn" onclick="createAgent()">Create</button>
+                    <button class="reject-btn" onclick="hideCreateAgentForm()">Cancel</button>
+                </div>
+            </div>
+
+            <div id="agentsList" class="items-list">
+                <p class="empty-msg">Loading agents...</p>
+            </div>
+
+            <!-- Edit Agent Panel -->
+            <div class="form-card" id="editAgentPanel" style="display:none;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                    <h3 style="margin:0;">Edit Agent</h3>
+                    <button class="small-btn" onclick="hideEditAgentPanel()">✕ Close</button>
+                </div>
+
+                <input type="hidden" id="editAgentId">
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Name *</label>
+                        <input type="text" id="editAgentName" placeholder="Agent name">
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <input type="text" id="editAgentDesc" placeholder="What does this agent do?">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>System Prompt</label>
+                    <textarea id="editAgentPrompt" rows="5" placeholder="You are a helpful AI assistant..."></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Model</label>
+                        <select id="editAgentModel">
+                            <option value="gpt-4o-mini">gpt-4o-mini</option>
+                            <option value="gpt-4o">gpt-4o</option>
+                            <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                            <option value="gpt-4.1">gpt-4.1</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Temperature</label>
+                        <input type="number" id="editAgentTemp" value="0.3" min="0" max="2" step="0.1">
+                    </div>
+                </div>
+
+                <div class="form-actions" style="margin-bottom:20px;">
+                    <button class="run-btn" onclick="saveAgentEdit()">Save Changes</button>
+                </div>
+
+                <hr style="border-color:var(--border);margin:16px 0;">
+
+                <h4 style="margin:0 0 12px;">Attached Tools</h4>
+                <div id="editAgentToolsList" style="margin-bottom:12px;"></div>
+
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <select id="editAgentToolSelect" style="flex:1;padding:7px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;">
+                        <option value="">— select tool to attach —</option>
+                    </select>
+                    <button class="small-btn accent" onclick="attachToolToEditAgent()">+ Attach</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== TOOLS TAB ===== -->
+        <div class="tab-content" id="tab-tools">
+            <div class="panel-header">
+                <h2>Tools</h2>
+                <button class="small-btn accent" onclick="showCreateToolForm()">+ Create Tool</button>
+            </div>
+
+            <div class="form-card" id="createToolForm" style="display:none;">
+                <h3>Create Tool</h3>
+                <div class="form-group">
+                    <label>Name * <span style="color:var(--text-muted);font-weight:400">(LLM-visible function name)</span></label>
+                    <input type="text" id="toolName" placeholder="e.g. search_web">
+                </div>
+                <div class="form-group">
+                    <label>Description *</label>
+                    <input type="text" id="toolDesc" placeholder="What does this tool do? (shown to LLM)">
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="toolType" onchange="toggleToolTypeFields()">
+                        <option value="api_call">API Call (flow.sokt.io)</option>
+                        <option value="function">Built-in Function</option>
+                    </select>
+                </div>
+
+                <!-- api_call fields -->
+                <div id="toolApiCallFields">
+                    <div class="form-group">
+                        <label>Script ID * <span style="color:var(--text-muted);font-weight:400">→ https://flow.sokt.io/func/<b>&lt;script_id&gt;</b></span></label>
+                        <input type="text" id="toolScriptId" placeholder="e.g. scrioFy1twfh">
+                    </div>
+
+                    <div class="form-group">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <label style="margin:0;">Fields</label>
+                            <button type="button" class="small-btn accent" onclick="addFieldRow('createFieldRows')">+ Add Field</button>
+                        </div>
+                        <div id="createFieldRows"></div>
+                    </div>
+                </div>
+
+                <!-- function fields -->
+                <div id="toolFunctionFields" style="display:none;">
+                    <div class="form-group">
+                        <label>Built-in Function Name</label>
+                        <select id="toolFunctionName">
+                            <option value="read_file">read_file</option>
+                            <option value="write_file">write_file</option>
+                            <option value="run_shell">run_shell</option>
+                            <option value="list_files">list_files</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button class="run-btn" onclick="createTool()">Create</button>
+                    <button class="reject-btn" onclick="hideCreateToolForm()">Cancel</button>
+                </div>
+            </div>
+
+            <div id="toolsList" class="items-list">
+                <p class="empty-msg">Loading tools...</p>
+            </div>
+
+            <!-- Edit Tool Panel -->
+            <div class="form-card" id="editToolPanel" style="display:none;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                    <h3 style="margin:0;">Edit Tool</h3>
+                    <button class="small-btn" onclick="hideEditToolPanel()">&#x2715; Close</button>
+                </div>
+
+                <input type="hidden" id="editToolId">
+
+                <div class="form-group">
+                    <label>Name * <span style="color:var(--text-muted);font-weight:400">(LLM-visible function name)</span></label>
+                    <input type="text" id="editToolName" placeholder="e.g. search_web">
+                </div>
+                <div class="form-group">
+                    <label>Description *</label>
+                    <input type="text" id="editToolDesc" placeholder="What does this tool do?">
+                </div>
+
+                <div id="editToolApiCallFields">
+                    <div class="form-group">
+                        <label>Script ID <span style="color:var(--text-muted);font-weight:400">&rarr; https://flow.sokt.io/func/<b>&lt;script_id&gt;</b></span></label>
+                        <input type="text" id="editToolScriptId" placeholder="e.g. scrioFy1twfh">
+                    </div>
+
+                    <div class="form-group">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <label style="margin:0;">Fields</label>
+                            <button type="button" class="small-btn accent" onclick="addFieldRow('editFieldRows')">+ Add Field</button>
+                        </div>
+                        <div id="editFieldRows"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Headers <span style="color:var(--text-muted);font-weight:400">(JSON, optional)</span></label>
+                        <textarea id="editToolHeaders" rows="2" placeholder='{"Authorization": "Bearer token"}'></textarea>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button class="run-btn" onclick="saveToolEdit()">Save Changes</button>
+                </div>
+            </div>
+
+            <!-- Test Tool Panel -->
+            <div class="form-card" id="testToolPanel" style="display:none;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                    <h3 style="margin:0;">&#9654; Test Tool</h3>
+                    <button class="small-btn" onclick="hideTestToolPanel()">&#x2715; Close</button>
+                </div>
+
+                <input type="hidden" id="testToolPanelId">
+
+                <div style="margin-bottom:14px;padding:10px 12px;background:var(--bg-secondary);border-radius:6px;font-size:13px;">
+                    <span style="font-weight:600;" id="testToolName"></span>
+                    <span style="color:var(--text-muted);margin-left:8px;font-size:12px;" id="testToolId"></span><br>
+                    <span style="color:var(--text-muted);font-size:12px;">POST <span id="testToolUrl" style="color:var(--accent);"></span></span>
+                </div>
+
+                <div id="testToolArgs"></div>
+
+                <div class="form-actions" style="margin-bottom:16px;">
+                    <button class="run-btn" id="testToolRunBtn" onclick="runToolTest()">&#9654; Run</button>
+                </div>
+
+                <div id="testToolResult" style="display:none;padding:12px;background:var(--bg-secondary);border-radius:6px;font-size:13px;line-height:1.6;border:1px solid var(--border);word-break:break-word;"></div>
+            </div>
+        </div>
+
+        <!-- ===== A2A TAB ===== -->
+        <div class="tab-content" id="tab-a2a">
+            <div class="panel-header">
+                <h2>Agent-to-Agent (A2A)</h2>
+                <button class="small-btn accent" onclick="refreshA2A()">Refresh</button>
+            </div>
+            <p class="tab-desc">Manage sub-agent relationships. A parent agent can delegate tasks to its sub-agents during execution.</p>
+
+            <div class="form-card">
+                <h3>Link Sub-Agent</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Parent Agent</label>
+                        <select id="a2aParent"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Sub-Agent</label>
+                        <select id="a2aSub"></select>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="run-btn" onclick="linkSubAgent()">Link</button>
+                </div>
+            </div>
+
+            <div id="a2aList" class="items-list">
+                <p class="empty-msg">Loading A2A relationships...</p>
+            </div>
+        </div>
+
+    </div><!-- /container -->
 
     <script>
         const $ = id => document.getElementById(id);
@@ -628,6 +1277,7 @@
         let totalTasks = 0;
         let ws = null;
         let currentThreadId = null;
+        let currentMode = 'plan';
 
         const chevronSvg = `<svg class="task-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>`;
         const optionKeys = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -666,6 +1316,13 @@
             };
         }
 
+        // --- Mode Toggle ---
+        function setMode(mode) {
+            currentMode = mode;
+            $('modePlan').classList.toggle('active', mode === 'plan');
+            $('modeDirect').classList.toggle('active', mode === 'direct');
+        }
+
         // --- Send Goal ---
         function sendGoal() {
             const goal = goalInput.value.trim();
@@ -676,10 +1333,66 @@
             runBtn.textContent = 'Running...';
             showStatus('Analyzing your request...');
 
+            const agentId = $('agentSelect').value || undefined;
             ws.send(JSON.stringify({
                 action: 'start',
                 goal: goal,
+                mode: currentMode,
+                agent_id: agentId,
             }));
+        }
+
+        // --- Direct Mode: Send Next Step ---
+        function sendNextStep() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const msg = $('nextStepMsg').value.trim();
+            $('nextStepMsg').value = '';
+            $('nextStepBar').style.display = 'none';
+            showStatus('Building next step...');
+            ws.send(JSON.stringify({ action: 'next_step', message: msg, thread_id: currentThreadId }));
+        }
+
+        // --- Render FBAI response objects into step-feed ---
+        function renderFbaiObjects(objects) {
+            const feed = $('stepFeed');
+            objects.forEach(obj => {
+                const type = obj.type || 'text';
+                const el = document.createElement('div');
+                el.className = `fbai-step type-${type}`;
+
+                if (type === 'text') {
+                    el.innerHTML = `<div class="fbai-text-msg">${escapeHtml(obj.text || '')}</div>`;
+
+                } else if (type === 'trigger' || type === 'action') {
+                    const name = obj.stepname || obj.event_id || type;
+                    const detail = {};
+                    if (obj.triggertype) detail['triggertype'] = obj.triggertype;
+                    if (obj.steptype)    detail['steptype']    = obj.steptype;
+                    if (obj.event_id)    detail['event_id']    = obj.event_id;
+                    if (obj.code)        detail['code']        = obj.code;
+                    if (obj.cURL)        detail['cURL']        = obj.cURL;
+                    const detailStr = Object.keys(detail).length ? JSON.stringify(detail, null, 2) : '';
+                    el.innerHTML = `
+                        <span class="fbai-step-badge badge-${type}">${type}</span>
+                        <div class="fbai-step-title">${escapeHtml(name)}</div>
+                        ${detailStr ? `<div class="fbai-step-detail">${escapeHtml(detailStr)}</div>` : ''}
+                        ${obj.laststep ? '<div style="margin-top:8px;font-size:11px;color:var(--success);">✓ Last step</div>' : ''}
+                    `;
+
+                } else if (type === 'response') {
+                    el.innerHTML = `
+                        <span class="fbai-step-badge badge-response">response</span>
+                        <div class="fbai-step-title">HTTP Response</div>
+                        ${obj.response_expression ? `<div class="fbai-step-detail">${escapeHtml(obj.response_expression)}</div>` : ''}
+                    `;
+
+                } else {
+                    el.innerHTML = `<div class="fbai-step-detail">${escapeHtml(JSON.stringify(obj, null, 2))}</div>`;
+                }
+
+                feed.appendChild(el);
+                el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
         }
 
         // --- Approve Plan ---
@@ -707,6 +1420,31 @@
                 action: 'start',
                 goal: goal,
             }));
+        }
+
+        // --- Step-by-step approval ---
+        function approveStep() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            $('stepProposalCard').classList.remove('visible');
+            showStatus('Executing step...');
+            ws.send(JSON.stringify({ action: 'step_approve', thread_id: currentThreadId }));
+        }
+
+        function showStepRejectBox() {
+            $('stepRejectBox').style.display = 'block';
+            $('stepRejectFeedback').focus();
+        }
+
+        function hideStepRejectBox() {
+            $('stepRejectBox').style.display = 'none';
+            $('stepRejectFeedback').value = '';
+        }
+
+        function confirmSkipStep() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const feedback = $('stepRejectFeedback').value.trim();
+            $('stepProposalCard').classList.remove('visible');
+            ws.send(JSON.stringify({ action: 'step_reject', feedback, thread_id: currentThreadId }));
         }
 
         // --- Send Answer (for question flow) ---
@@ -749,6 +1487,9 @@
 
         function resetUI() {
             timeline.innerHTML = '';
+            $('stepFeed').innerHTML = '';
+            $('nextStepBar').style.display = 'none';
+            $('nextStepMsg').value = '';
             summaryCard.classList.remove('visible');
             summaryCard.textContent = '';
             directResponse.classList.remove('visible');
@@ -757,6 +1498,8 @@
             finalAnswerContent.textContent = '';
             questionCard.classList.remove('visible');
             approvalCard.classList.remove('visible');
+            $('stepProposalCard').classList.remove('visible');
+            $('stepRejectBox').style.display = 'none';
             stepCounter.classList.remove('visible');
             completedCount = 0;
             totalTasks = 0;
@@ -912,6 +1655,60 @@
                     if (failOutput) failOutput.textContent = `Error: ${data.error}`;
                     break;
 
+                case 'step_proposal': {
+                    hideStatus();
+                    $('stepProposalMeta').textContent = `Step ${data.step_index + 1} of ${data.total_steps}`;
+                    $('stepProposalTitle').textContent = data.title;
+                    $('stepProposalDesc').textContent = data.description || '';
+                    $('stepRejectBox').style.display = 'none';
+                    $('stepRejectFeedback').value = '';
+                    $('stepProposalCard').classList.add('visible');
+                    $('stepProposalCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    runBtn.disabled = false;
+                    runBtn.textContent = 'Run';
+                    const propCard = document.getElementById(`task-${data.task_id}`);
+                    if (propCard) {
+                        propCard.style.borderColor = '#fdcb6e';
+                        propCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
+                    break;
+                }
+
+                case 'step_skipped': {
+                    $('stepProposalCard').classList.remove('visible');
+                    const skipCard = document.getElementById(`task-${data.task_id}`);
+                    if (skipCard) {
+                        skipCard.style.borderColor = '';
+                        const badge = skipCard.querySelector('.task-badge');
+                        if (badge) { badge.className = 'task-badge badge-skipped'; badge.textContent = 'skipped'; }
+                    }
+                    const skipOutput = document.getElementById(`output-${data.task_id}`);
+                    if (skipOutput && data.feedback) skipOutput.textContent = `Skipped: ${data.feedback}`;
+                    break;
+                }
+
+                case 'step_built': {
+                    hideStatus();
+                    // Render each object from the FBAI response
+                    if (data.objects && data.objects.length) {
+                        renderFbaiObjects(data.objects);
+                    }
+                    // If more steps remain, show the Next Step button bar
+                    if (data.needs_next) {
+                        $('nextStepBar').style.display = 'flex';
+                        $('nextStepMsg').focus();
+                        $('nextStepBar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    } else {
+                        $('nextStepBar').style.display = 'none';
+                        // Mark automation as complete
+                        summaryCard.textContent = '✓ Automation built successfully';
+                        summaryCard.classList.add('visible');
+                    }
+                    runBtn.disabled = false;
+                    runBtn.textContent = 'Run';
+                    break;
+                }
+
                 case 'final_chunk':
                     if (!finalAnswer.classList.contains('visible')) {
                         showStatus('Preparing final output...');
@@ -945,8 +1742,745 @@
             }
         }
 
+        // ========================================
+        // TAB SWITCHING
+        // ========================================
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-btn').forEach((btn, i) => {
+                btn.classList.toggle('active', btn.textContent.toLowerCase().replace('-', '') === tabName || 
+                    (['chat','agents','tools','a2a'][i] === tabName));
+            });
+            document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+            const target = document.getElementById('tab-' + tabName);
+            if (target) target.classList.add('active');
+
+            // Activate correct tab button
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                if (btn.textContent.toLowerCase() === tabName || 
+                    (tabName === 'a2a' && btn.textContent === 'A2A')) {
+                    btn.classList.add('active');
+                }
+            });
+
+            // Load data on tab switch
+            if (tabName === 'agents') loadAgents();
+            if (tabName === 'tools') loadTools();
+            if (tabName === 'a2a') refreshA2A();
+        }
+
+        // ========================================
+        // API HELPER
+        // ========================================
+        const API = '/api';
+        async function apiFetch(path, options = {}) {
+            const res = await fetch(API + path, {
+                headers: { 'Content-Type': 'application/json', ...options.headers },
+                ...options,
+            });
+            return res.json();
+        }
+
+        // ========================================
+        // AGENTS MANAGEMENT
+        // ========================================
+        let allAgents = [];
+
+        async function loadAgents() {
+            const res = await apiFetch('/agents');
+            allAgents = res.data || [];
+            renderAgents();
+        }
+
+        async function loadAgentsList() {
+            await loadAgents();
+            const sel = $('agentSelect');
+            const current = sel.value;
+            sel.innerHTML = '<option value="">Default (no agent)</option>';
+            allAgents.forEach(a => {
+                const opt = document.createElement('option');
+                opt.value = a.agent_id;
+                opt.textContent = `${a.name} (${a.agent_id})`;
+                sel.appendChild(opt);
+            });
+            sel.value = current;
+        }
+
+        function renderAgents() {
+            const list = $('agentsList');
+            if (!allAgents.length) {
+                list.innerHTML = '<p class="empty-msg">No agents yet. Create one!</p>';
+                return;
+            }
+            list.innerHTML = allAgents.map(a => `
+                <div class="item-card">
+                    <div class="item-card-header">
+                        <span class="item-card-name">${esc(a.name)}</span>
+                        <span class="item-card-id">${a.agent_id}</span>
+                    </div>
+                    <div class="item-card-desc">${esc(a.description || 'No description')}</div>
+                    <div class="item-card-meta">
+                        <span class="meta-tag accent">${a.model || 'gpt-4o-mini'}</span>
+                        <span class="meta-tag success">${a.status || 'active'}</span>
+                        <span class="meta-tag">${(a.tools || []).length} tools</span>
+                        <span class="meta-tag">${(a.sub_agents || []).length} sub-agents</span>
+                    </div>
+                    <div class="item-card-actions">
+                        <button class="small-btn accent" onclick="showEditAgentPanel('${a.agent_id}')">Edit</button>
+                        <button class="small-btn danger" onclick="deleteAgentConfirm('${a.agent_id}')">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function showCreateAgentForm() { $('createAgentForm').style.display = 'block'; }
+        function hideCreateAgentForm() { $('createAgentForm').style.display = 'none'; }
+
+        async function createAgent() {
+            const name = $('agentName').value.trim();
+            if (!name) return alert('Agent name is required.');
+            const body = {
+                name,
+                description: $('agentDesc').value.trim(),
+                system_prompt: $('agentPrompt').value.trim() || undefined,
+                model: $('agentModel').value,
+                temperature: parseFloat($('agentTemp').value) || 0.3,
+            };
+            const res = await apiFetch('/agents', { method: 'POST', body: JSON.stringify(body) });
+            if (res.success) {
+                hideCreateAgentForm();
+                $('agentName').value = '';
+                $('agentDesc').value = '';
+                $('agentPrompt').value = '';
+                await loadAgents();
+                await loadAgentsList();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to create agent'));
+            }
+        }
+
+        async function deleteAgentConfirm(agentId) {
+            if (!confirm(`Delete agent ${agentId}?`)) return;
+            const res = await apiFetch(`/agents/${agentId}`, { method: 'DELETE' });
+            if (res.success) {
+                await loadAgents();
+                await loadAgentsList();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to delete'));
+            }
+        }
+
+        async function showAttachToolDialog(agentId) {
+            const toolsRes = await apiFetch('/tools');
+            const tools = toolsRes.data || [];
+            if (!tools.length) return alert('No tools available. Create a tool first.');
+            const names = tools.map(t => `${t.name} (${t.tool_id})`);
+            const choice = prompt('Enter tool ID to attach:\n\nAvailable tools:\n' + names.join('\n'));
+            if (!choice) return;
+            const toolId = choice.trim();
+            const res = await apiFetch(`/agents/${agentId}/tools/${toolId}`, { method: 'POST' });
+            if (res.success) {
+                await loadAgents();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to attach tool'));
+            }
+        }
+
+        async function showEditAgentPanel(agentId) {
+            const res = await apiFetch(`/agents/${agentId}`);
+            if (!res.success) return alert('Failed to load agent.');
+            const a = res.data;
+
+            $('editAgentId').value = a.agent_id;
+            $('editAgentName').value = a.name || '';
+            $('editAgentDesc').value = a.description || '';
+            $('editAgentPrompt').value = a.system_prompt || '';
+            $('editAgentModel').value = a.model || 'gpt-4o-mini';
+            $('editAgentTemp').value = a.temperature ?? 0.3;
+
+            // Populate tool dropdown with all tools
+            const toolsRes = await apiFetch('/tools');
+            const allToolsList = toolsRes.data || [];
+            const attachedIds = new Set(a.tools || []);
+            const sel = $('editAgentToolSelect');
+            sel.innerHTML = '<option value="">— select tool to attach —</option>';
+            allToolsList.forEach(t => {
+                if (!attachedIds.has(t.tool_id)) {
+                    const opt = document.createElement('option');
+                    opt.value = t.tool_id;
+                    opt.textContent = `${t.name} (${t.tool_id})`;
+                    sel.appendChild(opt);
+                }
+            });
+
+            renderEditAgentTools(a.tools || [], allToolsList);
+
+            $('editAgentPanel').style.display = 'block';
+            $('editAgentPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function hideEditAgentPanel() {
+            $('editAgentPanel').style.display = 'none';
+            $('editAgentId').value = '';
+        }
+
+        function renderEditAgentTools(toolIds, allToolsList) {
+            const container = $('editAgentToolsList');
+            if (!toolIds.length) {
+                container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">No tools attached yet.</p>';
+                return;
+            }
+            const toolMap = Object.fromEntries((allToolsList || allTools).map(t => [t.tool_id, t]));
+            container.innerHTML = toolIds.map(tid => {
+                const t = toolMap[tid];
+                const label = t ? `${esc(t.name)} <span style="color:var(--text-muted);font-size:12px;">(${tid})</span>` : `<span style="color:var(--text-muted)">${tid}</span>`;
+                return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--bg-secondary);border-radius:6px;margin-bottom:6px;">
+                    <span style="font-size:13px;">${label}</span>
+                    <button class="small-btn danger" style="padding:3px 8px;font-size:11px;" onclick="detachToolFromEditAgent('${tid}')">Detach</button>
+                </div>`;
+            }).join('');
+        }
+
+        async function saveAgentEdit() {
+            const agentId = $('editAgentId').value;
+            if (!agentId) return;
+            const name = $('editAgentName').value.trim();
+            if (!name) return alert('Name is required.');
+            const body = {
+                name,
+                description: $('editAgentDesc').value.trim(),
+                system_prompt: $('editAgentPrompt').value.trim(),
+                model: $('editAgentModel').value,
+                temperature: parseFloat($('editAgentTemp').value) || 0.3,
+            };
+            const res = await apiFetch(`/agents/${agentId}`, { method: 'PUT', body: JSON.stringify(body) });
+            if (res.success) {
+                await loadAgents();
+                await loadAgentsList();
+                const saved = document.createElement('span');
+                saved.textContent = ' ✓ Saved';
+                saved.style.cssText = 'color:#4caf50;font-size:13px;margin-left:8px;';
+                const btn = document.querySelector('#editAgentPanel .run-btn');
+                btn.after(saved);
+                setTimeout(() => saved.remove(), 2000);
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to save'));
+            }
+        }
+
+        async function attachToolToEditAgent() {
+            const agentId = $('editAgentId').value;
+            const toolId = $('editAgentToolSelect').value;
+            if (!agentId || !toolId) return;
+            const res = await apiFetch(`/agents/${agentId}/tools/${toolId}`, { method: 'POST' });
+            if (res.success) {
+                await showEditAgentPanel(agentId);
+                await loadAgents();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to attach tool'));
+            }
+        }
+
+        async function detachToolFromEditAgent(toolId) {
+            const agentId = $('editAgentId').value;
+            if (!agentId) return;
+            const res = await apiFetch(`/agents/${agentId}/tools/${toolId}`, { method: 'DELETE' });
+            if (res.success) {
+                await showEditAgentPanel(agentId);
+                await loadAgents();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to detach tool'));
+            }
+        }
+
+        // ========================================
+        // TOOLS MANAGEMENT
+        // ========================================
+        let allTools = [];
+
+        async function loadTools() {
+            const res = await apiFetch('/tools');
+            allTools = res.data || [];
+            renderTools();
+        }
+
+        function renderTools() {
+            const list = $('toolsList');
+            if (!allTools.length) {
+                list.innerHTML = '<p class="empty-msg">No tools yet. Create one!</p>';
+                return;
+            }
+            list.innerHTML = allTools.map(t => `
+                <div class="item-card">
+                    <div class="item-card-header">
+                        <span class="item-card-name">${esc(t.name)}</span>
+                        <span class="item-card-id">${t.tool_id}</span>
+                    </div>
+                    <div class="item-card-desc">${esc(t.description || 'No description')}</div>
+                    <div class="item-card-meta">
+                        <span class="meta-tag accent">${t.type || 'api_call'}</span>
+                        <span class="meta-tag success">${t.status || 'active'}</span>
+                        ${t.type === 'api_call' && t.script_id
+                            ? `<span class="meta-tag">flow.sokt.io/func/${esc(t.script_id)}</span>`
+                            : t.function_name
+                            ? `<span class="meta-tag">fn: ${esc(t.function_name)}</span>`
+                            : ''}
+                        ${t.required_params && t.required_params.length
+                            ? `<span class="meta-tag">${t.required_params.length} required param(s)</span>`
+                            : ''}
+                    </div>
+                    <div class="item-card-actions">
+                        ${t.type === 'api_call' ? `<button class="small-btn accent" onclick="showTestToolPanel('${t.tool_id}')">&#9654; Test</button>` : ''}
+                        <button class="small-btn" onclick="showEditToolPanel('${t.tool_id}')">Edit</button>
+                        <button class="small-btn danger" onclick="deleteToolConfirm('${t.tool_id}')">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // ========================================
+        // TOOL EDIT PANEL
+        // ========================================
+
+        async function showEditToolPanel(toolId) {
+            const res = await apiFetch(`/tools/${toolId}`);
+            if (!res.success) return alert('Failed to load tool.');
+            const t = res.data;
+
+            $('editToolId').value = t.tool_id;
+            $('editToolName').value = t.name || '';
+            $('editToolDesc').value = t.description || '';
+            $('editToolScriptId').value = t.script_id || '';
+            $('editToolHeaders').value = t.headers && Object.keys(t.headers).length
+                ? JSON.stringify(t.headers, null, 2) : '';
+
+            loadFieldRows('editFieldRows', t.fields || {}, t.required_params || [], t.static_values || {});
+
+            $('editToolApiCallFields').style.display = t.type === 'api_call' ? 'block' : 'none';
+
+            $('editToolPanel').style.display = 'block';
+            $('editToolPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function hideEditToolPanel() {
+            $('editToolPanel').style.display = 'none';
+            $('editToolId').value = '';
+            $('editFieldRows').innerHTML = '';
+        }
+
+        async function saveToolEdit() {
+            const toolId = $('editToolId').value;
+            if (!toolId) return;
+
+            const name = $('editToolName').value.trim();
+            const desc = $('editToolDesc').value.trim();
+            if (!name || !desc) return alert('Name and description are required.');
+
+            const body = { name, description: desc };
+
+            const scriptId = $('editToolScriptId').value.trim();
+            if (scriptId) body.script_id = scriptId;
+
+            const { fields, required_params, static_values } = collectFieldRows('editFieldRows');
+            body.fields = fields;
+            body.required_params = required_params;
+            body.static_values = static_values;
+
+            const headersRaw = $('editToolHeaders').value.trim();
+            if (headersRaw) {
+                try { body.headers = JSON.parse(headersRaw); }
+                catch { return alert('Headers must be valid JSON.'); }
+            } else {
+                body.headers = {};
+            }
+
+            const res = await apiFetch(`/tools/${toolId}`, { method: 'PUT', body: JSON.stringify(body) });
+            if (res.success) {
+                await loadTools();
+                const saved = document.createElement('span');
+                saved.textContent = ' \u2713 Saved';
+                saved.style.cssText = 'color:#4caf50;font-size:13px;margin-left:8px;';
+                const btn = document.querySelector('#editToolPanel .run-btn');
+                btn.after(saved);
+                setTimeout(() => saved.remove(), 2000);
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to save'));
+            }
+        }
+
+        // ========================================
+        // TOOL TEST PANEL
+        // ========================================
+        let _testToolData = null;
+
+        async function showTestToolPanel(toolId) {
+            const res = await apiFetch(`/tools/${toolId}`);
+            if (!res.success) return alert('Failed to load tool.');
+            _testToolData = res.data;
+            const t = _testToolData;
+
+            $('testToolName').textContent = t.name;
+            $('testToolId').textContent = t.tool_id;
+            $('testToolUrl').textContent = `https://flow.sokt.io/func/${t.script_id || '?'}`;
+            $('testToolPanelId').value = t.tool_id;
+
+            // Build arg inputs from fields schema
+            const fields = t.fields || {};
+            const required = new Set(t.required_params || []);
+            const container = $('testToolArgs');
+
+            if (!Object.keys(fields).length) {
+                container.innerHTML = `
+                    <div class="form-group">
+                        <label>Args <span style="color:var(--text-muted);font-weight:400">(raw JSON)</span></label>
+                        <textarea id="testToolRawArgs" rows="4" placeholder='{"key": "value"}'>{}</textarea>
+                    </div>`;
+            } else {
+                container.innerHTML = Object.entries(fields).map(([key, schema]) => {
+                    const isRequired = required.has(key);
+                    const desc = schema.description || '';
+                    const type = schema.type || 'string';
+                    const inputType = type === 'number' || type === 'integer' ? 'number' : 'text';
+                    return `<div class="form-group">
+                        <label>${key}${isRequired ? ' <span style="color:#e57373">*</span>' : ''}
+                            <span style="color:var(--text-muted);font-weight:400;font-size:11px;"> (${type})${desc ? ' — ' + esc(desc) : ''}</span>
+                        </label>
+                        <input type="${inputType}" id="testArg_${key}" data-key="${key}" data-type="${type}" placeholder="${esc(desc || key)}">
+                    </div>`;
+                }).join('');
+            }
+
+            $('testToolResult').style.display = 'none';
+            $('testToolResult').innerHTML = '';
+            $('testToolPanel').style.display = 'block';
+            $('testToolPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function hideTestToolPanel() {
+            $('testToolPanel').style.display = 'none';
+            _testToolData = null;
+        }
+
+        async function runToolTest() {
+            const toolId = $('testToolPanelId').value;
+            const t = _testToolData;
+            if (!toolId || !t) return;
+
+            const fields = t.fields || {};
+            let args = {};
+
+            if (!Object.keys(fields).length) {
+                // raw JSON mode
+                try { args = JSON.parse($('testToolRawArgs').value || '{}'); }
+                catch { return alert('Args must be valid JSON.'); }
+            } else {
+                // field-by-field mode
+                for (const [key, schema] of Object.entries(fields)) {
+                    const el = $(`testArg_${key}`);
+                    if (!el) continue;
+                    const raw = el.value.trim();
+                    if (raw === '') continue;
+                    const type = schema.type || 'string';
+                    args[key] = (type === 'number' || type === 'integer') ? Number(raw) : raw;
+                }
+            }
+
+            const runBtn = $('testToolRunBtn');
+            runBtn.textContent = 'Running...';
+            runBtn.disabled = true;
+
+            const resultBox = $('testToolResult');
+            resultBox.style.display = 'block';
+            resultBox.style.color = 'var(--text-secondary)';
+            resultBox.textContent = 'Calling flow.sokt.io...';
+
+            try {
+                const res = await apiFetch(`/tools/${toolId}/test`, {
+                    method: 'POST',
+                    body: JSON.stringify({ args }),
+                });
+                const isOk = res.success;
+                resultBox.style.color = isOk ? '#4caf50' : '#e57373';
+                resultBox.innerHTML = `<strong>${isOk ? '✓ Success' : '✗ Failed'}</strong><br>`
+                    + `<span style="color:var(--text-muted);font-size:12px;">POST ${esc(res.url || '')}</span><br><br>`
+                    + `<strong>Args sent:</strong><br><pre style="margin:4px 0 10px;font-size:12px;white-space:pre-wrap;">${esc(JSON.stringify(res.args_sent, null, 2))}</pre>`
+                    + `<strong>Response:</strong><br><pre style="margin:4px 0;font-size:12px;white-space:pre-wrap;">${esc(JSON.stringify(res.response, null, 2))}</pre>`;
+            } catch (e) {
+                resultBox.style.color = '#e57373';
+                resultBox.textContent = 'Request failed: ' + e.message;
+            } finally {
+                runBtn.textContent = '▶ Run';
+                runBtn.disabled = false;
+            }
+        }
+
+        // ========================================
+        // FIELD BUILDER HELPERS
+        // ========================================
+        let _fieldRowCounter = 0;
+
+        function addFieldRow(containerId, preset = {}) {
+            const id = ++_fieldRowCounter;
+            const name    = preset.name    || '';
+            const type    = preset.type    || 'string';
+            const desc    = preset.desc    || '';
+            const source  = preset.source  || 'ai';
+            const val     = preset.value   || '';
+            const req     = preset.required || false;
+
+            const row = document.createElement('div');
+            row.id = `fieldRow_${id}`;
+            row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 1fr auto;gap:6px;align-items:start;margin-bottom:8px;padding:10px;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border);';
+            row.innerHTML = `
+                <div>
+                    <input type="text" placeholder="Field name *" value="${esc(name)}"
+                        style="width:100%;" class="field-name" data-row="${id}">
+                    <input type="text" placeholder="Description" value="${esc(desc)}"
+                        style="width:100%;margin-top:4px;font-size:12px;" class="field-desc" data-row="${id}">
+                </div>
+                <div>
+                    <select class="field-type" data-row="${id}" style="width:100%;">
+                        ${['string','number','integer','boolean'].map(t =>
+                            `<option value="${t}"${t===type?' selected':''}>${t}</option>`).join('')}
+                    </select>
+                    <label style="display:flex;align-items:center;gap:4px;margin-top:6px;font-size:12px;cursor:pointer;">
+                        <input type="checkbox" class="field-required" data-row="${id}"${req?' checked':''}>
+                        required
+                    </label>
+                </div>
+                <div>
+                    <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:4px;">
+                        <button type="button" onclick="setFieldSource(${id},'ai')" id="srcAi_${id}"
+                            style="flex:1;padding:4px 6px;font-size:11px;border:none;cursor:pointer;
+                            background:${source==='ai'?'var(--accent)':'var(--bg-primary)'};
+                            color:${source==='ai'?'#fff':'var(--text-muted)'};">
+                            🤖 AI fills
+                        </button>
+                        <button type="button" onclick="setFieldSource(${id},'user')" id="srcUser_${id}"
+                            style="flex:1;padding:4px 6px;font-size:11px;border:none;border-left:1px solid var(--border);cursor:pointer;
+                            background:${source==='user'?'#7c4dff':'var(--bg-primary)'};
+                            color:${source==='user'?'#fff':'var(--text-muted)'};">
+                            👤 User
+                        </button>
+                    </div>
+                    <input type="text" placeholder="Static value (User only)" value="${esc(val)}"
+                        id="fieldVal_${id}" class="field-value" data-row="${id}"
+                        style="width:100%;font-size:12px;display:${source==='user'?'block':'none'};"
+                        data-source="${source}">
+                    <input type="hidden" id="fieldSrc_${id}" value="${source}">
+                </div>
+                <button type="button" onclick="removeFieldRow(${id},'${containerId}')" 
+                    style="padding:4px 8px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:#e57373;cursor:pointer;font-size:14px;margin-top:2px;">&times;</button>
+            `;
+            $(containerId).appendChild(row);
+        }
+
+        function setFieldSource(rowId, source) {
+            $(`fieldSrc_${rowId}`).value = source;
+            const valInput = $(`fieldVal_${rowId}`);
+            valInput.style.display = source === 'user' ? 'block' : 'none';
+            valInput.dataset.source = source;
+
+            const aiBtn   = $(`srcAi_${rowId}`);
+            const userBtn = $(`srcUser_${rowId}`);
+            aiBtn.style.background   = source === 'ai'   ? 'var(--accent)' : 'var(--bg-primary)';
+            aiBtn.style.color        = source === 'ai'   ? '#fff' : 'var(--text-muted)';
+            userBtn.style.background = source === 'user' ? '#7c4dff' : 'var(--bg-primary)';
+            userBtn.style.color      = source === 'user' ? '#fff' : 'var(--text-muted)';
+        }
+
+        function removeFieldRow(rowId, containerId) {
+            const el = $(`fieldRow_${rowId}`);
+            if (el) el.remove();
+        }
+
+        function collectFieldRows(containerId) {
+            const rows = $(containerId).querySelectorAll('[id^="fieldRow_"]');
+            const fields = {};
+            const required_params = [];
+            const static_values = {};
+
+            rows.forEach(row => {
+                const rid = row.id.replace('fieldRow_', '');
+                const name   = row.querySelector('.field-name').value.trim();
+                const type   = row.querySelector('.field-type').value;
+                const desc   = row.querySelector('.field-desc').value.trim();
+                const isReq  = row.querySelector('.field-required').checked;
+                const source = $(`fieldSrc_${rid}`).value;
+                const val    = $(`fieldVal_${rid}`).value.trim();
+
+                if (!name) return;
+                fields[name] = { type, description: desc, source };
+                if (isReq) required_params.push(name);
+                if (source === 'user' && val !== '') static_values[name] = val;
+            });
+
+            return { fields, required_params, static_values };
+        }
+
+        function loadFieldRows(containerId, fields, required_params, static_values) {
+            $(containerId).innerHTML = '';
+            Object.entries(fields || {}).forEach(([name, schema]) => {
+                addFieldRow(containerId, {
+                    name,
+                    type:     schema.type     || 'string',
+                    desc:     schema.description || '',
+                    source:   schema.source   || 'ai',
+                    required: (required_params || []).includes(name),
+                    value:    (static_values  || {})[name] || '',
+                });
+            });
+        }
+
+        function toggleToolTypeFields() {
+            const type = $('toolType').value;
+            $('toolApiCallFields').style.display = type === 'api_call' ? 'block' : 'none';
+            $('toolFunctionFields').style.display = type === 'function' ? 'block' : 'none';
+        }
+
+        function showCreateToolForm() { $('createToolForm').style.display = 'block'; }
+        function hideCreateToolForm() {
+            $('createToolForm').style.display = 'none';
+            $('createFieldRows').innerHTML = '';
+        }
+
+        async function createTool() {
+            const name = $('toolName').value.trim();
+            const desc = $('toolDesc').value.trim();
+            const type = $('toolType').value;
+            if (!name || !desc) return alert('Tool name and description are required.');
+
+            const body = { name, description: desc, type };
+
+            if (type === 'api_call') {
+                const scriptId = $('toolScriptId').value.trim();
+                if (!scriptId) return alert('Script ID is required for api_call tools.');
+                body.script_id = scriptId;
+
+                const { fields, required_params, static_values } = collectFieldRows('createFieldRows');
+                body.fields = fields;
+                body.required_params = required_params;
+                body.static_values = static_values;
+            } else {
+                body.function_name = $('toolFunctionName').value;
+            }
+
+            const res = await apiFetch('/tools', { method: 'POST', body: JSON.stringify(body) });
+            if (res.success) {
+                hideCreateToolForm();
+                $('toolName').value = '';
+                $('toolDesc').value = '';
+                $('toolScriptId').value = '';
+                await loadTools();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to create tool'));
+            }
+        }
+
+        async function deleteToolConfirm(toolId) {
+            if (!confirm(`Delete tool ${toolId}?`)) return;
+            const res = await apiFetch(`/tools/${toolId}`, { method: 'DELETE' });
+            if (res.success) {
+                await loadTools();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to delete'));
+            }
+        }
+
+        // ========================================
+        // A2A MANAGEMENT
+        // ========================================
+        async function refreshA2A() {
+            await loadAgents();
+            populateA2ADropdowns();
+            renderA2ARelationships();
+        }
+
+        function populateA2ADropdowns() {
+            const parent = $('a2aParent');
+            const sub = $('a2aSub');
+            parent.innerHTML = '';
+            sub.innerHTML = '';
+            allAgents.forEach(a => {
+                const o1 = document.createElement('option');
+                o1.value = a.agent_id;
+                o1.textContent = a.name;
+                parent.appendChild(o1);
+                const o2 = document.createElement('option');
+                o2.value = a.agent_id;
+                o2.textContent = a.name;
+                sub.appendChild(o2);
+            });
+        }
+
+        function renderA2ARelationships() {
+            const list = $('a2aList');
+            const relationships = [];
+            allAgents.forEach(a => {
+                (a.sub_agents || []).forEach(subId => {
+                    const subAgent = allAgents.find(x => x.agent_id === subId);
+                    relationships.push({
+                        parentId: a.agent_id,
+                        parentName: a.name,
+                        subId,
+                        subName: subAgent ? subAgent.name : subId,
+                    });
+                });
+            });
+
+            if (!relationships.length) {
+                list.innerHTML = '<p class="empty-msg">No A2A relationships yet. Link agents above.</p>';
+                return;
+            }
+
+            list.innerHTML = relationships.map(r => `
+                <div class="item-card a2a-link-card">
+                    <span class="item-card-name">${esc(r.parentName)}</span>
+                    <span class="a2a-arrow">&#8594;</span>
+                    <span class="item-card-name">${esc(r.subName)}</span>
+                    <span class="item-card-id">${r.parentId} &#8594; ${r.subId}</span>
+                    <button class="small-btn danger" onclick="unlinkSubAgent('${r.parentId}','${r.subId}')">Unlink</button>
+                </div>
+            `).join('');
+        }
+
+        async function linkSubAgent() {
+            const parentId = $('a2aParent').value;
+            const subId = $('a2aSub').value;
+            if (!parentId || !subId) return alert('Select both agents.');
+            if (parentId === subId) return alert('Cannot link agent to itself.');
+
+            const res = await apiFetch(`/a2a/agents/${parentId}/sub-agents`, {
+                method: 'POST',
+                body: JSON.stringify({ sub_agent_id: subId }),
+            });
+            if (res.success) {
+                await refreshA2A();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to link'));
+            }
+        }
+
+        async function unlinkSubAgent(parentId, subId) {
+            if (!confirm('Unlink this sub-agent?')) return;
+            const res = await apiFetch(`/a2a/agents/${parentId}/sub-agents/${subId}`, { method: 'DELETE' });
+            if (res.success) {
+                await refreshA2A();
+            } else {
+                alert('Error: ' + (res.detail || 'Failed to unlink'));
+            }
+        }
+
+        // Escape helper
+        function esc(text) {
+            const div = document.createElement('div');
+            div.textContent = text || '';
+            return div.innerHTML;
+        }
+
         // --- Initialize ---
         connectWebSocket();
+        loadAgentsList();
     </script>
 </body>
 </html>

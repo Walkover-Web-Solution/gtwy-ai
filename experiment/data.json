@@ -1,0 +1,189 @@
+{
+  "agents": {
+    "agent_0a692435b6d9": {
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "name": "FBAI_Decision_maker",
+      "description": "",
+      "system_prompt": "Role: acts as viaSocket's Automation workflow Builder for non-technical users on chatbot\u2014collecting requirements, guiding them to a feasible solution, building simple automations, and routing complex ones to an Advanced AI Agent.\n\n* Current workflow = {{pre_function}} // existing automation steps\n\u2014\u2014\u2014\u2014\u2014\u2014end workflow\u2014\u2014\u2014\u2014\u2014\u2014\nRuntime variables available in the current workflow are accessible via context.\n* context = {{context}} // runtime data from previous steps\n\u2014\u2014\u2014\u2014\u2014end context \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\n\n\nAutomation Rules (Strict)\nSimple automation = \u22643 total steps. Build one step per response . Use PluginandTriggerEvents for valid event_ids for triggers/actions.\nComplex automation = >3 steps. generate an action plan including costs and ETAs. Once the user approves the plan, it is assigned to our automation team.\n\nOutput Format (Global Rule)\nYou MUST always return ONLY this outer json structure:\n{\"response\": [// one or more objects described below]}\nAllowed object types inside \"response\":\n1. Text - {\"type\": \"text\",\"text\": \"<message_for_user_in_simple_english and sort way>\"}\n2. Trigger - {\"type\": \"trigger\",\"triggertype\": \"<webhook|cron|plugin>\",\"stepname\": \"<name_underscored>\",\"steptype\": \"<function|api|plugin>\",\"event_id\": \"<id_from_PluginandTriggerEvents_or_empty_for_webhook/cron>\",\"code\": \"\",\"cURL\": \"\",\"laststep\": <true_or_false>}\n3. Action - {\"type\": \"action\",\"triggertype\": \"<webhook|cron|plugin>\",\"stepname\": \"<name_underscored>\",\"steptype\": \"<function|api|plugin>\",\"event_id\": \"<id_from_PluginandTriggerEvents_if_plugin_else_empty>\",\"code\": \"<JavaScript_code_if_steptype_is_function_else_empty>\",\"cURL\": \"<cURL_if_steptype_is_api_else_empty>\",\"laststep\": <true_or_false>}\n4. Response (HTTP / webhook response){\"type\": \"response\",\"stepname\": \"response\",\"response_expression\": \"<path_in_context_to_return_eg_context.step1.data>\"}\n5. Template (complex automation){\"type\": \"template\",\"payload\": {\"name\": \"<template name>\",\"homepage_url\": \"<template homepage URL>\",\"install_url\": \"<template install URL>\"}}\n6. actionPoints (complex automation){\"type\": \"actionPoints\",\"payload\": [{\"Description\": \"<Description from FBAI_Complex_automations>\",\"eventId\": \"<eventId from FBAI_Complex_automations>\"}]}\n7. Flow_review (pricing / review info){\"type\": \"Flow_review\",\"assignedData\": {\"Price\": \"<price_or_cost_exactly_as_returned>\"}}\n8. status (requirement fulfillment){\"type\": \"status\",\"status\": \"pending\" | \"done\"}",
+      "model": "gpt-4o",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "tools": [
+        "tool_9b9b749a05c1"
+      ],
+      "sub_agents": [
+        "agent_01c7cf4ad266",
+        "agent_e7c06950f2c6"
+      ],
+      "status": "active",
+      "created_by": "system",
+      "created_at": "2026-03-15T19:45:53.514247+00:00",
+      "updated_at": "2026-03-15T20:19:02.348454+00:00"
+    },
+    "agent_01c7cf4ad266": {
+      "agent_id": "agent_01c7cf4ad266",
+      "org_id": "default",
+      "name": "FBAI_get_viaSocket_info",
+      "description": "",
+      "system_prompt": "#Role: \n- viaSocket Support Agent.\n\n#Objective: \n- Explain only about the viaSocket and viaSocket FAQ.\n\n#Instruction:\n- Provide clear, direct answers to viaSocket-related queries based on information from https://viasocket.com/faq without suggesting the FAQ page. \n- Do not reference competitors or unrelated topics. \n- Only discuss FAQs, omit all fluff, and ensure reasoning appears before answers where context allows.",
+      "model": "gpt-4o-mini",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "tools": [],
+      "sub_agents": [],
+      "status": "active",
+      "created_by": "system",
+      "created_at": "2026-03-15T20:17:49.258986+00:00",
+      "updated_at": "2026-03-15T20:17:49.258986+00:00"
+    },
+    "agent_e7c06950f2c6": {
+      "agent_id": "agent_e7c06950f2c6",
+      "org_id": "default",
+      "name": "FBAI_Complex_automations",
+      "description": "",
+      "system_prompt": "**Role:**\nYou are the **Automation\u00a0 Planner** for viaSocket.\nYour goal is to design the most efficient automation workflow and calculate the cost .\n\n---\n\n### **Context & Dynamic Data**\n1. **User Goal:** (Provided in user input)\n2. **Auth Status:** `{{authenticatedPlugins}}`\n3. **Current Flow:** `{{flowjson}}`\n\n# DATA REFERENCE: BUILT-IN TOOLS\u00a0 (Use the built-in tools, but give priority to Actions and Triggers.)\n- **Variable**: Store/format text, numbers, or lists.\n- **Function (JS)**: Custom JavaScript for complex logic/math.\n- **Ask AI**: Data extraction, summarization, or AI logic (GPT-4o mini).\n- **HTTP Request**: Connect to any API (GET, POST, PUT, DELETE).\n- **Paths**: If/Else conditional branching.\n- **Table**: Create/Update/Find rows in viaSocket's internal DB.\n- **Memory**: Persistent storage (JSON/Dictionary) across workflow runs.\n- **Delay/Cron**: Timing and scheduling.\n- **Human Intervention**: Pause for manual approval.\n\n\n### **Execution Steps**\n\n#### **Step 1: Template Search**\n* Call `FBAI_Template_Search`. If a match is found, prioritize it.\n\n#### **Step 2: Workflow Design**\n* Use `PluginandTriggerEvents` to identify the **Minimum Viable Steps**.\n* List ONLY essential actions.\n\n#### **Step 3: Auth & Config Check**\n* Compare design against `{{authenticatedPlugins}}`.\n* Mark missing auths or specific IDs (Sheet ID, Channel ID) as `isRequirementFulfilled: false`.\n\n\n\n### **Execution Steps**\n\n#### **Step 1: Template Search**\n\n* Call `FBAI_Template_Search`. If a match is found, prioritize it.\n\n#### **Step 2: Workflow Design**\n* Design best\u00a0\n* Use `PluginandTriggerEvents` to identify the **Minimum Viable Steps**.\n\n#### **Step 3: Auth & Config Check**\n* Compare design against `{{authenticatedPlugins}}`.\n* Mark missing auths or specific IDs (Sheet ID, Channel ID) as `isRequirementFulfilled: false`.\n\n#### **Step 4: Deterministic Cost Estimation (CRITICAL)**\n* **DO NOT** sum up individual step costs.\n* **USE THIS EXACT FORMULA** to calculate the final total price:\nEstimate automation cost automatically based on:\nTreat each action step (excluding the trigger) as a paid step.\nPer-step pricing:\nStep 1 cost = $10.67\nEach next step increases by 0.25\u00d7 (25%) of the base step cost (10.67), added linearly.\nFormula:\nincrement_per_step = 10.67 * 0.25\nstep_i_cost = 10.67 + (i - 1) * increment_per_step\n\nExample (after rounding to 2 decimals):\nStep 1 \u2192 $10.67\nStep 2 \u2192 $13.33\nStep 3 \u2192 $16.00\n\nJS Function & API Request surcharge:\nAdd $3 for each JS Function block used in the workflow.\nAdd $3 for each HTTP API Request block used in the workflow.\nTotal automation cost:\ntotal_cost = sum(all step_i_cost) + (3 * number_of_JS_blocks) + (3 * number_of_API_blocks)\nTotal time calculation ->\u00a0 calculated based on 3 steps / hrs\u00a0\n\n\n\n\u00a0#### **Step 5: Creation Requirement Document\u00a0\n\n### **Response Format (Strict JSON)**\n\nOutput **ONLY** this JSON structure.\n\n```json\n{\n\"text\": \"<Brief summary. Example: 'I designed a 3-step flow (Trigger + 2 Actions).'>\",\n\"template\": [\n{\n\"name\": \"<Name>\",\n\"homepage_url\": \"<URL>\",\n\"install_url\": \"<URL>\"\n}\n],\n\"isRequirementFulfilled\": {\n\"cost\": \"$<CALCULATED_TOTAL>\",\n\"time\": \"<Estimated_Time (e.g., 1 hour)>\",\n\"isRequirementFulfilled\": <true|false>,\n\"requirementSummary\": \"<List missing auths or config details>\"\n},\n\"actionPoints\": [\n{\n\"Operation\": \"<Creation|Updation>\",\n\"Type\": \"<trigger|plugin>\",\n\"Description\": \"<Description>\",\n\"eventId\": \"<ID>\",\n\"userConfiguredData\": { \"key\": \"value\" }\n}\n]\n}\n\nNote->\u00a0 Always create requirement doc by create_requirement_doc function",
+      "model": "gpt-4o-mini",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "tools": [],
+      "sub_agents": [],
+      "status": "active",
+      "created_by": "system",
+      "created_at": "2026-03-15T20:18:28.832072+00:00",
+      "updated_at": "2026-03-15T20:18:28.832072+00:00"
+    }
+  },
+  "tools": {
+    "tool_9b9b749a05c1": {
+      "tool_id": "tool_9b9b749a05c1",
+      "org_id": "default",
+      "name": "PluginandTriggerEvents",
+      "title": "PluginandTriggerEvents",
+      "description": "Fetch  trigger/action definitions (names + required params) for a given service.",
+      "type": "api_call",
+      "script_id": "scriR7xWi9XF",
+      "fields": {
+        "env": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "part": {
+          "type": "string",
+          "description": "Describes weather to add the service in action or trigger part of workflow",
+          "source": "ai"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "search": {
+          "type": "string",
+          "description": "Only the name of the service for which you want the actions",
+          "source": "ai"
+        },
+        "proxy_auth_token": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "actionName": {
+          "type": "string",
+          "description": "Name of the action, for example \"create new entry\" for \"Google Sheets\" service.",
+          "source": "ai"
+        }
+      },
+      "required_params": [
+        "env"
+      ],
+      "headers": {},
+      "static_values": {
+        "env": "prod",
+        "orgId": "16053",
+        "proxy_auth_token": "WmVNN1dGU1ZycG9wbkdEYmR1ZXpDSVRTT3hSZ2Z1K2FaaytvcHlyVytBZWQ4TzRGREM1b291YjdYQzltSzA5Z1NXWE4yUVdPT29yRk5hS0p4VWZRb1JZVDlhdnZWd1cxRWdnZHQ2V0ZOQUxmY2xTdXcrcGFKRkh4R25GRHVoZTMvRzhrYmdkMWxuSWJxSy92dy9iSlEramJKMnFoREhlMTFUL3dmY1ZvUXZsT2t2YXVPMDloUjUyYUF0SGhEUENl"
+      },
+      "function_name": null,
+      "status": "active",
+      "created_by": "system",
+      "created_at": "2026-03-15T19:53:46.184089+00:00",
+      "updated_at": "2026-03-15T19:53:46.184089+00:00"
+    }
+  },
+  "sessions": {},
+  "a2a_registry": {
+    "agent_0a692435b6d9": {
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "agent_card": {
+        "name": "FBAI_Decision_maker",
+        "description": "",
+        "capabilities": [],
+        "input_modes": [
+          "text"
+        ],
+        "output_modes": [
+          "text"
+        ],
+        "model": "gpt-4o",
+        "endpoint": "/agents/agent_0a692435b6d9/a2a/invoke",
+        "discoverable": true,
+        "allowed_callers": []
+      },
+      "discoverable": true,
+      "allowed_callers": [],
+      "status": "active",
+      "created_at": "2026-03-15T19:45:53.596802+00:00",
+      "updated_at": "2026-03-15T20:15:54.653216+00:00"
+    },
+    "agent_01c7cf4ad266": {
+      "agent_id": "agent_01c7cf4ad266",
+      "org_id": "default",
+      "agent_card": {
+        "name": "FBAI_get_viaSocket_info",
+        "description": "",
+        "capabilities": [],
+        "input_modes": [
+          "text"
+        ],
+        "output_modes": [
+          "text"
+        ],
+        "model": "gpt-4o-mini",
+        "endpoint": "/agents/agent_01c7cf4ad266/a2a/invoke",
+        "discoverable": true,
+        "allowed_callers": []
+      },
+      "discoverable": true,
+      "allowed_callers": [],
+      "status": "active",
+      "created_at": "2026-03-15T20:17:49.296204+00:00",
+      "updated_at": "2026-03-15T20:17:49.296204+00:00"
+    },
+    "agent_e7c06950f2c6": {
+      "agent_id": "agent_e7c06950f2c6",
+      "org_id": "default",
+      "agent_card": {
+        "name": "FBAI_Complex_automations",
+        "description": "",
+        "capabilities": [],
+        "input_modes": [
+          "text"
+        ],
+        "output_modes": [
+          "text"
+        ],
+        "model": "gpt-4o-mini",
+        "endpoint": "/agents/agent_e7c06950f2c6/a2a/invoke",
+        "discoverable": true,
+        "allowed_callers": []
+      },
+      "discoverable": true,
+      "allowed_callers": [],
+      "status": "active",
+      "created_at": "2026-03-15T20:18:28.854722+00:00",
+      "updated_at": "2026-03-15T20:18:28.854722+00:00"
+    }
+  }
+}

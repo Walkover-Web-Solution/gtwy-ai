@@ -1,7 +1,9 @@
 import json
 import os
 import sys
+import traceback
 import uuid
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -11,11 +13,27 @@ from fastapi.responses import FileResponse
 # Add experiment dir to path so graph package is importable
 sys.path.insert(0, os.path.dirname(__file__))
 
+from db.connection import close_db, init_db
 from graph.builder import build_graph
+from routes.a2a_routes import router as a2a_router
+from routes.agent_routes import router as agent_router
+from routes.tool_routes import router as tool_router
+from services.agent_service import get_compiled_graph_for_agent
 
 load_dotenv()
 
-app = FastAPI(title="Experiment: LangGraph AI Planner")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events."""
+    await init_db()
+    print("Experiment server started. JSON file store ready.")
+    yield
+    await close_db()
+    print("Experiment server stopped.")
+
+
+app = FastAPI(title="Experiment: Agentic AI Platform", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,11 +42,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register REST API routers
+app.include_router(agent_router, prefix="/api")
+app.include_router(tool_router, prefix="/api")
+app.include_router(a2a_router, prefix="/api")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
-# Build graph once at startup
-compiled_graph, checkpointer = build_graph()
+# Build default graph once at startup (backward compatible)
+default_compiled_graph, default_checkpointer = build_graph()
 
 
 async def ws_send(ws: WebSocket, event: str, data: dict):
@@ -36,28 +59,28 @@ async def ws_send(ws: WebSocket, event: str, data: dict):
     await ws.send_text(json.dumps({"event": event, "data": data}))
 
 
-async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, pending_state_out: list | None = None):
+async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compiled_graph=None, pending_state_out: list | None = None):
     """Run the graph and stream events to the WebSocket client."""
-    thread_id = config["configurable"]["thread_id"]
+    graph = compiled_graph or default_compiled_graph
 
     # Stream events from the graph
     current_node = None
     current_task_id = None
     streamed_text = ""
 
-    async for event in compiled_graph.astream_events(state, config, version="v2"):
+    async for event in graph.astream_events(state, config, version="v2"):
         kind = event.get("event", "")
         name = event.get("name", "")
-        tags = event.get("tags", [])
 
         # Track which node we're in
-        if kind == "on_chain_start" and name in ("planner", "executor", "synthesizer"):
+        if kind == "on_chain_start" and name in ("planner", "executor", "synthesizer", "direct"):
             current_node = name
 
             if name == "planner":
                 await ws_send(ws, "status", {"message": "Creating plan..."})
+            elif name == "direct":
+                await ws_send(ws, "status", {"message": "Thinking..."})
             elif name == "executor":
-                # Read task index from the node's input (available in astream_events v2)
                 try:
                     node_input = event.get("data", {}).get("input", {})
                     task_idx = node_input.get("current_task_index", 0)
@@ -82,7 +105,6 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, pending
                 chunk = event["data"]["chunk"]
                 if hasattr(chunk, "content"):
                     content = chunk.content or ""
-                # Stream tool call name to frontend as soon as LLM starts calling a tool
                 if current_node == "executor" and current_task_id:
                     if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
                         tool_name = chunk.tool_call_chunks[0].get("name", "")
@@ -99,9 +121,8 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, pending
                     await ws_send(ws, "final_chunk", {"chunk": content})
 
         # Node completed
-        if kind == "on_chain_end" and name in ("planner", "executor", "synthesizer"):
+        if kind == "on_chain_end" and name in ("planner", "executor", "synthesizer", "direct"):
             if name == "planner":
-                # Read planner output directly from the event (avoids stale checkpointer reads)
                 try:
                     planner_output = event.get("data", {}).get("output", {})
                     if planner_output.get("needs_question"):
@@ -119,7 +140,6 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, pending
                                     for t in tasks
                                 ]
                             })
-                            # Store the full state needed for approval
                             if pending_state_out is not None:
                                 pending_state_out.append({
                                     **state,
@@ -134,15 +154,69 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, pending
                 except Exception:
                     pass
 
-            elif name == "executor" and current_task_id:
-                await ws_send(ws, "task_done", {"task_id": current_task_id})
-                current_task_id = None
+            elif name == "direct":
+                try:
+                    direct_output = event.get("data", {}).get("output", {})
+                    import json as _json
+                    response_objects = []
+                    try:
+                        parsed = _json.loads(direct_output.get("final_answer", ""))
+                        response_objects = parsed.get("response", [])
+                    except Exception:
+                        txt = direct_output.get("final_answer", "")
+                        if txt:
+                            response_objects = [{"type": "text", "text": txt}]
+
+                    needs_next = direct_output.get("needs_question") and direct_output.get("question_text") == "__next_step__"
+
+                    await ws_send(ws, "step_built", {
+                        "objects": response_objects,
+                        "needs_next": needs_next,
+                        "built_steps": direct_output.get("built_steps", []),
+                    })
+
+                    if needs_next:
+                        snap_state = {**state, **direct_output, "human_input": None}
+                        if pending_state_out is not None:
+                            pending_state_out.append(snap_state)
+                        return "waiting_for_next"
+                    else:
+                        await ws_send(ws, "done", {"final_answer": direct_output.get("final_answer", "")})
+                        return "completed"
+                except Exception:
+                    pass
+
+            elif name == "executor":
+                if current_task_id:
+                    await ws_send(ws, "task_done", {"task_id": current_task_id})
+                    current_task_id = None
+
+                # Check if next step needs user approval
+                try:
+                    executor_output = event.get("data", {}).get("output", {})
+                    snap_state = {**state, **executor_output}
+                    idx = snap_state.get("current_task_index", 0)
+                    tasks = snap_state.get("tasks", [])
+                    if idx < len(tasks) and not snap_state.get("step_approved"):
+                        next_task = tasks[idx]
+                        await ws_send(ws, "step_proposal", {
+                            "step_index": idx,
+                            "total_steps": len(tasks),
+                            "task_id": next_task["id"],
+                            "title": next_task["title"],
+                            "description": next_task["description"],
+                        })
+                        if pending_state_out is not None:
+                            pending_state_out.append(snap_state)
+                        return "waiting_for_step_approval"
+                except Exception:
+                    pass
 
             current_node = None
 
     # Graph finished — send final answer
     try:
-        snap = compiled_graph.get_state(config)
+        snap = graph.get_state(config)
         if snap and snap.values:
             final = snap.values.get("final_answer")
             if final:
@@ -173,6 +247,7 @@ async def websocket_endpoint(ws: WebSocket):
             if action == "start":
                 goal = msg.get("goal", "").strip()
                 api_key = msg.get("api_key") or OPENAI_API_KEY
+                agent_id = msg.get("agent_id")  # Optional: use a specific agent
 
                 if not goal:
                     await ws_send(ws, "error", {"message": "goal is required"})
@@ -182,14 +257,23 @@ async def websocket_endpoint(ws: WebSocket):
                     await ws_send(ws, "error", {"message": "OPENAI_API_KEY not configured"})
                     continue
 
+                # Build graph: dynamic if agent_id provided, else default
+                try:
+                    agent_graph, agent_checkpointer = await get_compiled_graph_for_agent(agent_id)
+                except Exception:
+                    agent_graph = default_compiled_graph
+                    agent_checkpointer = default_checkpointer
+
                 thread_id = str(uuid.uuid4())
                 config = {"configurable": {"thread_id": thread_id}}
 
+                mode = msg.get("mode", "plan")
                 initial_state = {
                     "thread_id": thread_id,
                     "goal": goal,
-                    "mode": "plan",
+                    "mode": mode,
                     "api_key": api_key,
+                    "agent_id": agent_id,
                     "tasks": [],
                     "completed_tasks": [],
                     "current_task_index": 0,
@@ -199,33 +283,38 @@ async def websocket_endpoint(ws: WebSocket):
                     "question_options": None,
                     "human_input": None,
                     "plan_approved": False,
+                    "step_approved": False,
+                    "step_feedback": None,
+                    "direct_messages": [],
+                    "built_steps": [],
                 }
 
-                # Always store state upfront so answer/approve can always access it
                 ws.pending_state = {**initial_state}
                 ws.state_thread_id = thread_id
                 ws.state_config = config
+                ws.agent_graph = agent_graph  # Store for reuse in answer/approve
 
-                await ws_send(ws, "thread_created", {"thread_id": thread_id})
+                await ws_send(ws, "thread_created", {"thread_id": thread_id, "agent_id": agent_id})
 
                 try:
                     pending = []
-                    result = await run_graph_and_stream(ws, initial_state, config, pending)
+                    result = await run_graph_and_stream(ws, initial_state, config, agent_graph, pending)
 
                     if result == "waiting_for_approval":
                         ws.pending_state = pending[0] if pending else {**initial_state}
+                    elif result == "waiting_for_next":
+                        ws.pending_state = pending[0] if pending else {**initial_state}
                     elif result == "waiting_for_answer":
-                        pass  # ws.pending_state already set to initial_state above
+                        pass
 
                 except Exception as e:
                     await ws_send(ws, "error", {"message": f"Graph error: {str(e)}"})
 
             elif action == "answer":
-                # User answered a clarifying question — re-plan with their answer
                 answer = msg.get("answer", "")
-
-                # Use the stored initial state, patch in the answer
                 base_state = getattr(ws, "pending_state", None)
+                agent_graph = getattr(ws, "agent_graph", default_compiled_graph)
+
                 if not base_state:
                     await ws_send(ws, "error", {"message": "No active session to resume. Please start again."})
                     continue
@@ -248,7 +337,7 @@ async def websocket_endpoint(ws: WebSocket):
 
                     await ws_send(ws, "status", {"message": "Updating plan with your answer..."})
                     pending = []
-                    result = await run_graph_and_stream(ws, resume_state, new_config, pending)
+                    result = await run_graph_and_stream(ws, resume_state, new_config, agent_graph, pending)
 
                     if result == "waiting_for_approval":
                         ws.state_config = new_config
@@ -263,8 +352,9 @@ async def websocket_endpoint(ws: WebSocket):
                     await ws_send(ws, "error", {"message": f"Resume error: {str(e)}"})
 
             elif action == "approve":
-                # User approved the plan — use stored pending state, set plan_approved=True
                 pending_state = getattr(ws, "pending_state", None)
+                agent_graph = getattr(ws, "agent_graph", default_compiled_graph)
+
                 if not pending_state:
                     await ws_send(ws, "error", {"message": "No pending plan to approve"})
                     continue
@@ -275,22 +365,168 @@ async def websocket_endpoint(ws: WebSocket):
                         "plan_approved": True,
                         "current_task_index": 0,
                         "completed_tasks": [],
+                        "step_approved": True,   # approve the first step immediately
+                        "step_feedback": None,
                     }
 
                     new_thread_id = str(uuid.uuid4())
                     new_config = {"configurable": {"thread_id": new_thread_id}}
 
-                    ws.pending_state = None  # clear after use
+                    ws.pending_state = None
 
                     await ws_send(ws, "status", {"message": "Starting execution..."})
-                    result = await run_graph_and_stream(ws, resume_state, new_config)
+                    pending = []
+                    result = await run_graph_and_stream(ws, resume_state, new_config, agent_graph, pending)
 
-                    if result in ("waiting_for_answer", "waiting_for_approval"):
+                    if result == "waiting_for_step_approval":
+                        ws.state_config = new_config
+                        ws.state_thread_id = new_thread_id
+                        ws.pending_state = pending[0] if pending else resume_state
+                    elif result in ("waiting_for_answer", "waiting_for_approval"):
                         ws.state_config = new_config
                         ws.state_thread_id = new_thread_id
 
                 except Exception as e:
-                    await ws_send(ws, "error", {"message": f"Approve error: {str(e)}"})
+                    tb = traceback.format_exc()
+                    print(f"[APPROVE ERROR]\n{tb}")
+                    await ws_send(ws, "error", {"message": f"Approve error: {str(e)}", "traceback": tb})
+
+            elif action == "next_step":
+                pending_state = getattr(ws, "pending_state", None)
+                agent_graph = getattr(ws, "agent_graph", default_compiled_graph)
+                user_message = msg.get("message", "").strip()
+
+                if not pending_state:
+                    await ws_send(ws, "error", {"message": "No active direct session"})
+                    continue
+
+                try:
+                    resume_state = {
+                        **pending_state,
+                        "human_input": user_message or "continue",
+                        "needs_question": False,
+                        "question_text": None,
+                        "mode": "direct",
+                    }
+
+                    new_thread_id = str(uuid.uuid4())
+                    new_config = {"configurable": {"thread_id": new_thread_id}}
+                    ws.pending_state = None
+
+                    await ws_send(ws, "status", {"message": "Building next step..."})
+                    pending = []
+                    result = await run_graph_and_stream(ws, resume_state, new_config, agent_graph, pending)
+
+                    if result == "waiting_for_next":
+                        ws.state_config = new_config
+                        ws.state_thread_id = new_thread_id
+                        ws.pending_state = pending[0] if pending else resume_state
+
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    print(f"[NEXT STEP ERROR]\n{tb}")
+                    await ws_send(ws, "error", {"message": f"Next step error: {str(e)}"})
+
+            elif action == "step_approve":
+                pending_state = getattr(ws, "pending_state", None)
+                agent_graph = getattr(ws, "agent_graph", default_compiled_graph)
+
+                if not pending_state:
+                    await ws_send(ws, "error", {"message": "No pending step to approve"})
+                    continue
+
+                try:
+                    resume_state = {
+                        **pending_state,
+                        "step_approved": True,
+                        "step_feedback": None,
+                    }
+
+                    new_thread_id = str(uuid.uuid4())
+                    new_config = {"configurable": {"thread_id": new_thread_id}}
+                    ws.pending_state = None
+
+                    await ws_send(ws, "status", {"message": "Executing step..."})
+                    pending = []
+                    result = await run_graph_and_stream(ws, resume_state, new_config, agent_graph, pending)
+
+                    if result == "waiting_for_step_approval":
+                        ws.state_config = new_config
+                        ws.state_thread_id = new_thread_id
+                        ws.pending_state = pending[0] if pending else resume_state
+                    elif result in ("waiting_for_answer", "waiting_for_approval"):
+                        ws.state_config = new_config
+                        ws.state_thread_id = new_thread_id
+
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    print(f"[STEP APPROVE ERROR]\n{tb}")
+                    await ws_send(ws, "error", {"message": f"Step approve error: {str(e)}"})
+
+            elif action == "step_reject":
+                pending_state = getattr(ws, "pending_state", None)
+                agent_graph = getattr(ws, "agent_graph", default_compiled_graph)
+                feedback = msg.get("feedback", "").strip()
+
+                if not pending_state:
+                    await ws_send(ws, "error", {"message": "No pending step to reject"})
+                    continue
+
+                try:
+                    tasks = list(pending_state.get("tasks", []))
+                    idx = pending_state.get("current_task_index", 0)
+
+                    if feedback and idx < len(tasks):
+                        # Mark current task as skipped with user feedback
+                        tasks[idx] = {**tasks[idx], "status": "skipped", "result": f"Skipped by user: {feedback}"}
+                        completed = list(pending_state.get("completed_tasks", []))
+                        completed.append({"title": tasks[idx]["title"], "result": f"Skipped: {feedback}"})
+
+                        resume_state = {
+                            **pending_state,
+                            "tasks": tasks,
+                            "completed_tasks": completed,
+                            "current_task_index": idx + 1,
+                            "step_approved": False,
+                            "step_feedback": feedback,
+                        }
+                    else:
+                        # No feedback — just skip to next step
+                        if idx < len(tasks):
+                            tasks[idx] = {**tasks[idx], "status": "skipped", "result": "Skipped by user"}
+                        resume_state = {
+                            **pending_state,
+                            "tasks": tasks,
+                            "current_task_index": idx + 1,
+                            "step_approved": False,
+                            "step_feedback": None,
+                        }
+
+                    await ws_send(ws, "step_skipped", {
+                        "step_index": idx,
+                        "task_id": tasks[idx]["id"] if idx < len(tasks) else "",
+                        "feedback": feedback,
+                    })
+
+                    new_thread_id = str(uuid.uuid4())
+                    new_config = {"configurable": {"thread_id": new_thread_id}}
+                    ws.pending_state = None
+
+                    pending = []
+                    result = await run_graph_and_stream(ws, resume_state, new_config, agent_graph, pending)
+
+                    if result == "waiting_for_step_approval":
+                        ws.state_config = new_config
+                        ws.state_thread_id = new_thread_id
+                        ws.pending_state = pending[0] if pending else resume_state
+                    elif result in ("waiting_for_answer", "waiting_for_approval"):
+                        ws.state_config = new_config
+                        ws.state_thread_id = new_thread_id
+
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    print(f"[STEP REJECT ERROR]\n{tb}")
+                    await ws_send(ws, "error", {"message": f"Step reject error: {str(e)}"})
 
     except WebSocketDisconnect:
         pass

@@ -14,6 +14,7 @@ class AgentState(TypedDict):
     goal: str
     mode: str  # "plan" or "direct" — user selected from UI
     api_key: str
+    agent_id: Optional[str]  # ID of the agent being executed (None = default)
     tasks: list[TaskItem]
     completed_tasks: list[dict]
     current_task_index: int
@@ -22,4 +23,8 @@ class AgentState(TypedDict):
     question_text: Optional[str]
     question_options: Optional[list[str]]
     human_input: Optional[str]  # filled when user answers via WebSocket
-    plan_approved: bool  # True when user has approved the plan
+    plan_approved: bool  # True when user has approved the full plan
+    step_approved: bool  # True when user has approved the current step to execute
+    step_feedback: Optional[str]  # Optional rejection/feedback message from user
+    direct_messages: list  # Conversation history for direct mode (list of {role, content})
+    built_steps: list  # Accumulated automation steps built so far (for FBAI flow)

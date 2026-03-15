@@ -1,6 +1,7 @@
 import json
 import uuid
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from graph.state import AgentState
@@ -22,8 +23,8 @@ RULES:
 """
 
 
-async def planner_node(state: AgentState) -> dict:
-    """Creates a task plan from the user's goal using LLM."""
+async def _run_planner(state: AgentState, model: str = "gpt-4o-mini", temperature: float = 0.3, system_prompt_override: str = None) -> dict:
+    """Core planner logic, parameterized for reuse by both default and dynamic nodes."""
     goal = state["goal"]
     human_input = state.get("human_input")
 
@@ -31,18 +32,20 @@ async def planner_node(state: AgentState) -> dict:
     if human_input:
         user_message = f"{goal}\n\nUser's answer to previous question: {human_input}"
 
+    prompt = system_prompt_override or PLANNER_SYSTEM_PROMPT
+
     llm = ChatOpenAI(
-        model="gpt-4o-mini",
+        model=model,
         api_key=state["api_key"],
-        temperature=0.3,
+        temperature=temperature,
+        model_kwargs={"response_format": {"type": "json_object"}},
     )
 
     response = await llm.ainvoke(
         [
-            {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        response_format={"type": "json_object"},
+            SystemMessage(content=prompt),
+            HumanMessage(content=user_message),
+        ]
     )
 
     parsed = json.loads(response.content)
@@ -75,3 +78,29 @@ async def planner_node(state: AgentState) -> dict:
         "tasks": tasks,
         "human_input": None,
     }
+
+
+async def planner_node(state: AgentState) -> dict:
+    """Default planner node — uses gpt-4o-mini with built-in system prompt."""
+    return await _run_planner(state)
+
+
+def make_planner_node(agent_config: dict):
+    """Factory: creates a planner node parameterized by agent DB config."""
+    model = agent_config.get("model", "gpt-4o-mini")
+    temperature = agent_config.get("temperature", 0.3)
+    agent_system_prompt = agent_config.get("system_prompt", "")
+
+    # Build an enhanced planner prompt that includes the agent's system prompt
+    custom_prompt = PLANNER_SYSTEM_PROMPT
+    if agent_system_prompt:
+        custom_prompt = (
+            f"You are acting as the planner for an AI agent with the following persona:\n"
+            f"---\n{agent_system_prompt}\n---\n\n"
+            f"{PLANNER_SYSTEM_PROMPT}"
+        )
+
+    async def dynamic_planner_node(state: AgentState) -> dict:
+        return await _run_planner(state, model=model, temperature=temperature, system_prompt_override=custom_prompt)
+
+    return dynamic_planner_node
