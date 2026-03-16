@@ -132,23 +132,3 @@ async def chat_bot_auth(request: Request):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="unauthorized user") from None
 
-
-async def reset_chatBot(request: Request, botId: str):
-    body = await request.json()
-    thread_id = body.get("thread_id")
-    sub_thread_id = body.get("sub_thread_id")
-    body.get("version_id")
-    profile = request.state.profile
-    userId = profile["user"]["id"]
-    org_id = request.state.profile["org"]["id"]
-    slugName = body.get("slugName")
-    body.get("purpose")
-
-    channelId = f"{botId}{thread_id.strip() if thread_id and thread_id.strip() else userId}{sub_thread_id.strip() if sub_thread_id and sub_thread_id.strip() else userId}"
-    channelId = channelId.replace(" ", "_")
-    await ConfigurationServices.get_bridge_by_slugname(org_id, slugName)
-
-    response_format = {"type": "RTLayer", "cred": {"channel": channelId, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
-    response = {"data": {"role": "reset"}}
-    await sendResponse(response_format, response, True)
-    return JSONResponse(status_code=200, content={"success": True, "message": "Chatbot reset successfully"})

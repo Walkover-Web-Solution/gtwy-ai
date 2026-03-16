@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from src.middlewares.agentsMiddlewares import agents_auth
-from src.middlewares.interfaceMiddlewares import chat_bot_auth, reset_chatBot, send_data_middleware
+from src.middlewares.interfaceMiddlewares import chat_bot_auth, send_data_middleware
 from src.middlewares.ratelimitMiddleware import rate_limit
 
 router = APIRouter()
@@ -35,8 +35,3 @@ async def combined_auth(request: Request):
 async def send_message(request: Request, botId: str):
     result = await send_data_middleware(request, botId)
     return result
-
-
-@router.post("/{botId}/resetchat", dependencies=[Depends(auth_and_rate_limit)])
-async def reset_chat(request: Request, botId: str):
-    return await reset_chatBot(request, botId)
