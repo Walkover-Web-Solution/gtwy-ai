@@ -11,6 +11,8 @@ from src.configs.serviceKeys import ServiceKeys
 
 from ....configs.constant import service_name
 from ....db_services import metrics_service
+from ....services.cache_service import make_json_serializable
+from ....services.commonServices.queueService.queueLogService import sub_queue_obj
 from ..AiMl.ai_ml_image_model import AiMlImageModel
 from ..AiMl.ai_ml_model_run import ai_ml_model_run
 from ..anthropic.anthropicModelRun import anthropic_runmodel
@@ -241,25 +243,22 @@ class BaseService:
             "error": response.get("error"),
             "apikey_object_id": self.apikey_object_id,
         }
+        history_params = {
+            "thread_id": self.thread_id,
+            "sub_thread_id": self.sub_thread_id,
+            "user": self.original_user or json.dumps(self.tool_call),
+            "message": "",
+            "org_id": self.org_id,
+            "bridge_id": self.bridge_id,
+            "model": self.configuration.get("model"),
+            "channel": "chat",
+            "type": "error",
+            "actor": "user" if self.user else "tool",
+            "message_id": self.message_id,
+        }
+        payload = metrics_service.build_history_and_metrics_payload([usage], history_params, None)
         await asyncio.gather(
-            metrics_service.create(
-                [usage],
-                {
-                    "thread_id": self.thread_id,
-                    "sub_thread_id": self.sub_thread_id,
-                    "user": self.original_user or json.dumps(self.tool_call),
-                    "message": "",
-                    "org_id": self.org_id,
-                    "bridge_id": self.bridge_id,
-                    "model": self.configuration.get("model"),
-                    "channel": "chat",
-                    "type": "error",
-                    "actor": "user" if self.user else "tool",
-                    "message_id": self.message_id,
-                },
-                None,
-                self.send_error_to_webhook,
-            ),
+            sub_queue_obj.publish_message(make_json_serializable({"save_history": [payload]})),
             sendResponse(self.response_format, data=response.get("error")),
             return_exceptions=True,
         )

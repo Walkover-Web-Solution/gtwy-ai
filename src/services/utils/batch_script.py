@@ -3,16 +3,15 @@ import asyncio
 from globals import logger
 from src.configs.constant import redis_keys
 
-from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_prefix, release_lock
+from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_prefix, make_json_serializable, release_lock
 from ..commonServices.baseService.baseService import sendResponse
+from ..commonServices.queueService.queueLogService import sub_queue_obj
 from ..utils.send_error_webhook import create_response_format
 from .ai_middleware_format import process_batch_results
 from .batch_script_utils import get_batch_result_handler, is_finalized_batch_item
 from .helper import Helper
 from globals import *
-from src.db_services.conversationDbService import updateConversationLogByBatchData, timescale_metrics
 from .token_calculation import TokenCalculator
-from datetime import datetime
 
 
 async def repeat_function():
@@ -98,34 +97,28 @@ async def check_batch_status():
 
                             # Initialize TokenCalculator for batch cost calculation with 50% discount
                             token_calculator = TokenCalculator(service, {})
-                            
-                            # Prepare metrics data for batch
+
+                            batch_updates = []
                             metrics_data = []
-                            
-                            # Update conversation logs with the results
+
                             for formatted_result in formatted_results:
                                 message_id = formatted_result.get('message_id')
-                                
+
                                 if not message_id:
-                                    # Skip if no message_id (might be a batch-level error)
                                     continue
-                                
-                                # Extract data from formatted result
+
                                 data = formatted_result.get('data', {})
                                 usage = formatted_result.get('usage', {})
                                 status_code = formatted_result.get('status_code')
                                 error = formatted_result.get('error')
-                                
-                                # Determine status and message
+
                                 is_success = status_code is None or status_code < 400
-                                
+
                                 if is_success:
-                                    # Success case: Store LLM response
                                     llm_message = data.get('content')
                                     chatbot_message = data.get('content')
                                     error_message = None
                                 else:
-                                    # Error case: Store error in error column
                                     llm_message = None
                                     chatbot_message = None
                                     if isinstance(error, dict):
@@ -134,23 +127,19 @@ async def check_batch_status():
                                         error_message = str(error)
                                     else:
                                         error_message = "Unknown error occurred"
-                                
-                                # Extract token counts
+
                                 input_tokens = usage.get('input_tokens') or 0 if usage else 0
                                 output_tokens = usage.get('output_tokens') or 0 if usage else 0
                                 total_tokens = usage.get('total_tokens') or 0 if usage else 0
-                                
-                                # Calculate usage and accumulate in token calculator
+
                                 if usage and is_success:
-                                    # Use TokenCalculator to track usage
                                     token_calculator.calculate_usage({'usage': usage})
-                                
-                                # Prepare update data
+
                                 update_data = {
-                                    'llm_message': llm_message,  # Only actual LLM response, not error
+                                    'llm_message': llm_message,
                                     'chatbot_message': chatbot_message,
                                     'status': is_success,
-                                    'error': error_message,  # Error stored separately in error column
+                                    'error': error_message,
                                     'finish_reason': data.get('finish_reason'),
                                     'tokens': {
                                         'input_tokens': input_tokens,
@@ -161,31 +150,30 @@ async def check_batch_status():
                                         'status': 'completed',
                                         'batch_id': batch_id,
                                         'webhook_response': webhook_response,
-                                        'webhook_error': webhook_error,  # Store webhook error if any
+                                        'webhook_error': webhook_error,
                                         'webhook_url': webhook.get('url'),
                                         'webhook_headers': Helper.mask_headers(webhook.get('headers'))
                                     }
                                 }
-                                
-                                # Update the conversation log by batch_id and message_id
-                                await updateConversationLogByBatchData(batch_id, message_id, update_data)
-                                
-                                # Collect metrics data for each message (successful or failed)
-                                if org_id and model:  # Only save metrics if we have required data
-                                    # Calculate individual message cost with 50% batch discount
+
+                                batch_updates.append({
+                                    'batch_id': batch_id,
+                                    'message_id': message_id,
+                                    'update_data': update_data,
+                                })
+
+                                if org_id and model:
                                     individual_cost = 0
                                     if input_tokens > 0 or output_tokens > 0:
                                         try:
-                                            # Create temporary calculator for individual message cost
                                             temp_calculator = TokenCalculator(service, {})
                                             temp_calculator.calculate_usage({'usage': usage}) if usage else None
                                             cost_breakdown = temp_calculator.calculate_total_cost(model, service)
-                                            # Apply 50% discount for batch API
                                             individual_cost = cost_breakdown.get('total_cost', 0) * 0.5
                                         except Exception as cost_error:
                                             logger.error(f"Error calculating cost for message {message_id}: {str(cost_error)}")
                                             individual_cost = 0
-                                    
+
                                     metrics_data.append({
                                         'org_id': org_id,
                                         'bridge_id': bridge_id or '',
@@ -195,22 +183,26 @@ async def check_batch_status():
                                         'input_tokens': float(input_tokens),
                                         'output_tokens': float(output_tokens),
                                         'total_tokens': float(total_tokens),
-                                        'apikey_id': '',  # Batch doesn't track individual apikey_id
-                                        'created_at': datetime.now(),
-                                        'latency': 0,  # Batch processing doesn't track individual latency
+                                        'apikey_id': '',
+                                        'latency': 0,
                                         'success': is_success,
-                                        'cost': individual_cost,  # 50% discounted cost
+                                        'cost': individual_cost,
                                         'time_zone': 'Asia/Kolkata',
                                         'service': service
                                     })
-                            
-                            # Save metrics to Timescale DB
-                            if metrics_data:
+
+                            # Publish batch updates and metrics to queue for Node.js to save
+                            if batch_updates or metrics_data:
+                                queue_message = {}
+                                if batch_updates:
+                                    queue_message['update_batch_history'] = batch_updates
+                                if metrics_data:
+                                    queue_message['save_batch_metrics'] = metrics_data
                                 try:
-                                    await timescale_metrics(metrics_data)
-                                    logger.info(f"Saved {len(metrics_data)} metrics for batch {batch_id}")
-                                except Exception as metrics_error:
-                                    logger.error(f"Error saving metrics for batch {batch_id}: {str(metrics_error)}")
+                                    await sub_queue_obj.publish_message(make_json_serializable(queue_message))
+                                    logger.info(f"Published {len(batch_updates)} updates and {len(metrics_data)} metrics for batch {batch_id} to queue")
+                                except Exception as queue_error:
+                                    logger.error(f"Error publishing batch results to queue for batch {batch_id}: {str(queue_error)}")
                         else:
                             # No results but marked as completed - send generic error
                             # We cannot update specific logs here as we don't have message_ids

@@ -6,14 +6,18 @@ from typing import Any
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.services.utils.ai_call_util import call_ai_middleware
-from src.configs.constant import bridge_ids
 from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger, try_catch
 from src.configs.model_configuration import model_config_document
 from src.configs.serviceKeys import model_config_change
 from src.controllers.conversationController import save_sub_thread_id_and_name
-from src.db_services.metrics_service import create, create_orchestrator
-from src.services.cache_service import find_in_cache, make_json_serializable
+from src.db_services.metrics_service import (
+    build_history_and_metrics_payload,
+    build_orchestrator_log_data,
+    save_conversations_to_redis,
+)
+from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
+from src.configs.constant import bridge_ids, redis_keys
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
@@ -612,6 +616,42 @@ def build_service_params(
     }
 
 
+async def _publish_history_to_queue(dataset, history_params, version_id, thread_info=None):
+    """Build history/metrics payload and publish it to the log queue for Node.js to save."""
+    try:
+        payload = build_history_and_metrics_payload(dataset, history_params, version_id)
+        message = make_json_serializable({"save_history": [payload]})
+        await sub_queue_obj.publish_message(message)
+    except Exception as err:
+        logger.error(f"Error publishing history to queue: {str(err)}")
+
+
+async def _update_history_redis(dataset, history_params, version_id, thread_info):
+    """
+    Handle Python-side Redis updates after history data is built.
+    Keeps conversation cache and token count cache in sync.
+    """
+    if thread_info is None:
+        thread_info = {}
+
+    thread_id = thread_info.get("thread_id")
+    sub_thread_id = thread_info.get("sub_thread_id")
+    conversations = thread_info.get("result", [])
+
+    if dataset and "error" not in dataset[0] and conversations:
+        await save_conversations_to_redis(conversations, version_id, thread_id, sub_thread_id, history_params)
+
+    if history_params and history_params.get("bridge_id"):
+        cache_key = f"{redis_keys['metrix_bridges_']}{history_params['bridge_id']}"
+        cache_value = await find_in_cache(cache_key)
+        try:
+            old_total = json.loads(cache_value) if cache_value else 0
+        except (json.JSONDecodeError, TypeError):
+            old_total = 0
+        total_tokens = sum(d.get("total_tokens", 0) for d in (dataset or [])) + old_total
+        await store_in_cache(cache_key, float(total_tokens))
+
+
 async def process_background_tasks(
     parsed_data, result, params, thread_info, transfer_request_id=None, bridge_configurations=None
 ):
@@ -619,24 +659,23 @@ async def process_background_tasks(
     Process background tasks for saving history and publishing to queue.
     Handles both regular flow and transfer chain scenarios.
     Also handles orchestrator mode where multiple agents are saved in a single entry.
+    History and metrics are now published to the log queue for Node.js to save to DB.
     """
-    # Check if orchestrator_flag is enabled (from body or parsed_data)
     orchestrator_flag = parsed_data.get("orchestrator_flag") or parsed_data.get("body", {}).get("orchestrator_flag")
 
-    # Check if this is part of a transfer chain
     is_transfer_chain = (
         transfer_request_id
         and transfer_request_id in TRANSFER_HISTORY
         and len(TRANSFER_HISTORY[transfer_request_id]) > 0
     )
 
+    history_entries = []
+    orchestrator_history_data = None
+
     if is_transfer_chain:
-        # This is the final agent in a transfer chain
-        # Get the correct version_id from bridge_configurations for the final agent
         bridge_configs = bridge_configurations or {}
         final_version_id = bridge_configs.get(parsed_data["bridge_id"], {}).get("version_id", parsed_data["version_id"])
 
-        # Add current agent's history
         current_history_data = {
             "bridge_id": parsed_data["bridge_id"],
             "history_params": result.get("historyParams"),
@@ -647,12 +686,9 @@ async def process_background_tasks(
         }
         TRANSFER_HISTORY[transfer_request_id].append(current_history_data)
 
-        # Save all transfer history (each agent in the chain)
         transfer_chain = TRANSFER_HISTORY[transfer_request_id]
 
-        # If orchestrator_flag is true, save all agents in a single orchestrator entry
         if orchestrator_flag:
-            # Update history_params with prompts from bridge_configurations
             for _idx, history_entry in enumerate(transfer_chain):
                 if history_entry["history_params"]:
                     agent_bridge_id = history_entry["bridge_id"]
@@ -660,31 +696,31 @@ async def process_background_tasks(
                         agent_config = bridge_configs[agent_bridge_id].get("configuration", {})
                         history_entry["history_params"]["prompt"] = agent_config.get("prompt")
 
-            # Save all agents in a single orchestrator entry
-            asyncio.create_task(create_orchestrator(transfer_chain, thread_info))
+            orchestrator_history_data = build_orchestrator_log_data(transfer_chain, thread_info)
         else:
-            # Regular transfer chain - save each agent separately
             for idx, history_entry in enumerate(transfer_chain):
-                # Update parent_id and child_id in history_params based on chain position
                 if history_entry["history_params"]:
-                    # Set parent_id from the previous entry's bridge_id
                     history_entry["history_params"]["parent_id"] = history_entry.get("parent_id", "")
 
-                    # Set child_id from the next entry's bridge_id (None if last in chain)
                     if idx < len(transfer_chain) - 1:
                         history_entry["history_params"]["child_id"] = transfer_chain[idx + 1]["bridge_id"]
                     else:
                         history_entry["history_params"]["child_id"] = None
 
-                    # Add prompt from bridge_configurations if available
                     agent_bridge_id = history_entry["bridge_id"]
                     if bridge_configs and agent_bridge_id in bridge_configs:
                         agent_config = bridge_configs[agent_bridge_id].get("configuration", {})
                         history_entry["history_params"]["prompt"] = agent_config.get("prompt")
 
-                # Save history to database
+                payload = build_history_and_metrics_payload(
+                    history_entry["dataset"],
+                    history_entry["history_params"],
+                    history_entry["version_id"],
+                )
+                history_entries.append(payload)
+
                 asyncio.create_task(
-                    create(
+                    _update_history_redis(
                         history_entry["dataset"],
                         history_entry["history_params"],
                         history_entry["version_id"],
@@ -692,28 +728,40 @@ async def process_background_tasks(
                     )
                 )
 
-        # Clean up transfer history
         del TRANSFER_HISTORY[transfer_request_id]
     else:
-        # Regular flow (no transfer or first agent that didn't transfer)
-        # Always set parent_id and child_id in history_params for consistency
         if result.get("historyParams"):
             result["historyParams"]["parent_id"] = parsed_data.get("parent_bridge_id", "")
             result["historyParams"]["child_id"] = None
 
-        # Save single history entry
+        payload = build_history_and_metrics_payload(
+            [parsed_data["usage"]],
+            result["historyParams"],
+            parsed_data["version_id"],
+        )
+        history_entries.append(payload)
+
         asyncio.create_task(
-            create([parsed_data["usage"]], result["historyParams"], parsed_data["version_id"], thread_info)
+            _update_history_redis(
+                [parsed_data["usage"]],
+                result["historyParams"],
+                parsed_data["version_id"],
+                thread_info,
+            )
         )
 
-    # Publish to queue (for both transfer and non-transfer cases)
     data = await make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info)
+
+    if history_entries:
+        data["save_history"] = history_entries
+    if orchestrator_history_data:
+        data["save_orchestrator_history"] = orchestrator_history_data
+
     data = make_json_serializable(data)
     await sub_queue_obj.publish_message(data)
 
 
 async def process_background_tasks_for_error(parsed_data, error):
-    # Combine the tasks into a single asyncio.gather call
     tasks = [
         send_alert(
             data={
@@ -727,7 +775,9 @@ async def process_background_tasks_for_error(parsed_data, error):
                 "org_id": parsed_data["org_id"],
             }
         ),
-        create([parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]),
+        _publish_history_to_queue(
+            [parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]
+        ),
         save_sub_thread_id_and_name(
             parsed_data["thread_id"],
             parsed_data["sub_thread_id"],
@@ -738,7 +788,6 @@ async def process_background_tasks_for_error(parsed_data, error):
             parsed_data["user"],
         ),
     ]
-    # Filter out None values
     await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)
 
 

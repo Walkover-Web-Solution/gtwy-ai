@@ -1,7 +1,6 @@
 import traceback
 from datetime import datetime
 
-from config import Config
 from globals import logger
 
 from ..configs.constant import bridge_ids
@@ -22,50 +21,6 @@ async def getThread(thread_id, sub_thread_id, org_id, bridge_id):
     except Exception as err:
         logger.error(f"Error in getting thread:, {str(err)}, {traceback.format_exc()}")
         raise err
-
-
-async def savehistory_consolidated(conversation_data):
-    """
-    Save conversation history to the new consolidated conversation_logs table
-
-    Args:
-        conversation_data: Dictionary containing all conversation log data including:
-            - thread_id, sub_thread_id, org_id, version_id, message_id
-            - user, llm_message, chatbot_message, updated_llm_message
-            - tools_call_data, user_urls, llm_urls, AiConfig, fallback_model
-            - service, model, status, tokens, variables, latency
-            - error, firstAttemptError, finish_reason, parent_id, child_id
-
-    Returns:
-        Integer ID of created record or None if failed
-    """
-    try:
-        # Send data through RT layer with sensitive data removed (first)
-        if conversation_data.get("bridge_id"):
-            # Remove apikey from fallback_model if it exists
-            if conversation_data.get("fallback_model") and isinstance(conversation_data["fallback_model"], dict):
-                if "apikey" in conversation_data["fallback_model"]:
-                    del conversation_data["fallback_model"]["apikey"]
-
-            # Send to RT layer
-            org_id = str(conversation_data.get("org_id", "")) if conversation_data.get("org_id") else ""
-            response_format_copy = {
-                "cred": {
-                    "channel": org_id + conversation_data.get("bridge_id", ""),
-                    "apikey": Config.RTLAYER_AUTH,
-                    "ttl": "1",
-                },
-                "type": "RTLayer",
-            }
-            # Send conversation data with same keys as DB (but without apikey)
-            await sendResponse(response_format_copy, conversation_data, True)
-
-        # Save to database after sending response (with apikey intact)
-        result = await chatbotDbService.createConversationLog(conversation_data)
-        return result
-    except Exception as error:
-        logger.error(f"savehistory_consolidated error=>, {str(error)}, {traceback.format_exc()}")
-        raise error
 
 
 async def add_tool_call_data_in_history(chats):
@@ -144,4 +99,4 @@ async def save_sub_thread_id_and_name(thread_id, sub_thread_id, org_id, thread_f
 
 
 # Exporting the functions
-__all__ = ["getThread", "savehistory_consolidated", "save_sub_thread_id_and_name"]
+__all__ = ["getThread", "save_sub_thread_id_and_name"]
