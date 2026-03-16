@@ -3,8 +3,9 @@ import asyncio
 from globals import logger
 from src.configs.constant import redis_keys
 
-from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_prefix, release_lock
+from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_prefix, make_json_serializable, release_lock
 from ..commonServices.baseService.baseService import sendResponse
+from ..commonServices.queueService.queueLogService import sub_queue_obj
 from ..utils.send_error_webhook import create_response_format
 from .ai_middleware_format import process_batch_results
 from .batch_script_utils import get_batch_result_handler, is_finalized_batch_item
@@ -13,6 +14,116 @@ from globals import *
 from src.db_services.conversationDbService import updateConversationLogByBatchData, timescale_metrics
 from .token_calculation import TokenCalculator
 from datetime import datetime
+
+# Constants for queue publish retry logic
+MAX_QUEUE_RETRIES = 3
+INITIAL_RETRY_DELAY = 1  # seconds
+
+
+async def publish_batch_results_to_queue(batch_updates, metrics_data, batch_id):
+    """
+    Publish batch results to queue with retry logic and fallback to direct DB writes.
+    
+    Args:
+        batch_updates: List of batch update dictionaries
+        metrics_data: List of metrics data dictionaries
+        batch_id: The batch ID for logging purposes
+        
+    Returns:
+        Tuple of (success: bool, method: str) - method is 'queue' or 'direct_db'
+    """
+    if not batch_updates and not metrics_data:
+        return True, None
+    
+    queue_message = {}
+    if batch_updates:
+        queue_message['update_batch_history'] = batch_updates
+    if metrics_data:
+        queue_message['save_batch_metrics'] = metrics_data
+    
+    # Try queue publish with retries
+    last_error = None
+    for attempt in range(MAX_QUEUE_RETRIES):
+        try:
+            await sub_queue_obj.publish_message(make_json_serializable(queue_message))
+            logger.info(
+                f"Batch {batch_id} - Published {len(batch_updates)} updates and "
+                f"{len(metrics_data)} metrics to queue (attempt {attempt + 1})"
+            )
+            return True, 'queue'
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                f"Batch {batch_id} - Queue publish attempt {attempt + 1}/{MAX_QUEUE_RETRIES} failed: {str(e)}"
+            )
+            if attempt < MAX_QUEUE_RETRIES - 1:
+                delay = INITIAL_RETRY_DELAY * (2 ** attempt)  # Exponential backoff
+                await asyncio.sleep(delay)
+    
+    # Queue publish failed after all retries - fall back to direct DB writes
+    logger.error(
+        f"Batch {batch_id} - Queue publish failed after {MAX_QUEUE_RETRIES} attempts. "
+        f"Falling back to direct DB writes. Last error: {str(last_error)}"
+    )
+    
+    return await fallback_to_direct_db(batch_updates, metrics_data, batch_id)
+
+
+async def fallback_to_direct_db(batch_updates, metrics_data, batch_id):
+    """
+    Fallback mechanism to write batch results directly to database when queue fails.
+    
+    Args:
+        batch_updates: List of batch update dictionaries
+        metrics_data: List of metrics data dictionaries  
+        batch_id: The batch ID for logging purposes
+        
+    Returns:
+        Tuple of (success: bool, method: str)
+    """
+    db_errors = []
+    updates_saved = 0
+    metrics_saved = 0
+    
+    # Save batch updates to conversation logs
+    for update in batch_updates:
+        try:
+            await updateConversationLogByBatchData(
+                update['batch_id'],
+                update['message_id'],
+                update['update_data']
+            )
+            updates_saved += 1
+        except Exception as e:
+            db_errors.append(f"Update {update['message_id']}: {str(e)}")
+            logger.error(
+                f"Batch {batch_id} - Failed to save update for message {update['message_id']}: {str(e)}"
+            )
+    
+    # Save metrics to Timescale DB
+    if metrics_data:
+        try:
+            await timescale_metrics(metrics_data)
+            metrics_saved = len(metrics_data)
+            logger.info(f"Batch {batch_id} - Saved {metrics_saved} metrics via direct DB write")
+        except Exception as e:
+            db_errors.append(f"Metrics: {str(e)}")
+            logger.error(f"Batch {batch_id} - Failed to save metrics via direct DB: {str(e)}")
+    
+    if db_errors:
+        logger.error(
+            f"Batch {batch_id} - Direct DB fallback completed with errors. "
+            f"Saved {updates_saved}/{len(batch_updates)} updates, {metrics_saved}/{len(metrics_data)} metrics. "
+            f"Errors: {db_errors}"
+        )
+        # Return partial success if at least some data was saved
+        return updates_saved > 0 or metrics_saved > 0, 'direct_db_partial'
+    
+    logger.info(
+        f"Batch {batch_id} - Direct DB fallback successful. "
+        f"Saved {updates_saved} updates and {metrics_saved} metrics"
+    )
+    return True, 'direct_db'
 
 
 async def repeat_function():
@@ -100,10 +211,11 @@ async def check_batch_status():
                             # Initialize TokenCalculator for batch cost calculation with 50% discount
                             token_calculator = TokenCalculator(service, {})
                             
-                            # Prepare metrics data for batch
+                            # Collect batch updates and metrics data
+                            batch_updates = []
                             metrics_data = []
                             
-                            # Update conversation logs with the results
+                            # Process results and collect updates
                             for formatted_result in formatted_results:
                                 message_id = formatted_result.get('message_id')
                                 
@@ -168,8 +280,12 @@ async def check_batch_status():
                                     }
                                 }
                                 
-                                # Update the conversation log by batch_id and message_id
-                                await updateConversationLogByBatchData(batch_id, message_id, update_data)
+                                # Collect batch update for queue/fallback processing
+                                batch_updates.append({
+                                    'batch_id': batch_id,
+                                    'message_id': message_id,
+                                    'update_data': update_data
+                                })
                                 
                                 # Collect metrics data for each message (successful or failed)
                                 if org_id and model:  # Only save metrics if we have required data
@@ -205,13 +321,16 @@ async def check_batch_status():
                                         'service': service
                                     })
                             
-                            # Save metrics to Timescale DB
-                            if metrics_data:
-                                try:
-                                    await timescale_metrics(metrics_data)
-                                    logger.info(f"Saved {len(metrics_data)} metrics for batch {batch_id}")
-                                except Exception as metrics_error:
-                                    logger.error(f"Error saving metrics for batch {batch_id}: {str(metrics_error)}")
+                            # Publish to queue with retry and fallback to direct DB writes
+                            if batch_updates or metrics_data:
+                                success, method = await publish_batch_results_to_queue(
+                                    batch_updates, metrics_data, batch_id
+                                )
+                                if not success:
+                                    logger.error(
+                                        f"Batch {batch_id} - CRITICAL: Failed to save batch results "
+                                        f"via both queue and direct DB fallback"
+                                    )
                         else:
                             # No results but marked as completed - send generic error
                             # We cannot update specific logs here as we don't have message_ids
