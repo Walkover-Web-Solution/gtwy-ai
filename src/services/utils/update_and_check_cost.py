@@ -14,15 +14,25 @@ _THRESHOLD_WEBHOOK_URL = "https://flow.sokt.io/func/scri87toel4G"
 logger = logging.getLogger(__name__)
 
 
+def _format_number(value):
+    """Format a number to avoid scientific notation."""
+    try:
+        f = float(value)
+        formatted = f"{f:.10f}".rstrip("0").rstrip(".")
+        return formatted
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _build_limit_error(limit_type, current_usage, limit_value):
     """Helper to build a standard limit exceeded payload."""
     return {
         "success": False,
-        "error": f"{limit_type.capitalize()} limit exceeded. Used: {current_usage}/{limit_value}",
+        "error": f"{limit_type.capitalize()} limit exceeded. Used: {_format_number(current_usage)}/{_format_number(limit_value)}",
         "error_code": f"{limit_type.upper()}_LIMIT_EXCEEDED",
         "limit_type": limit_type,
-        "current_usage": current_usage,
-        "limit_value": limit_value,
+        "current_usage": _format_number(current_usage),
+        "limit_value": _format_number(limit_value),
     }
 
 
