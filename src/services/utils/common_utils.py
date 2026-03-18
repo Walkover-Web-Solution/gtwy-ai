@@ -58,6 +58,8 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
         for param, var_name in tool_args_mapping.items():
             if var_name in agent_variables:
                 resolved_args[param] = agent_variables[var_name]
+            else:
+                resolved_args[param] = var_name
 
         if tool_type == "custom_function":
             function_data = pre_tool.get("function_data", {})
@@ -75,6 +77,9 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
             resolved_pre_tools.append({
                 "type": tool_type,
                 "args": resolved_args,
+                "config": tool_config,
+                
+                
             })
 
     parsed_data["pre_tools"] = resolved_pre_tools
@@ -408,7 +413,6 @@ async def handle_pre_tools(parsed_data, custom_config):
                 response = web_response.get('response')
                 error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
                 parsed_data["variables"]["web_search_pre_result"] = error_msg
-        
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
     sub_thread_id = parsed_data["sub_thread_id"]
