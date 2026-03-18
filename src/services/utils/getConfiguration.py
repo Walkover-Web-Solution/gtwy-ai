@@ -159,6 +159,8 @@ async def _prepare_configuration_response(
 
     if raw_pre_tools:
         for tool_entry in raw_pre_tools:
+            if not isinstance(tool_entry, dict):
+                continue
             tool_type = tool_entry.get("type")
             tool_config = tool_entry.get("config", {})
             tool_args = tool_entry.get("args", {})
