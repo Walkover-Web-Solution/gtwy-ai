@@ -1,3 +1,4 @@
+import calendar
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +12,9 @@ def calculate_limit_ttl(reset_period: str, setup_date: datetime | None = None) -
     try:
         now = datetime.now(timezone.utc)
         reset_period = (reset_period or "monthly").lower().strip()
+
+        if isinstance(setup_date, str):
+            setup_date = datetime.fromisoformat(setup_date)
 
         anchor = setup_date
 
@@ -98,7 +102,6 @@ def _calculate_next_monthly_reset(now: datetime, anchor: datetime | None = None)
         return now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
     def clamp_day(year, month, day):
-        import calendar
         max_day = calendar.monthrange(year, month)[1]
         return min(day, max_day)
 
