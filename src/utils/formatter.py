@@ -72,8 +72,8 @@ def apply_variables(card_json, variables):
 
 _SIMPLE_FULL_RE  = re.compile(r'^\s*\{\{([a-zA-Z_]\w*)\}\}\s*$')
 _INDEXED_FULL_RE = re.compile(r'^\s*\{\{([a-zA-Z_]\w*)\[(\d+)\]\.([a-zA-Z_]\w*)\}\}\s*$')
-_OBJECT_FULL_RE  = re.compile(r'^\s*\{\{([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\}\}\s*$')
-_INLINE_RE       = re.compile(r'\{\{([a-zA-Z_]\w*)(?:(?:\[(\d+)\])?\.([a-zA-Z_]\w*))?\}\}')
+_OBJECT_FULL_RE  = re.compile(r'^\s*\{\{([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)+)\}\}\s*$')
+_INLINE_RE       = re.compile(r'\{\{([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*(?:\[\d+\](?:\.[a-zA-Z_]\w*)*)?)\}\}')
 
 # Matches a binding expressed as a single placeholder: "{{trips}}" or "{{row.buttons}}"
 _BINDING_PLACEHOLDER_RE = re.compile(r'^\s*\{\{([\w][\w.]*)\}\}\s*$')
@@ -150,17 +150,11 @@ def apply_variables_to_template_json(template_format, ai_data=None):
         if m:
             return _resolve_placeholder(m.group(1), m.group(2), m.group(3), context)
 
-        # Full object/alias dot-path: "{{row.image}}" or "{{source.name}}"
+        # Full object/alias dot-path: "{{row.image}}" or "{{footerButton.actionData.type}}"
         m = _OBJECT_FULL_RE.match(stripped)
         if m:
-            root, field = m.group(1), m.group(2)
-            obj = context.get(root)
-            if isinstance(obj, dict):
-                result = obj.get(field)
-                if result is not None:
-                    return result
-            # General path resolution covers nested paths
-            resolved = _get_path_value(context, f"{root}.{field}")
+            full_path = m.group(1)
+            resolved = _get_path_value(context, full_path)
             return resolved if resolved is not None else s
 
         # Full simple: "{{total}}" → single raw value
@@ -168,16 +162,18 @@ def apply_variables_to_template_json(template_format, ai_data=None):
         if m:
             return _resolve_placeholder(m.group(1), None, None, context)
 
-        # Inline mixed: "From: {{row.source}} — {{total}}"
+        # Inline mixed: "From: {{row.source}} — {{footerButton.cancelActionData.data.id}}"
         def _inline_sub(match):
             full_path = match.group(0)[2:-2]  # strip {{ and }}
             resolved = _get_path_value(context, full_path)
             if resolved is not None:
                 return str(resolved)
-            # Fallback to original indexed/object/scalar resolver
-            return str(_resolve_placeholder(
-                match.group(1), match.group(2), match.group(3), context
-            ))
+            # Fallback: simple root key lookup
+            root_key = full_path.split('.')[0].split('[')[0]
+            v = context.get(root_key)
+            if v is not None:
+                return str(v)
+            return match.group(0)  # leave unreplaced
 
         return _INLINE_RE.sub(_inline_sub, s)
 
