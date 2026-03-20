@@ -64,13 +64,16 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
         if tool_type == "custom_function":
             function_data = pre_tool.get("function_data", {})
             required_params = tool_config.get("required_params", [])
+            logger.info(f"[PRE_TOOL_RESOLVE] agent_variables: {agent_variables}")
+            logger.info(f"[PRE_TOOL_RESOLVE] required_params: {required_params} | resolved_args before: {resolved_args}")
             for param in required_params:
-                if param not in resolved_args:
-                    if param in agent_variables:
-                        resolved_args[param] = agent_variables[param]
+                current_val = resolved_args.get(param)
+                if current_val in agent_variables:
+                        resolved_args[param] = agent_variables[current_val]
+            logger.info(f"[PRE_TOOL_RESOLVE] resolved_args after: {resolved_args}")
             resolved_pre_tools.append({
                 "type": "custom_function",
-                "name": function_data.get("script_id"),
+                "name":  tool_config.get("script_id"),
                 "args": resolved_args,
             })
         else:
@@ -352,6 +355,7 @@ async def handle_pre_tools(parsed_data, custom_config):
                 args,
                 {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
             )
+            logger.info(f"[PRE_FUNCTION] script_id/name: {tool.get('name')} | URL: https://flow.sokt.io/func/{tool.get('name')} | args: {args}")
             if pre_function_response.get("status") == 0:
                 parsed_data["variables"]["pre_function"] = (
                     f"Error while calling prefunction. Error message: {pre_function_response.get('response')}"

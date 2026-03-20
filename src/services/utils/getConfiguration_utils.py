@@ -6,6 +6,7 @@ from src.services.commonServices.baseService.utils import makeFunctionName
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
 from src.services.utils.service_config_utils import tool_choice_function_name_formatter
+from globals import logger
 
 apiCallModel = db["apicalls"]
 
@@ -118,6 +119,7 @@ def process_api_call_tool(api_data, variables_path_bridge):
         "headers": {},
         "name": api_data.get("script_id"),
     }
+    logger.info(f"[CONNECTED_TOOL] name: {name_of_function} | script_id: {api_data.get('script_id')} | URL: https://flow.sokt.io/func/{api_data.get('script_id')}")
 
     # Process variables filled by gateway
     variables_fill_by_gtwy = list(variables_path_bridge.get(api_data.get("script_id"), {}).keys())

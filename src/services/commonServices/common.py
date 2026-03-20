@@ -97,7 +97,9 @@ async def chat_multiple_agents(request_body):
         # Create a new body for the primary agent
         primary_body = body.copy()
         wrapper_id = primary_body.get("wrapper_id")
+        user_variables = body.get("variables") or {}  
         primary_body.update(primary_config)
+        primary_body["variables"] = {**primary_body.get("variables", {}), **user_variables}  # user vars take priority
         primary_body["wrapper_id"] = wrapper_id
         primary_body["bridge_id"] = primary_bridge_id
         # Store the original primary_bridge_id for Redis key consistency
@@ -141,6 +143,12 @@ async def chat(request_body):
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
         
+        logger.info(f"[CHAT_VARIABLES] variables: {parsed_data.get('variables')} | variables_path: {parsed_data.get('variables_path')}")
+        logger.info(f"[BRIDGE_CONFIG_VARIABLES] bridge config variables: {bridge_configurations.get(parsed_data.get('bridge_id'), {}).get('variables')}")
+        # Setup pre_tools for the current agent with its own variables
+        setup_agent_pre_tools(parsed_data, bridge_configurations)
+        
+        logger.info(f"[CHAT_VARIABLES] variables in parsed body before pre_tools: {parsed_data.get('variables')}")
         # Setup pre_tools for the current agent with its own variables
         setup_agent_pre_tools(parsed_data, bridge_configurations)
         await apply_prompt_wrapper(parsed_data)
