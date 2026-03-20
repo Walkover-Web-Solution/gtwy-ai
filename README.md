@@ -55,3 +55,6 @@ pip install -r req.txt
 
 # Run the FastAPI server
 uvicorn app.main:app --reload
+
+
+anushtha
