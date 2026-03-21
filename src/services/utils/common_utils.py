@@ -58,9 +58,8 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
         for param, var_name in tool_args_mapping.items():
             if var_name in agent_variables:
                 resolved_args[param] = agent_variables[var_name]
-            else:
+            elif tool_type != "custom_function":
                 resolved_args[param] = var_name
-
         if tool_type == "custom_function":
             function_data = pre_tool.get("function_data", {})
             required_params = tool_config.get("required_params", [])
@@ -70,7 +69,7 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
                         resolved_args[param] = agent_variables[param]
             resolved_pre_tools.append({
                 "type": "custom_function",
-                "name": function_data.get("script_id"),
+                "name":  tool_config.get("script_id"),
                 "args": resolved_args,
             })
         else:
