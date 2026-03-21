@@ -99,11 +99,23 @@ async def chat_multiple_agents(request_body):
         # Create a new body for the primary agent
         primary_body = body.copy()
         wrapper_id = primary_body.get("wrapper_id")
+
+        # Save request-level values from "configuration" that must survive the
+        # bridge-config merge (primary_config["configuration"] is the raw DB config
+        # and will fully overwrite primary_body["configuration"] via .update()).
+        original_response_format = (body.get("configuration") or {}).get("response_format")
+
         primary_body.update(primary_config)
         primary_body["wrapper_id"] = wrapper_id
         primary_body["bridge_id"] = primary_bridge_id
         # Store the original primary_bridge_id for Redis key consistency
         primary_body["primary_bridge_id"] = primary_bridge_id
+
+        # Restore response_format set at request-level (e.g. RTLayer from playground/
+        # interface middleware) that was clobbered by the bridge-config merge above.
+        if original_response_format is not None:
+            primary_body.setdefault("configuration", {})["response_format"] = original_response_format
+            print(f"[chat_multiple_agents] response_format restored: type={original_response_format.get('type')}, channel={original_response_format.get('cred', {}).get('channel')}")
 
         # Create a complete request_body structure for the primary agent
         primary_request_body = {
@@ -247,17 +259,31 @@ async def chat(request_body):
         if injected_streamer and getattr(class_obj, "stream_mode", False):
             class_obj.streamer = injected_streamer
 
-        # For streaming transports: return immediately and run execute() concurrently
+        # For streaming transports: dispatch depends on delivery mode
         if getattr(class_obj, "stream_mode", False) and getattr(class_obj, "streamer", None):
-            asyncio.create_task(sse_stream_and_finalize(
+            if injected_streamer:
+                # Agent-transfer: existing SSE connection owned by the caller — background task, no new StreamingResponse
+                asyncio.create_task(sse_stream_and_finalize(
+                    class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
+                    request_body=request_body, chat_function=chat,
+                ))
+                return JSONResponse(status_code=200, content={"success": True})
+
+            if class_obj.streamer.mode == "sse":
+                # SSE: must return StreamingResponse immediately to open the HTTP stream;
+                # sse_stream_and_finalize runs concurrently and drains into the queue
+                asyncio.create_task(sse_stream_and_finalize(
+                    class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
+                    request_body=request_body, chat_function=chat,
+                ))
+                return StreamingResponse(class_obj.streamer.generator(), media_type="text/event-stream")
+
+            # RTLayer: called from queue worker — await so the worker stays in-flight
+            # until every event is delivered; the queue message is not ack'd until we return
+            await sse_stream_and_finalize(
                 class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
                 request_body=request_body, chat_function=chat,
-            ))
-            if injected_streamer:
-                # SSE queue already being consumed by the original StreamingResponse — don't create another
-                return JSONResponse(status_code=200, content={"success": True})
-            if class_obj.streamer.mode == "sse":
-                return StreamingResponse(class_obj.streamer.generator(), media_type="text/event-stream")
+            )
             return JSONResponse(status_code=200, content={"success": True})
 
         original_exception = None

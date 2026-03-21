@@ -23,7 +23,10 @@ class StreamingService:
         if self.mode == "sse":
             await self.queue.put(f"data: {json.dumps(payload)}\n\n")
         elif self.mode == "rtlayer":
-            asyncio.create_task(send_message(cred=self.rtlayer_cred, data=payload))
+            channel = self.rtlayer_cred.get("channel", "unknown")
+            print(f"[RTLayer] sending event='{payload.get('event')}' to channel='{channel}'")
+            await send_message(cred=self.rtlayer_cred, data=payload)
+            
 
     async def emit_start(self, model: str, service: str, bridge_id: str, message_id: str):
         if self._started:
