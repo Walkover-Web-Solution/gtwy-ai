@@ -1,9 +1,10 @@
+import asyncio
 import json
 import traceback
 import uuid
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
@@ -41,6 +42,7 @@ from src.services.utils.common_utils import (
     update_usage_metrics,
     process_batch_background_tasks,
     update_cost_usage_and_apikey_status_in_background,
+    sse_stream_and_finalize,
 )
 from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
@@ -215,6 +217,11 @@ async def chat(request_body):
         custom_config = await configure_custom_settings(
             model_config["configuration"], custom_config, parsed_data["service"]
         )
+        # If template rendering is requested, streaming is not supported — force it off
+        response_type = parsed_data.get("response_type") or {}
+        if isinstance(response_type, dict) and response_type.get("is_template", False):
+            parsed_data["stream"] = False
+
         # Step 9: Execute Service Handler
         params = build_service_params(
             parsed_data,
@@ -234,6 +241,24 @@ async def chat(request_body):
 
         # Execute with retry mechanism
         class_obj = await Helper.create_service_handler(params, parsed_data["service"])
+
+        # If this request was a streamed agent transfer, reuse the existing SSE connection
+        injected_streamer = (request_body.get("body", {}) if isinstance(request_body, dict) else {}).get("_injected_streamer")
+        if injected_streamer and getattr(class_obj, "stream_mode", False):
+            class_obj.streamer = injected_streamer
+
+        # For streaming transports: return immediately and run execute() concurrently
+        if getattr(class_obj, "stream_mode", False) and getattr(class_obj, "streamer", None):
+            asyncio.create_task(sse_stream_and_finalize(
+                class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
+                request_body=request_body, chat_function=chat,
+            ))
+            if injected_streamer:
+                # SSE queue already being consumed by the original StreamingResponse — don't create another
+                return JSONResponse(status_code=200, content={"success": True})
+            if class_obj.streamer.mode == "sse":
+                return StreamingResponse(class_obj.streamer.generator(), media_type="text/event-stream")
+            return JSONResponse(status_code=200, content={"success": True})
 
         original_exception = None
         try:

@@ -61,7 +61,10 @@ class Ai_Ml(BaseService):
             self.customConfig = self.service_formatter(self.customConfig, service_name["ai_ml"])
             if "tools" not in self.customConfig and "parallel_tool_calls" in self.customConfig:
                 del self.customConfig["parallel_tool_calls"]
-        openAIResponse = await self.chats(self.customConfig, self.apikey, service_name["ai_ml"])
+        if self.stream_mode:
+            openAIResponse = await self.stream(self.customConfig, self.apikey, service_name["ai_ml"])
+        else:
+            openAIResponse = await self.chats(self.customConfig, self.apikey, service_name["ai_ml"])
         modelResponse = openAIResponse.get("modelResponse", {})
         if not openAIResponse.get("success"):
             if not self.playground:

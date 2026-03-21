@@ -77,7 +77,10 @@ class GeminiHandler(BaseService):
             self.customConfig = self.service_formatter(self.customConfig, service_name['gemini'])
             self.customConfig["contents"] = contents
         
-            gemini_response = await self.chats(self.customConfig, self.apikey, service_name['gemini'])
+            if self.stream_mode:
+                gemini_response = await self.stream(self.customConfig, self.apikey, service_name['gemini'])
+            else:
+                gemini_response = await self.chats(self.customConfig, self.apikey, service_name['gemini'])
             model_response = gemini_response.get('modelResponse', {})
             if not gemini_response.get('success'):
                 if not self.playground:
