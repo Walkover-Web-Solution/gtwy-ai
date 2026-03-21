@@ -224,6 +224,7 @@ def parse_request_body(request_body):
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
         "limit": body.get("limit"),
+        "stream": body.get("stream", False),
     }
 
 
@@ -613,6 +614,7 @@ def build_service_params(
         "bridge_configurations": bridge_configurations,
         "owner_id": parsed_data.get("owner_id"),
         "limit": parsed_data.get("limit"),
+        "stream": parsed_data.get("stream", False),
     }
 
 
@@ -1232,3 +1234,49 @@ async def update_cost_usage_and_apikey_status_in_background(original_service, pa
     if completion_success:
         asyncio.create_task(update_cost_and_last_used(parsed_data))
     asyncio.create_task(mark_apikey_status_from_response(original_service, parsed_data, code))
+
+
+async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations):
+    timer.start()
+    try:
+        from src.services.commonServices.response_caching_service import handle_response_caching
+        result = await handle_response_caching(parsed_data=parsed_data, class_obj=class_obj)
+        result["response"]["usage"] = params["token_calculator"].get_total_usage()
+        if parsed_data.get("type") != "image":
+            parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
+                parsed_data["model"], parsed_data["service"]
+            )
+            result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
+        params["execution_time_logs"].append({"step": "streaming", "time_taken": round(timer.stop("streaming"), 4)})
+        latency = create_latency_object(timer, params)
+        if not parsed_data["is_playground"]:
+            if result.get("response") and result["response"].get("data"):
+                result["response"]["data"]["message_id"] = parsed_data["message_id"]
+            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+            await process_background_tasks(
+                parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
+            )
+        else:
+            await process_background_tasks_for_playground(result, parsed_data)
+
+        if class_obj.streamer:
+            model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
+            finish_reason = (
+                result.get("stream_finish_reason")
+                or model_response.get("finish_reason")
+                or model_response.get("status")
+                or ""
+            )
+            await class_obj.streamer.emit_done(
+                usage=result.get("response", {}).get("usage", {}),
+                message_id=str(parsed_data.get("message_id") or ""),
+                finish_reason=finish_reason,
+                accumulated_data=model_response,
+            )
+            await class_obj.streamer.close()
+    except Exception as err:
+        import traceback as tb
+        logger.error(f"SSE background task error: {str(err)}, {tb.format_exc()}")
+        if class_obj.streamer:
+            await class_obj.streamer.emit_error(str(err))
+            await class_obj.streamer.close()

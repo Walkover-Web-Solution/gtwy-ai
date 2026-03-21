@@ -66,7 +66,10 @@ class Mistral(BaseService):
                 self.customConfig = self.service_formatter(self.customConfig, service_name["mistral"])
                 if "tools" not in self.customConfig and "parallel_tool_calls" in self.customConfig:
                     del self.customConfig["parallel_tool_calls"]
-            mistral_response = await self.chats(self.customConfig, self.apikey, service_name["mistral"])
+            if self.stream_mode:
+                mistral_response = await self.stream(self.customConfig, self.apikey, service_name["mistral"])
+            else:
+                mistral_response = await self.chats(self.customConfig, self.apikey, service_name["mistral"])
             model_response = mistral_response.get("modelResponse", {})
             if not mistral_response.get("success"):
                 if not self.playground:

@@ -10,6 +10,88 @@ from src.exceptions import ApiCallError
 from ..api_executor import execute_api_call
 
 
+async def anthropic_stream(configuration, apikey):
+    """Async generator yielding normalised delta dicts for Anthropic messages streaming."""
+    anthropic_client = AsyncAnthropic(api_key=apikey)
+    content_blocks = {}
+    usage = {"input_tokens": 0, "output_tokens": 0}
+    finish_reason = None
+    try:
+        async with anthropic_client.messages.stream(**configuration) as stream:
+            async for event in stream:
+                if event.type == "message_start":
+                    message_data = event.message
+                    usage["input_tokens"] = message_data.usage.input_tokens
+
+                elif event.type == "content_block_start":
+                    index = event.index
+                    content_block = event.content_block
+                    if content_block.type == "text":
+                        content_blocks[index] = {"type": "text", "text": ""}
+                    elif content_block.type == "tool_use":
+                        content_blocks[index] = {
+                            "type": "tool_use",
+                            "id": content_block.id,
+                            "name": content_block.name,
+                            "input": getattr(content_block, "input", None) or {},
+                        }
+                    elif content_block.type == "thinking":
+                        content_blocks[index] = {"type": "thinking", "thinking": ""}
+
+                elif event.type == "content_block_delta":
+                    index = event.index
+                    delta = event.delta
+                    block = content_blocks.get(index)
+                    if not block:
+                        continue
+                    if delta.type == "text_delta":
+                        block.setdefault("text", "")
+                        block["text"] += delta.text
+                        yield {"content": delta.text, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
+                    elif delta.type == "thinking_delta":
+                        block.setdefault("thinking", "")
+                        block["thinking"] += delta.thinking
+                        yield {"content": None, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": delta.thinking}
+                    elif delta.type == "input_json_delta" and block.get("type") == "tool_use":
+                        block.setdefault("partial_json", "")
+                        block["partial_json"] += delta.partial_json
+                    elif delta.type == "input_text_delta" and block.get("type") == "tool_use":
+                        block.setdefault("partial_text", "")
+                        block["partial_text"] += delta.partial_text
+
+                elif event.type == "content_block_stop":
+                    index = event.index
+                    if index in content_blocks:
+                        block = content_blocks[index]
+                        if block["type"] == "tool_use":
+                            if "partial_json" in block:
+                                try:
+                                    block["input"] = json.loads(block["partial_json"]) if block["partial_json"] else {}
+                                except json.JSONDecodeError:
+                                    block["input"] = block.get("partial_json", {})
+                                finally:
+                                    del block["partial_json"]
+                            if "partial_text" in block:
+                                partial_text = block.pop("partial_text")
+                                existing = block.get("input")
+                                block["input"] = (existing + partial_text) if isinstance(existing, str) else partial_text
+
+                elif event.type == "message_delta":
+                    delta = event.delta
+                    if hasattr(delta, "stop_reason") and delta.stop_reason:
+                        finish_reason = delta.stop_reason
+                    if hasattr(event, "usage") and event.usage:
+                        usage["output_tokens"] = event.usage.output_tokens
+
+        tool_calls = [
+            {"id": b["id"], "type": "tool_use", "name": b["name"], "input": b["input"]}
+            for b in content_blocks.values() if b.get("type") == "tool_use"
+        ] or None
+        yield {"content": None, "tool_calls": tool_calls, "usage": usage, "finish_reason": finish_reason, "reasoning": None}
+    except Exception as error:
+        yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
+
+
 async def anthropic_runmodel(
     configuration,
     apikey,

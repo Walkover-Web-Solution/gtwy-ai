@@ -32,7 +32,10 @@ class Grok(BaseService):
         self.customConfig["messages"] = messages
         self.customConfig = self.service_formatter(self.customConfig, service_name["grok"])
 
-        grok_response = await self.chats(self.customConfig, self.apikey, service_name["grok"])
+        if self.stream_mode:
+            grok_response = await self.stream(self.customConfig, self.apikey, service_name["grok"])
+        else:
+            grok_response = await self.chats(self.customConfig, self.apikey, service_name["grok"])
         model_response = grok_response.get("modelResponse", {})
 
         if not grok_response.get("success"):

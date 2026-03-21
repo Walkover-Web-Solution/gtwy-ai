@@ -67,7 +67,10 @@ class Anthropic(BaseService):
 
                 self.customConfig["tools"].append(web_search_tool)
 
-        antrophic_response = await self.chats(self.customConfig, self.apikey, service_name["anthropic"])
+        if self.stream_mode:
+            antrophic_response = await self.stream(self.customConfig, self.apikey, service_name["anthropic"])
+        else:
+            antrophic_response = await self.chats(self.customConfig, self.apikey, service_name["anthropic"])
         modelResponse = antrophic_response.get("modelResponse", {})
 
         if not antrophic_response.get("success"):

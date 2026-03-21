@@ -77,6 +77,7 @@ async def add_configuration_data_to_body(request: Request):
         body.update(primary_config)
         if body_wrapper_id is not None:
             body["wrapper_id"] = body_wrapper_id
+        body["stream"] = body.get("stream", False)
             
         body["bridge_configurations"] = bridge_configurations
         service = body.get("service")
