@@ -57,7 +57,6 @@ def setup_configuration(configuration, result, service):
             prompt_str = prompt.get("customPrompt")
             prompt_str, _ = Helper.replace_variables_in_prompt(prompt_str, prompt)
             db_configuration["prompt"] = prompt_str
-
     elif isinstance(prompt, dict):
         db_configuration["prompt"] = convert_prompt_to_string(prompt)
 
