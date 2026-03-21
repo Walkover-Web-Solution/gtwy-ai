@@ -82,7 +82,7 @@ uvloop>=0.19.0,<1.0.0
 watchfiles>=0.22.0,<1.0.0
 websockets>=13.0,<15.0
 gunicorn
-anthropic==0.72.0
+anthropic>=0.78.0
 groq==0.25.0
 redis>=5.0.8,<6.0.0
 aiohttp>=3.10.10,<4.0.0
@@ -103,3 +103,15 @@ tiktoken>=0.7.0
 pre-commit>=3.5.0
 ruff>=0.1.0
 commitizen>=3.29.0
+pyroscope-io==1.0.1
+opentelemetry-distro==0.37b0
+opentelemetry-sdk==1.16.0
+opentelemetry-exporter-otlp==1.16.0
+opentelemetry-instrumentation-sqlalchemy==0.37b0
+opentelemetry-instrumentation-redis==0.37b0
+opentelemetry-instrumentation-celery==0.37b0
+opentelemetry-instrumentation-requests==0.37b0
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-asgi
+opentelemetry-instrumentation-httpx
+notdiamond

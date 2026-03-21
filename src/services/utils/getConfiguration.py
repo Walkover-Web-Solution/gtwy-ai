@@ -5,7 +5,6 @@ from models.mongo_connection import db
 from src.services.utils.common_utils import updateVariablesWithTimeZone
 
 from .getConfiguration_utils import (
-    add_anthropic_json_schema,
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
@@ -55,6 +54,7 @@ async def _prepare_configuration_response(
     web_search_filters=None,
     orchestrator_flag=None,
     chatbot=False,
+    override_fields={}
 ):
     """Internal helper to build configuration response for a single bridge."""
 
@@ -99,8 +99,32 @@ async def _prepare_configuration_response(
     if folder_apikeys_dict:
         result["bridges"]["folder_apikeys"] = _normalize_apikeys(folder_apikeys_dict, "Folder API")
 
+    apikey_src = apikeys_dict or folder_apikeys_dict or {}
     apikey = setup_api_key(service, result, apikey, chatbot)
     apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
+    apikey_status = result.get('bridges', {}).get('apikey_status')
+
+    # Overriding fields from Body (if Given)
+    auto_model_select = override_fields.get("auto_model_select") or result.get("bridges", {}).get("auto_model_select")
+    chatbot_auto_answers = override_fields.get("chatbot_auto_answers") or result.get("bridges", {}).get("chatbot_auto_answers")
+    cache_on = override_fields.get("cache_on") or result.get("bridges", {}).get("cache_on")
+
+    service_apikeys = {}
+    merged_apikeys = {
+        **(result.get("bridges", {}).get("apikeys", {}) or {}),
+        **(result.get("bridges", {}).get("folder_apikeys", {}) or {}),
+    }
+
+    for service_name, encrypted_key in merged_apikeys.items():
+        if not encrypted_key:
+            continue
+        try:
+            service_apikeys[service_name] = Helper.decrypt(encrypted_key)
+        except Exception:
+            continue
+
+    if service and apikey:
+        service_apikeys[service] = apikey
 
     # Handle image type early return
     if configuration["type"] == "image":
@@ -129,21 +153,22 @@ async def _prepare_configuration_response(
 
     template_content = await ConfigurationService.get_template_by_id(template_id) if template_id else None
 
-    # Pre-tools will be set up later in chat_multiple_agents with agent-specific variables
-    pre_tools_name, pre_tools_args = None, None
-    # Store pre_tools_data for later processing
-    pre_tools_data_for_later = None
-    if bridge.get("pre_tools"):
-        pre_tools_list = result.get("bridges", {}).get("pre_tools_data") or []
-        api_data = pre_tools_list[0] if pre_tools_list else {}
-        api_data.pop("_id", None)
-        if api_data.get("bridge_ids"):
-            del api_data["bridge_ids"]
-        if api_data.get("folder_id"):
-            del api_data["folder_id"]
-        if api_data:
-            pre_tools_name = api_data.get("script_id")
-            pre_tools_data_for_later = api_data
+    # Pre-tools — build list for later processing in chat_multiple_agents
+    pre_tools_data_for_later = []
+    raw_pre_tools = bridge.get("pre_tools", [])
+
+    if raw_pre_tools:
+        for tool_entry in raw_pre_tools:
+            if not isinstance(tool_entry, dict):
+                continue
+            tool_type = tool_entry.get("type")
+            tool_config = tool_entry.get("config", {})
+            tool_args = tool_entry.get("args", {})
+            pre_tools_data_for_later.append({
+                "_type": tool_type,
+                "config": tool_config,
+                "args": tool_args,
+            })
 
     rag_data = bridge.get("doc_ids")
     gpt_memory_context = bridge.get("gpt_memory_context")
@@ -164,8 +189,6 @@ async def _prepare_configuration_response(
         built_in_tools or result.get("bridges", {}).get("built_in_tools"),
         gtwy_web_search_filters,
     )
-    add_anthropic_json_schema(service, configuration, tools)
-
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
 
@@ -178,11 +201,13 @@ async def _prepare_configuration_response(
 
     base_config = {
         "configuration": configuration,
-        "pre_tools": {"name": pre_tools_name, "args": pre_tools_args} if pre_tools_name else None,
-        "pre_tools_data": pre_tools_data_for_later,  # Store pre_tools_data for later processing
+        "pre_tools_data": pre_tools_data_for_later,
         "service": service,
         "apikey": apikey,
+        "auto_model_select": auto_model_select,
+        "service_apikeys": service_apikeys,
         "apikey_object_id": apikey_object_id,
+        "apikey_status": apikey_status,
         "RTLayer": RTLayer,
         "template": template_content.get("template") if template_content else None,
         "user_reference": result.get("bridges", {}).get("user_reference", ""),
@@ -207,8 +232,26 @@ async def _prepare_configuration_response(
         "folder_id": result.get("bridges", {}).get("folder_id"),
         "wrapper_id": result.get("bridges", {}).get("wrapper_id"),
         "web_search_filters": web_search_filters_value,
-        "chatbot_auto_answers": bridge_data.get("bridges", {}).get("chatbot_auto_answers"),
+        "chatbot_auto_answers": chatbot_auto_answers,
+        "cache_on": cache_on,
         "richui_templates": result.get("bridges", {}).get("richui_templates"),
+        "limit": {
+            "bridge": {
+                "limit": bridge_data.get("bridges", {}).get("bridge_limit"),
+                "limit_start_date": bridge_data.get("bridges", {}).get("bridge_limit_start_date"),
+                "limit_reset_period": bridge_data.get("bridges", {}).get("bridge_limit_reset_period"),
+            },
+            "folder": {
+                "limit": bridge_data.get("bridges", {}).get("folder_limit"),
+                "limit_start_date": bridge_data.get("bridges", {}).get("folder_limit_start_date"),
+                "limit_reset_period": bridge_data.get("bridges", {}).get("folder_limit_reset_period"),
+            },
+            "apikey": {
+                "limit": apikey_src.get(service,{}).get("apikey_limit"),
+                "limit_start_date": apikey_src.get(service,{}).get("apikey_limit_start_date"),
+                "limit_reset_period": apikey_src.get(service,{}).get("apikey_limit_reset_period"),
+            },
+        },
     }
 
     return None, base_config, result, resolved_bridge_id
@@ -311,6 +354,7 @@ async def getConfiguration(
     web_search_filters=None,
     orchestrator_flag=None,
     chatbot=False,
+    override_fields={}
 ):
     """
     Get configuration for a bridge with all necessary tools and settings.
@@ -332,6 +376,7 @@ async def getConfiguration(
         web_search_filters,
         orchestrator_flag,
         chatbot,
+        override_fields
     )
 
     if error:

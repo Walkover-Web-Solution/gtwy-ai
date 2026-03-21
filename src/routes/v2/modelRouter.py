@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config import Config
@@ -11,6 +11,8 @@ from src.services.commonServices.queueService.queueService import queue_obj
 
 from ...middlewares.getDataUsingBridgeId import add_configuration_data_to_body
 from ...middlewares.middleware import jwt_middleware
+from src.middlewares.openai_sdk_middleware import openai_sdk_middleware
+from src.services.utils.openai_sdk_utils import run_openai_chat_and_format
 
 router = APIRouter()
 
@@ -28,12 +30,16 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
     request.state.is_playground = False
     request.state.version = 2
     data_to_send = await make_request_data(request)
+
+    message_id = str(uuid.uuid1())
+    data_to_send["body"]["message_id"] = message_id
+    
     response_format = data_to_send.get("body", {}).get("configuration", {}).get("response_format", {})
     if response_format and response_format.get("type") != "default":
         try:
             # Publish the message to the queue
             await queue_obj.publish_message(data_to_send)
-            return {"success": True, "message": "Your response will be sent through configured means."}
+            return {"success": True, "message_id": message_id, "message": "Your response will be sent through configured means."}
         except Exception as e:
             # Log the error and return a meaningful error response
             logger.error(f"Failed to publish message: {str(e)}")
@@ -50,6 +56,9 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         result = await chat_multiple_agents(data_to_send)
         return result
 
+@router.post('/openai/responses', dependencies=[Depends(openai_sdk_middleware)])
+async def openai_sdk_responses(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+    return await run_openai_chat_and_format(request, db_config, chat_completion)
 
 @router.post("/playground/chat/completion/{bridge_id}", dependencies=[Depends(auth_and_rate_limit)])
 async def playground_chat_completion_bridge(
@@ -58,6 +67,10 @@ async def playground_chat_completion_bridge(
     request.state.is_playground = True
     request.state.version = 2
     data_to_send = await make_request_data(request)
+
+    message_id = str(uuid.uuid1())
+    data_to_send["body"]["message_id"] = message_id
+
     org_id = data_to_send["state"]["profile"]["org"]["id"]
     bridge_id = data_to_send.get("body", {}).get("bridge_id")
     version_id = data_to_send.get("body", {}).get("version_id")
@@ -72,7 +85,7 @@ async def playground_chat_completion_bridge(
             # Publish the message to the queue
             data_to_send["body"]["bridge_configurations"]["playground_response_format"] = response_format
             await queue_obj.publish_message(data_to_send)
-            return {"success": True, "message": "Your response will be sent through configured means."}
+            return {"success": True, "message_id": message_id, "message": "Your response will be sent through configured means."}
         except Exception as e:
             # Log the error and return a meaningful error response
             logger.error(f"Failed to publish message: {str(e)}")

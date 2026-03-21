@@ -38,17 +38,18 @@ from src.services.utils.common_utils import (
     restructure_json_schema,
     send_error,
     setup_agent_pre_tools,
-    update_cost_and_last_used_in_background,
     update_usage_metrics,
-    process_batch_background_tasks
+    process_batch_background_tasks,
+    update_cost_usage_and_apikey_status_in_background,
 )
 from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
-
+from src.services.auto_router_service import apply_auto_model_selection
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
 from ..utils.send_error_webhook import send_error_to_webhook
 from .baseService.utils import sendResponse
+from .response_caching_service import handle_response_caching
 
 app = FastAPI()
 configurationModel = db["configurations"]
@@ -125,15 +126,21 @@ async def chat_multiple_agents(request_body):
 
 
 @handle_exceptions
-async def chat(request_body):
+async def chat(request_body): 
     result = {}
     class_obj = {}
+    first_execution_error_code = None
+    completion_success = True
+    original_service = None
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-
+        
+        # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
+        original_service = parsed_data["service"]
+        
         # Setup pre_tools for the current agent with its own variables
         setup_agent_pre_tools(parsed_data, bridge_configurations)
         await apply_prompt_wrapper(parsed_data)
@@ -157,6 +164,10 @@ async def chat(request_body):
         parsed_data["variables"] = add_user_in_variables(parsed_data["variables"], parsed_data["user"])
         # Step 2: Initialize Timer
         timer = initialize_timer(parsed_data["state"])
+
+        # Check Auto Model Selection
+        if parsed_data.get("auto_model_select", False):
+            await apply_auto_model_selection(parsed_data, timer)
 
         # Step 3: Load Model Configuration
         model_config, custom_config, model_output_config = await load_model_configuration(
@@ -216,7 +227,7 @@ async def chat(request_body):
             bridge_configurations,
         )
         # Step 10: json_schema service conversion
-        if "response_type" in custom_config and custom_config["response_type"].get("type") == "json_schema":
+        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
             custom_config["response_type"] = restructure_json_schema(
                 custom_config["response_type"], parsed_data["service"]
             )
@@ -226,7 +237,7 @@ async def chat(request_body):
 
         original_exception = None
         try:
-            result = await class_obj.execute()
+            result = await handle_response_caching(parsed_data=parsed_data,class_obj=class_obj)
 
             # Check if agent transfer is needed
             transfer_agent_config = result.get("transfer_agent_config")
@@ -277,6 +288,7 @@ async def chat(request_body):
             # Handle exceptions during execution
             execution_failed = True
             original_error = str(execution_exception)
+            first_execution_error_code = getattr(execution_exception, "status_code", None)
             original_exception = execution_exception
             logger.error(
                 f"Initial execution failed with {parsed_data['service']}/{parsed_data['model']}: {original_error}"
@@ -289,7 +301,6 @@ async def chat(request_body):
                 # Store original configuration
                 fallback_config = parsed_data["fall_back"]
                 original_model = parsed_data["model"]
-                original_service = parsed_data["service"]
 
                 # Update parsed_data with fallback configuration
                 parsed_data["model"] = fallback_config.get("model", parsed_data["model"])
@@ -510,7 +521,7 @@ async def chat(request_body):
                 result["response"]["testcase_result"] = testcase_result
             else:
                 await process_background_tasks_for_playground(result, parsed_data)
-        await update_cost_and_last_used_in_background(parsed_data)
+        
 
         # Save agent bridge_id to Redis for 3 days (259200 seconds)
         thread_id = parsed_data.get("thread_id")
@@ -576,7 +587,10 @@ async def chat(request_body):
                 success=False,
                 variables=parsed_data.get("variables", {}),
             )
+        completion_success = False
         raise ValueError(error_object) from None
+    finally:
+        await update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, first_execution_error_code, completion_success)
 
 
 @handle_exceptions

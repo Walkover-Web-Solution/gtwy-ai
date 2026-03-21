@@ -1,12 +1,10 @@
-import traceback
-
-from openai import AsyncOpenAI
-
 # from src.services.utils.unified_token_validator import validate_gemini_token_limit
 from globals import logger
+from src.exceptions import ApiCallError
 
 from ..api_executor import execute_api_call
-
+from google import genai
+import traceback
 
 async def gemini_modelrun(
     configuration,
@@ -26,16 +24,16 @@ async def gemini_modelrun(
         # Validate token count before making API call
         # model_name = configuration.get('model')
         # validate_gemini_token_limit(configuration, model_name, service, apiKey)
-
-        gemini = AsyncOpenAI(api_key=apiKey, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+        
+        client = genai.Client(api_key=apiKey) 
 
         # Define the API call function
         async def api_call(config):
             try:
-                chat_completion = await gemini.chat.completions.create(**config)
-                return {"success": True, "response": chat_completion.to_dict()}
+                chat_completion = await client.aio.models.generate_content(**config)
+                return {'success': True, 'response': chat_completion.model_dump()}
             except Exception as error:
-                return {"success": False, "error": str(error), "status_code": getattr(error, "status_code", None)}
+                return {"success": False, "error": str(error), "status_code": getattr(error, "code", None)}
 
         # Execute API call with monitoring
         return await execute_api_call(
@@ -61,6 +59,4 @@ async def gemini_modelrun(
                 "time_taken": timer.stop("API chat completion"),
             }
         )
-        logger.error("runModel error=>", error)
-        traceback.print_exc()
-        return {"success": False, "error": str(error)}
+        raise ApiCallError(str(error), status_code=getattr(error, "status_code", None), service=service) from error

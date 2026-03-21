@@ -10,6 +10,7 @@ from src.services.proxy.Proxyservice import (
     validate_proxy_pauthkey,
 )
 from src.services.utils.time import Timer
+from src.services.token_service import is_token_blacklisted
 from globals import *
 
 async def make_data_if_proxy_token_given(req):
@@ -67,35 +68,37 @@ async def make_data_if_proxy_token_given(req):
 
 
 async def jwt_middleware(request: Request):
-        try:
-            timer_obj = Timer()
-            timer_obj.start()
-            request.state.timer = timer_obj.getTime()
-            # request.state.timer = timer
-            check_token = False
-            if request.headers.get('Authorization') :
-                token = request.headers.get('Authorization')
-                if not token:
-                    raise HTTPException(status_code=498, detail="invalid token")
-                check_token = jwt.decode(token, Config.SecretKey, algorithms=["HS256"])
-            elif request.headers.get('proxy_auth_token') or request.headers.get('pauthkey'):
-                check_token = await make_data_if_proxy_token_given(request)
+    try:
+        timer_obj = Timer()
+        timer_obj.start()
+        request.state.timer = timer_obj.getTime()
+        check_token = False
+        
+        if request.headers.get("Authorization"):
+            token = request.headers.get("Authorization")
+            if not token:
+                raise HTTPException(status_code=498, detail="invalid token")
+            if await is_token_blacklisted(token):
+                raise HTTPException(status_code=401, detail="token revoked")
+            check_token = jwt.decode(token, Config.SecretKey, algorithms=["HS256"])
+        elif request.headers.get("proxy_auth_token") or request.headers.get("pauthkey"):
+            check_token = await make_data_if_proxy_token_given(request)
 
-            if check_token:
-                check_token['org']['id'] = str(check_token['org']['id'])
-                request.state.profile = check_token
-                request.state.org_id = str(check_token.get('org', {}).get('id'))
-                meta = check_token['user'].get('meta', {})
-                if isinstance(meta, dict):
-                    request.state.embed = meta.get('type', False) == 'embed' or False
-                else:
-                    request.state.embed = False
-                request.state.folder_id = check_token.get('extraDetails', {}).get('folder_id', None)
-                request.state.user_id = str(check_token['user'].get('id'))
-                return 
-            
-            raise HTTPException(status_code=404, detail="unauthorized user")        
-        except Exception as err:
+        if check_token:
+            check_token['org']['id'] = str(check_token['org']['id'])
+            request.state.profile = check_token
+            request.state.org_id = str(check_token.get('org', {}).get('id'))
+            meta = check_token['user'].get('meta', {})
+            if isinstance(meta, dict):
+                request.state.embed = meta.get('type', False) == 'embed' or False
+            else:
+                request.state.embed = False
+            request.state.folder_id = check_token.get('extraDetails', {}).get('folder_id', None)
+            request.state.user_id = str(check_token['user'].get('id'))
+            return 
+        
+        raise HTTPException(status_code=404, detail="unauthorized user")        
+    except Exception as err:
             traceback.print_exc()
             logger.error(f"middleware error => {str(err)}")
             raise HTTPException(status_code=401, detail="unauthorized user")

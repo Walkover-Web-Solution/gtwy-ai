@@ -1,11 +1,34 @@
 import json
+import uuid
 
 from config import Config
 from src.configs.constant import service_name
 from src.services.utils.apiservice import fetch
 
 
-async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False):
+async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False, isCache=False):
+    if isCache:
+        return  {
+            "data": {
+            "id": f"cache_{uuid.uuid4().hex}",
+            "content": response,
+            "model": None,
+            "role": "assistant",
+            "tools_data": {},
+            "images": None,
+                "annotations": None,
+                "fallback": False,
+                "firstAttemptError": "",
+                },
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost": 0,
+            },
+            "is_cached": True,
+        }
+
     tools_data = tools
     if isinstance(tools_data, dict):
         for key, value in tools_data.items():
@@ -14,29 +37,7 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                     tools_data[key] = json.loads(value)
                 except json.JSONDecodeError:
                     pass
-    if (service == "openai" or service == "groq" or service == "mistral") and isBatch:
-        # Batch responses for OpenAI-compatible services (OpenAI, Groq, Mistral)
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
-                "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens"),
-            },
-        }
-    elif service == "gemini" and isBatch:
+    if service == "gemini" and isBatch:
         # Gemini batch responses have a different structure
         candidates = response.get("candidates", [{}])
         content_parts = candidates[0].get("content", {}).get("parts", [{}]) if candidates else [{}]
@@ -150,29 +151,35 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 "input_tokens": response.get("usage", {}).get("input_tokens", None),
                 "output_tokens": response.get("usage", {}).get("output_tokens", None),
                 "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": response.get("usage", {}).get("input_tokens_details", {}).get("cached_tokens", None),
-            },
-        }
-    elif service == service_name["gemini"] and (type != "image" and type != "embedding" and type != "video"):
+                "cached_tokens": response.get("usage", {}).get("input_tokens_details", {}).get('cached_tokens', None)
+            }
+        }                    
+    elif service == service_name['gemini'] and (type !='image' and type != 'embedding' and type != 'video'):
+        candidates = response.get('candidates', [{}])
+        content = candidates[0].get('content', {}) if candidates else {}
+        parts = content.get('parts', [])
         return {
-            "data": {
-                "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
-                "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
+            "data" : {
+                "id" : response.get("response_id", None),
+                "content" : parts[0].get('text') if parts else None,
+                "model" : response.get("model_version", None),
+                "role" : "assistant",
                 "tools_data": tools_data or {},
-                "images": images,
-                "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
+                "images" : images,
+                "annotations" : None,
+                "fallback" : response.get('fallback') or False,
+                "firstAttemptError" : response.get('firstAttemptError') or '',
+                "finish_reason": finish_reason_mapping(candidates[0].get("finish_reason").value.lower() if candidates and candidates[0].get("finish_reason") else "")
             },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens"),
-            },
+            "usage" : {
+                "input_tokens" : response.get("usage_metadata", {}).get("prompt_token_count", None),
+                "output_tokens" : response.get("usage_metadata", {}).get("candidates_token_count", None),
+                "total_tokens" : response.get("usage_metadata", {}).get("total_token_count", None),
+                "thoughts_token": response.get("usage_metadata", {}).get("thoughts_token_count", None),
+                "input_token_details": response.get("usage_metadata", {}).get("prompt_tokens_details", None),
+                "cached_tokens": response.get("usage_metadata", {}).get("cached_content_token_count", None),
+                "cache_tokens_details": response.get("usage_metadata", {}).get("cache_tokens_details", None)
+            }
         }
     elif service == service_name["openai"] and type == "embedding":
         return {"data": {"embedding": response.get("data")[0].get("embedding")}}
@@ -387,20 +394,6 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
         }
 
 
-async def validateResponse(alert_flag, configration, bridgeId, message_id, org_id):
-    if alert_flag:
-        await send_alert(
-            data={
-                "response": "\n..\n",
-                "configration": configration,
-                "message_id": message_id,
-                "bridge_id": bridgeId,
-                "org_id": org_id,
-                "message": "\n issue occurs",
-            }
-        )
-
-
 async def send_alert(data):
     dataTosend = {**data, "ENVIROMENT": Config.ENVIROMENT} if Config.ENVIROMENT else data
     await fetch("https://flow.sokt.io/func/scriYP8m551q", method="POST", json_body=dataTosend)
@@ -491,10 +484,10 @@ async def process_batch_results(results, service, batch_id, batch_variables, mes
             message_id = result_item.get("custom_id", None)
             result_data = result_item.get("response", {})
 
-        # Check for errors
+        # Check for errors (use truthy check: API often sends "error": null on success)
         has_error = False
         if service in {"openai", "groq"}:
-            has_error = status_code >= 400 or "error" in result_data
+            has_error = status_code >= 400 or bool(result_data.get("error"))
         elif service == "anthropic":
             has_error = result_data.get("type") == "error"
         else:

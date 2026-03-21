@@ -3,8 +3,10 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
-import src.db_services.ConfigurationServices as ConfigurationService
+from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
+from src.controllers.rag_controller import get_text_from_vectorsQuery
+from src.services.utils.ai_call_util import call_ai_middleware
+from src.configs.constant import bridge_ids
 from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger, try_catch
 from src.configs.model_configuration import model_config_document
@@ -28,50 +30,58 @@ from .helper import Helper
 
 UTC = timezone.utc
 
+from src.services.utils.rich_text_support import process_chatbot_response
+from src.db_services.orchestrator_history_service import orchestrator_collector
+from src.services.utils.api_key_status_helper import mark_apikey_status_from_response
 
 def setup_agent_pre_tools(parsed_data, bridge_configurations):
     """
     Setup pre_tools for the current agent with its own variables.
-    This function populates pre_tools args based on the agent's specific variables.
-
-    Args:
-        parsed_data: The parsed request data containing bridge_id, variables, and pre_tools
-        bridge_configurations: Dictionary of all agent configurations
+    Populates resolved args for each pre-tool from agent variables.
     """
     current_bridge_id = parsed_data.get("bridge_id")
     if not current_bridge_id or not bridge_configurations:
         return
 
     current_config = bridge_configurations.get(current_bridge_id, {})
-    pre_tools_data = current_config.get("pre_tools_data")
+    pre_tools_list = current_config.get("pre_tools_data") or []
     agent_variables = parsed_data.get("variables", {})
+    if not pre_tools_list:
+        return
+    resolved_pre_tools = []
+    for pre_tool in pre_tools_list:
+        tool_type = pre_tool.get("_type")
+        tool_config = pre_tool.get("config", {})
+        tool_args_mapping = pre_tool.get("args", {})  # param -> agent_variable_name
+        resolved_args = dict(tool_config)
 
-    if pre_tools_data and parsed_data.get("pre_tools"):
-        # Get required params from pre_tools_data
-        required_params = pre_tools_data.get("required_params", [])
+        for param, var_name in tool_args_mapping.items():
+            if var_name in agent_variables:
+                resolved_args[param] = agent_variables[var_name]
+            elif tool_type != "custom_function":
+                resolved_args[param] = var_name
+        if tool_type == "custom_function":
+            function_data = pre_tool.get("function_data", {})
+            required_params = tool_config.get("required_params", [])
+            for param in required_params:
+                if param not in resolved_args:
+                    if param in agent_variables:
+                        resolved_args[param] = agent_variables[param]
+            resolved_pre_tools.append({
+                "type": "custom_function",
+                "name":  tool_config.get("script_id"),
+                "args": resolved_args,
+            })
+        else:
+            resolved_pre_tools.append({
+                "type": tool_type,
+                "args": resolved_args,
+                "config": tool_config,
+                
+                
+            })
 
-        # Get variables_path mapping for the current agent
-        script_id = pre_tools_data.get("script_id")
-        variables_path = current_config.get("variables_path", {}).get(script_id, {}) if script_id else {}
-
-        # Build args from agent's own variables
-        args = {}
-        for param in required_params:
-            # Check if there's a mapping in variables_path for this param
-            if variables_path and param in variables_path:
-                # Get the mapped variable name
-                mapped_variable = variables_path[param]
-                # Use the mapped variable to get value from agent_variables
-                if mapped_variable in agent_variables:
-                    args[param] = agent_variables[mapped_variable]
-            elif param in agent_variables:
-                # If no mapping exists, use param directly
-                args[param] = agent_variables[param]
-
-        # Update the pre_tools args with agent-specific variables
-        parsed_data["pre_tools"]["args"] = args
-        logger.info(f"Set up pre_tools for agent {current_bridge_id} with args: {args}")
-
+    parsed_data["pre_tools"] = resolved_pre_tools
 
 async def handle_agent_transfer(
     result, request_body, bridge_configurations, chat_function, current_bridge_id=None, transfer_request_id=None
@@ -138,15 +148,18 @@ def parse_request_body(request_body):
         "sub_thread_id": body.get("sub_thread_id") or body.get("thread_id"),
         "org_id": state.get("profile", {}).get("org", {}).get("id", "") or body.get("org_id"),
         "user": body.get("user"),
+        "original_user": body.get("user"),
         "tools": body.get("configuration", {}).get("tools"),
         "service": body.get("service"),
         "wrapper_id": body.get("wrapper_id"),
         "variables": body.get("variables") or {},
+        "service_apikeys": body.get("service_apikeys") or {},
         "bridgeType": body.get("chatbot"),
         "template": body.get("template"),
         "response_format": body.get("configuration", {}).get("response_format"),
         "response_type": body.get("configuration", {}).get("response_type"),
         "model": body.get("configuration", {}).get("model"),
+        "auto_model_select": body.get("auto_model_select", False),
         "is_playground": state.get("is_playground") or body.get("is_playground") or False,
         "bridge": body.get("bridge"),
         "pre_tools": body.get("pre_tools"),
@@ -158,7 +171,7 @@ def parse_request_body(request_body):
         "variables_path": body.get("variables_path") or {},
         "tool_id_and_name_mapping": body.get("tool_id_and_name_mapping"),
         "suggest": body.get("suggest", False),
-        "message_id": str(uuid.uuid1()),
+        "message_id": body.get("message_id"),
         "reasoning_model": body.get("configuration", {}).get("model") in {"o1-preview", "o1-mini"},
         "gpt_memory": body.get("gpt_memory"),
         "version_id": body.get("version_id"),
@@ -166,6 +179,7 @@ def parse_request_body(request_body):
         "usage": {},
         "type": body.get("configuration", {}).get("type"),
         "apikey_object_id": body.get("apikey_object_id"),
+        "apikey_status": body.get('apikey_status'),
         "audios": [
             url.get("url")
             for url in body.get("user_urls", [])
@@ -205,8 +219,10 @@ def parse_request_body(request_body):
         "orchestrator_flag": body.get("orchestrator_flag"),
         "batch_variables": body.get("batch_variables"),
         "chatbot_auto_answers": body.get("chatbot_auto_answers"),
+        "cache_on": body.get("cache_on"),
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
+        "limit": body.get("limit"),
     }
 
 
@@ -319,26 +335,83 @@ async def handle_fine_tune_model(parsed_data, custom_config):
         custom_config["model"] = parsed_data["fine_tune_model"]
 
 
-async def handle_pre_tools(parsed_data,custom_config):
-    if parsed_data["pre_tools"]:
-        if parsed_data["pre_tools"].get("args") is None:
-            parsed_data["pre_tools"]["args"] = {}
-        parsed_data["pre_tools"]["args"]["user"] = parsed_data["user"]
-        parsed_data["pre_tools"]["args"]["_response_type"] = parsed_data["configuration"]["response_type"]
-        pre_function_response = await axios_work(
-            parsed_data["pre_tools"].get("args", {}),
-            {"url": f"https://flow.sokt.io/func/{parsed_data['pre_tools'].get('name')}"},
-        )
-        if pre_function_response.get("status") == 0:
-            parsed_data["variables"]["pre_function"] = (
-                f"Error while calling prefunction. Error message: {pre_function_response.get('response')}"
-            )
-        else:
-            parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
-            response_data = pre_function_response.get("response", {})
-            
-            Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
+async def handle_pre_tools(parsed_data, custom_config):
+    pre_tools = parsed_data.get("pre_tools") or []
+    if not pre_tools:
+        return
 
+    for tool in pre_tools:
+        tool_type = tool.get("type")
+        args = dict(tool.get("args", {}))
+        args["user"] = parsed_data["user"]
+        args["_response_type"] = parsed_data["configuration"]["response_type"]
+
+        if tool_type == "custom_function":
+            pre_function_response = await axios_work(
+                args,
+                {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
+            )
+            if pre_function_response.get("status") == 0:
+                parsed_data["variables"]["pre_function"] = (
+                    f"Error while calling prefunction. Error message: {pre_function_response.get('response')}"
+                )
+            else:
+                parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
+                response_data = pre_function_response.get("response", {})
+                Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
+        
+        elif tool_type == "query_refiner":
+            prompt = args.get("prompt", "")
+            user_query = parsed_data["user"]
+            variables = {**parsed_data.get("variables", {})}
+            if prompt:
+                variables["prompt"] = prompt
+            try:
+                optimised_query = await call_ai_middleware(
+                    user=user_query,
+                    bridge_id=bridge_ids["query_refiner"],
+                    variables=variables,
+                    response_type="text",
+                )
+                optimised_query = optimised_query or user_query
+            except Exception as e:
+                optimised_query = user_query
+         
+            parsed_data["user"] = optimised_query
+            
+        elif tool_type == "rag_knowledgebase":
+            resource_id = args.get("resource_id")
+            collection_id = args.get("collection_id")
+            owner_id = parsed_data.get("owner_id")
+            resource_to_collection_mapping = {resource_id: collection_id} if resource_id and collection_id else {}
+            if not resource_id or not collection_id:
+                parsed_data["variables"]["rag_pre_result"] = ""
+                logger.warning(f"rag_knowledgebase pre-tool missing resource_id or collection_id for bridge {parsed_data.get('bridge_id')}")
+                continue
+            rag_response = await get_text_from_vectorsQuery(
+                {
+                    "resource_id": resource_id,
+                    "query": parsed_data["user"],
+                    "top_k": args.get("top_k", 3),
+                    "minScore": args.get("minScore", 0.1),
+                },
+                Flag=True,
+                owner_id=owner_id,
+                resource_to_collection_mapping=resource_to_collection_mapping,
+            )
+            if rag_response.get("status") == 1:
+                parsed_data["variables"]["rag_pre_result"] = rag_response.get("response")
+            else:
+                parsed_data["variables"]["rag_pre_result"] = f"Error: {rag_response.get('response', 'unknown error')}"
+        
+        elif tool_type == "gtwy_web_search":
+            web_response = await call_firecrawl_scrape(args)
+            if web_response.get("status") == 1:
+                parsed_data["variables"]["web_search_pre_result"] = web_response.get("response")
+            else:
+                response = web_response.get('response')
+                error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
+                parsed_data["variables"]["web_search_pre_result"] = error_msg
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
     sub_thread_id = parsed_data["sub_thread_id"]
@@ -499,7 +572,7 @@ def build_service_params(
         "apikey": parsed_data["apikey"],
         "variables": parsed_data["variables"],
         "user": parsed_data["user"],
-        "tools": parsed_data["tools"],
+        "original_user": parsed_data["original_user"],
         "org_id": parsed_data["org_id"],
         "bridge_id": parsed_data["bridge_id"],
         "bridge": parsed_data["bridge"],
@@ -511,7 +584,7 @@ def build_service_params(
         "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data["response_format"],
-        "execution_time_logs": [],
+        "execution_time_logs": parsed_data.get("execution_time_logs", []),
         "function_time_logs": [],
         "timer": timer,
         "variables_path": parsed_data["variables_path"],
@@ -538,6 +611,7 @@ def build_service_params(
         "folder_id": parsed_data.get("folder_id"),
         "bridge_configurations": bridge_configurations,
         "owner_id": parsed_data.get("owner_id"),
+        "limit": parsed_data.get("limit"),
     }
 
 
@@ -865,6 +939,20 @@ def restructure_json_schema(response_type, service):
             for key, value in schema.items():
                 response_type[key] = value
             return response_type
+        case "anthropic":
+            # ServiceKeys renames response_type -> output_config; value must be API output_config payload (no extra nesting)
+            json_schema = response_type.get("json_schema") or {}
+            if not isinstance(json_schema, dict):
+                return response_type
+            schema = json_schema.get("schema") if "schema" in json_schema else json_schema
+            if not schema or not isinstance(schema, dict):
+                return response_type
+            return {
+                "format": {
+                    "type": "json_schema",
+                    "schema": schema,
+                }
+            }
         case _:
             return response_type
 
@@ -1139,10 +1227,7 @@ async def update_cost_and_last_used(parsed_data):
         logger.error(f"Error updating cost and last used: {str(e)}")
 
 
-async def update_cost_and_last_used_in_background(parsed_data):
-    """Kick off the async cost cache update using the data available on parsed_data."""
-    if not isinstance(parsed_data, dict):
-        logger.warning("Skipping background cost update due to invalid parsed data.")
-        return
-
-    asyncio.create_task(update_cost_and_last_used(parsed_data))
+async def update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, code, completion_success):
+    if completion_success:
+        asyncio.create_task(update_cost_and_last_used(parsed_data))
+    asyncio.create_task(mark_apikey_status_from_response(original_service, parsed_data, code))

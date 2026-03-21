@@ -38,6 +38,7 @@ async def add_configuration_data_to_body(request: Request):
             web_search_filters=body.get("web_search_filters"),
             orchestrator_flag=body.get("orchestrator_flag"),
             chatbot=body.get("chatbot", False),
+            override_fields=body
         )
 
         # Check if getConfiguration returned an error response
@@ -61,6 +62,17 @@ async def add_configuration_data_to_body(request: Request):
             primary_config["images"] = []
         if not isinstance(primary_config.get("files"), list) and not isinstance(body.get("files"), list):
             primary_config["files"] = []
+
+        # When request comes via modelRouter (jwt_middleware only), profile may not have owner_id.
+        # Derive it from bridge config using same logic as interface middleware.
+        if not request.state.profile.get("owner_id"):
+            bridge_user_id = primary_config.get("user_id")
+            bridge_folder_id = primary_config.get("folder_id")
+            if org_id:
+                request.state.profile["owner_id"] = org_id
+                if bridge_folder_id and bridge_user_id:
+                    request.state.profile["owner_id"] = f"{org_id}_{bridge_folder_id}_{bridge_user_id}"
+
         body_wrapper_id = body.get("wrapper_id")
         body.update(primary_config)
         if body_wrapper_id is not None:

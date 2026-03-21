@@ -1,9 +1,11 @@
 import copy
 import traceback
-
 from src.configs.constant import service_name
-
+from src.services.commonServices.baseService.utils import serialize_config
 from ..utils.ai_middleware_format import send_alert
+from src.exceptions import ApiCallError
+
+
 
 
 async def execute_api_call(
@@ -51,7 +53,7 @@ async def execute_api_call(
                     data={
                         "org_name": org_name,
                         "bridge_name": name,
-                        "configuration": configuration,
+                        "configuration": serialize_config(configuration),
                         "message_id": message_id,
                         "bridge_id": bridge_id,
                         "org_id": org_id,
@@ -69,9 +71,7 @@ async def execute_api_call(
                 "time_taken": timer.stop("API chat completion"),
             }
         )
-        print("execute_api_call error=>", e)
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+        raise ApiCallError(str(e), status_code=getattr(e, "status_code", None), service=service) from e
 
 
 async def check_space_issue(response, service=None):
@@ -82,10 +82,13 @@ async def check_space_issue(response, service=None):
         or service == service_name["grok"]
         or service == service_name["open_router"]
         or service == service_name["mistral"]
-        or service == service_name["gemini"]
         or service == service_name["ai_ml"]
     ):
         content = response.get("choices", [{}])[0].get("message", {}).get("content", None)
+    
+    elif service == service_name["gemini"]:
+        content = response["candidates"][0]["content"]["parts"][0]["text"]
+
     elif service == service_name["anthropic"]:
         content = response.get("content", [{}])
         if content:
@@ -127,6 +130,8 @@ async def check_space_issue(response, service=None):
             or service == service_name["ai_ml"]
         ):
             response["choices"][0]["message"]["content"] = text
+        elif service == service_name["gemini"]:
+            response["candidates"][0]["content"]["parts"][0]["text"] = text
         elif service == service_name["anthropic"]:
             response["content"][0]["text"] = text
         elif service == service_name["openai"]:

@@ -62,7 +62,6 @@ async def check_batch_status():
 
                     if is_completed:
                         # Batch has reached a terminal state (completed, failed, expired, cancelled)
-
                         if results:
                             # Process and format the results (could be success or error results)
                             formatted_results = await process_batch_results(

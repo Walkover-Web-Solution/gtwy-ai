@@ -1,3 +1,13 @@
+
+
+api_key_status = {
+    "working": "working",
+    "invalid": "invalid",
+    "unauthorized": "unauthorized",
+    "limited": "exhausted",
+    "service_down": "service_down"
+}
+
 service_name = {
     "openai": "openai",
     "gemini": "gemini",
@@ -27,6 +37,8 @@ bridge_ids = {
     "generate_description": "6800d48f7dfc8ddcc495f918",
     "improve_prompt_optimizer": "68e4ac02739a8b89ba27b22a",
     "generate_test_cases": "68e8d1fbf8c9ba2043cf7afd",
+    "canonicalizer": "6973200cf60dd5bf64eeb325", 
+    "query_refiner": "69ae598263c3cc88af31170b",
 }
 
 __all__ = ["service_name", "bridge_ids"]

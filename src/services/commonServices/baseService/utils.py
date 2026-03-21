@@ -9,12 +9,14 @@ from fastapi import Request
 from globals import logger, traceback
 from src.configs.constant import inbuild_tools, redis_keys, service_name
 from src.controllers.rag_controller import get_text_from_vectorsQuery
-from src.db_services.ConfigurationServices import get_bridges_without_tools, update_bridge
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, store_in_cache
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
-
+from globals import *
+from src.services.cache_service import store_in_cache, find_in_cache, client, REDIS_PREFIX
+from src.configs.constant import redis_keys,inbuild_tools
+from google.genai import types
 
 def clean_json(data):
     """Recursively remove keys with empty string, empty list, or empty dictionary."""
@@ -27,18 +29,20 @@ def clean_json(data):
 
 
 def validate_tool_call(service, response):
-    match service:  # TODO: Fix validation process.
-        case "openai_completion" | "groq" | "grok" | "open_router" | "mistral" | "gemini" | "ai_ml":
-            tool_calls = response.get("choices", [])[0].get("message", {}).get("tool_calls", [])
+    match service: # TODO: Fix validation process.
+        case  'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'ai_ml':
+            tool_calls = response.get('choices', [])[0].get('message', {}).get("tool_calls", [])
             return len(tool_calls) > 0 if tool_calls is not None else False
         case "openai":
             return any(output.get("type") == "function_call" for output in response.get("output", []))
         case "anthropic":
-            for item in response.get("content", []):
-                if item.get("name") == "JSON_Schema_Response_Format":
-                    response["content"][0]["text"] = json.dumps(item.get("input"))
-                    return False
-            return response.get("stop_reason") == "tool_use"
+            return response.get('stop_reason') == 'tool_use'
+        case 'gemini':
+            candidates = response.get('candidates', [])
+            if not candidates:
+                return False
+            parts = candidates[0].get('content', {}).get('parts', [])
+            return any(isinstance(part, dict) and part.get('function_call') is not None for part in parts)
         case _:
             return False
 
@@ -129,7 +133,6 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
         service == service_name["openai_completion"]
         or service == service_name["open_router"]
         or service == service_name["mistral"]
-        or service == service_name["gemini"]
         or service == service_name["ai_ml"]
     ):
         data_to_send = [
@@ -158,8 +161,27 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
         return data_to_send
-    elif service == service_name["openai"]:
-        data_to_send = [
+    
+    elif service == service_name['gemini']:
+        gemini_tools = []
+        function_declarations = [
+            {
+                "name": transformed_tool['name'],
+                "description": transformed_tool['description'],
+                "parameters": {
+                    "type": "object",
+                    "properties": clean_json(transform_required_params_to_required(transformed_tool.get('properties', {}), variables=variables, variables_path=variables_path, function_name=transformed_tool['name'], parentValue={'required': transformed_tool.get('required', [])})),
+                    "required": transformed_tool.get('required'),
+                }
+            } for transformed_tool in configuration.get('tools', [])
+        ]
+        if function_declarations:
+            from google.genai import types
+            gemini_tools.append(types.Tool(function_declarations=function_declarations)) 
+        
+        return gemini_tools 
+    elif service == service_name['openai']:
+        data_to_send =  [
             {
                 "type": "function",
                 "name": transformed_tool["name"],
@@ -403,9 +425,10 @@ def make_code_mapping_by_service(responses, service):
     codes_mapping = {}
     function_list = []
     match service:
-        case "openai_completion" | "groq" | "grok" | "open_router" | "mistral" | "gemini" | "ai_ml":
-            for tool_call in responses["choices"][0]["message"]["tool_calls"]:
-                name = tool_call["function"]["name"]
+        case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'ai_ml':
+
+            for tool_call in responses['choices'][0]['message']['tool_calls']:
+                name = tool_call['function']['name']
                 error = False
                 try:
                     args = json.loads(tool_call["function"]["arguments"])
@@ -414,9 +437,24 @@ def make_code_mapping_by_service(responses, service):
                     error = True
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
-        case "openai":
-            for tool_call in [output for output in responses["output"] if output.get("type") == "function_call"]:
-                name = tool_call["name"]
+        
+        case 'gemini':
+            for part in responses['candidates'][0]["content"]["parts"]:
+                if part['function_call']:
+                    name = part["function_call"]["name"]
+                    args = part['function_call']['args']
+                        
+                    codes_mapping[part['function_call']['id']] = {
+                        'name': name,
+                        'args': args,
+                        "error": False
+                    }
+                    function_list.append(name)
+            
+        case 'openai':
+
+            for tool_call in [output for output in responses['output'] if output.get('type') == 'function_call']:
+                name = tool_call['name']
                 error = False
                 try:
                     args = json.loads(tool_call["arguments"])
@@ -529,12 +567,15 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
         "check_chatbot_suggestions": {
             "bridgeType": parsed_data.get("bridgeType"),
         },
-        "save_to_hippocampus": {
+        "save_agent_memory": {
             "user_message": user_message,
             "assistant_message": assistant_message,
             "bridge_id": parsed_data.get("bridge_id"),
             "bridge_name": parsed_data.get("name", ""),
-            "chatbot_auto_answers": parsed_data.get("chatbot_auto_answers"),
+            "system_prompt": parsed_data.get("configuration", {}).get("prompt", ""),
+            "chatbot_auto_answers": parsed_data.get("chatbot_auto_answers", False),
+            "is_cache_hit": parsed_data.get("is_cache_hit", False),
+            "resource_id": parsed_data.get("cache_hit_resource_id", None)
         },
         "type": parsed_data.get("type"),
         "save_files_to_redis": {
@@ -565,33 +606,6 @@ def makeFunctionName(name):
     return re.sub(r"[^a-zA-Z0-9_-]", "", name)
 
 
-async def total_token_calculation(tokens, bridge_id):
-    total_tokens = tokens.get("inputTokens", 0) + tokens.get("outputTokens", 0)
-    bridge_data = (await get_bridges_without_tools(bridge_id, org_id=None)).get("bridges")
-    if bridge_data and "total_tokens" in bridge_data:
-        total_tokens = bridge_data["total_tokens"] + total_tokens
-    else:
-        total_tokens = total_tokens
-
-    # Fix: update_bridge expects update_fields as a dictionary parameter
-    await update_bridge(bridge_id=bridge_id, update_fields={"total_tokens": total_tokens})
-
-
-async def save_files_to_redis(thread_id, sub_thread_id, bridge_id, files):
-    cache_key = f"{redis_keys['files_']}{bridge_id}_{thread_id}_{sub_thread_id}"
-    existing_cache = await find_in_cache(cache_key)
-    if existing_cache:
-        try:
-            cached_files = json.loads(existing_cache)
-            if cached_files == files:
-                await client.expire(f"{REDIS_PREFIX}{cache_key}", 604800)
-            else:
-                await store_in_cache(cache_key, files, 604800)
-        except (json.JSONDecodeError, Exception):
-            await store_in_cache(cache_key, files, 604800)
-    else:
-        await store_in_cache(cache_key, files, 604800)
-
 async def unknown_error_handler(data):
     return await fetch(
             url="https://flow.sokt.io/func/scrirBtsbXm4",
@@ -599,3 +613,25 @@ async def unknown_error_handler(data):
             headers={},
             json_body=data
         )
+
+def serialize_config(config) -> dict:
+    def default(o):
+        if hasattr(o, "model_dump"):
+            return o.model_dump()
+        return str(o)
+
+    def remove_nulls(obj):
+        # Remove None inside dict
+        if isinstance(obj, dict):
+            return {
+                k: remove_nulls(v)
+                for k, v in obj.items()
+                if v is not None
+            }
+        # Remove None inside list
+        if isinstance(obj, list):
+            return [remove_nulls(v) for v in obj if v is not None]
+        return obj
+
+    serialized = json.loads(json.dumps(config, default=default))
+    return remove_nulls(serialized)
