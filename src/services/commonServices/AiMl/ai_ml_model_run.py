@@ -8,7 +8,7 @@ from src.exceptions import ApiCallError
 from ..api_executor import execute_api_call
 
 
-async def ai_ml_model_run(
+async def neev_cloud_model_run(
     configuration,
     apiKey,
     execution_time_logs,
@@ -23,12 +23,12 @@ async def ai_ml_model_run(
     token_calculator=None,
 ):
     try:
-        openAI = AsyncOpenAI(api_key=apiKey, base_url="https://api.ai.ml/openai")
+        client = AsyncOpenAI(api_key=apiKey, base_url="https://inference.ai.neevcloud.com/v1")
 
         # Define the API call function
         async def api_call(config):
             try:
-                chat_completion = await openAI.chat.completions.create(**config)
+                chat_completion = await client.chat.completions.create(**config)
                 return {"success": True, "response": chat_completion.to_dict()}
             except Exception as error:
                 return {"success": False, "error": str(error), "status_code": getattr(error, "status_code", None)}

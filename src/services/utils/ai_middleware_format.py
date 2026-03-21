@@ -351,7 +351,7 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 ),
             },
         }
-    elif service == service_name["ai_ml"] and type == "image":
+    elif service == service_name["neev_cloud"] and type == "image":
         image_urls = []
         for image_data in response.get("data", []):
             image_urls.append(
@@ -371,7 +371,7 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 "total_tokens": response.get("usage", {}).get("total_tokens", None),
             },
         }
-    elif service == service_name["ai_ml"]:
+    elif service == service_name["neev_cloud"]:
         return {
             "data": {
                 "id": response.get("id", None),

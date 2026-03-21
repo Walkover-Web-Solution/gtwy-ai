@@ -11,8 +11,8 @@ from src.configs.serviceKeys import ServiceKeys
 
 from ....configs.constant import service_name
 from ....db_services import metrics_service
-from ..AiMl.ai_ml_image_model import AiMlImageModel
-from ..AiMl.ai_ml_model_run import ai_ml_model_run
+from ..AiMl.ai_ml_image_model import NeevCloudImageModel
+from ..AiMl.ai_ml_model_run import neev_cloud_model_run
 from ..anthropic.anthropicModelRun import anthropic_runmodel
 from ..Google.gemini_image_model import gemini_image_model
 from ..Google.gemini_modelrun import gemini_modelrun
@@ -120,7 +120,7 @@ class BaseService:
             tools[function_response["name"]] = function_response["content"]
 
             match service:
-                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'ai_ml':
+                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud':
                     assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
                     configuration['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]})
                     tool_calls_id = assistant_tool_calls['id']
@@ -277,7 +277,7 @@ class BaseService:
             service_name["open_router"],
             service_name["mistral"],
             service_name["gemini"],
-            service_name["ai_ml"],
+            service_name["neev_cloud"],
             service_name["openai_completion"],
         ]:
             if funcModelResponse and self.service != service_name["openai"]:
@@ -292,7 +292,7 @@ class BaseService:
                     service_name["grok"],
                     service_name["open_router"],
                     service_name["gemini"],
-                    service_name["ai_ml"],
+                    service_name["neev_cloud"],
                 ]:
                     _.set_(
                         model_response,
@@ -371,7 +371,7 @@ class BaseService:
                     service == service_name["openai_completion"]
                     or service == service_name["groq"]
                     or service == service_name["grok"]
-                    or service == service_name["ai_ml"]
+                    or service == service_name["neev_cloud"]
                 ):
                     if configuration.get("tool_choice"):
                         if configuration["tool_choice"] not in ["auto", "none", "required", "default"]:
@@ -544,8 +544,8 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
-            elif service == service_name["ai_ml"]:
-                response = await ai_ml_model_run(
+            elif service == service_name["neev_cloud"]:
+                response = await neev_cloud_model_run(
                     configuration,
                     apikey,
                     self.execution_time_logs,
@@ -620,8 +620,8 @@ class BaseService:
                 response = await OpenAIImageModel(configuration, apikey, self.execution_time_logs, self.timer)
             if service == service_name["gemini"]:
                 response = await gemini_image_model(configuration, apikey, self.execution_time_logs, self.timer)
-            if service == service_name["ai_ml"]:
-                response = await AiMlImageModel(
+            if service == service_name["neev_cloud"]:
+                response = await NeevCloudImageModel(
                     configuration, apikey, self.execution_time_logs, self.timer, self.image_data
                 )
             if not response["success"]:

@@ -130,7 +130,7 @@ ServiceKeys = {
             "max_tokens" : "max_output_tokens"
         },
     },
-    service_name["ai_ml"]: {
+    service_name["neev_cloud"]: {
         "default": {
             "creativity_level": "temperature",
             "probability_cutoff": "top_p",

@@ -309,8 +309,8 @@ async def chat(request_body):
                 # Check if service has changed - if so, create new service handler
                 if parsed_data["service"] != original_service:
                     parsed_data["apikey"] = fallback_config.get("apikey")
-                    if parsed_data["apikey"] is None and fallback_config.get("service") == "ai_ml":
-                        parsed_data["apikey"] = Config.AI_ML_APIKEY
+                    if parsed_data["apikey"] is None and fallback_config.get("service") == "neev_cloud":
+                        parsed_data["apikey"] = Config.NEEV_CLOUD_APIKEY
 
                     # Load fresh model configuration for the fallback service and model
                     (
@@ -351,8 +351,8 @@ async def chat(request_body):
                     class_obj.model = parsed_data["model"]
                     if fallback_config.get("apikey"):
                         class_obj.apikey = fallback_config["apikey"]
-                        if class_obj.apikey is None and fallback_config.get("service") == "ai_ml":
-                            class_obj.apikey = Config.AI_ML_APIKEY
+                        if class_obj.apikey is None and fallback_config.get("service") == "neev_cloud":
+                            class_obj.apikey = Config.NEEV_CLOUD_APIKEY
 
                     # Reconfigure custom_config for fallback service
                     class_obj.customConfig = await configure_custom_settings(

@@ -18,7 +18,7 @@ from src.configs.constant import VALID_RESPONSE_TYPES, agent_config_update_keys
 from src.configs.model_configuration import model_config_document
 
 from ...configs.constant import service_name
-from ..commonServices.AiMl.ai_ml_call import Ai_Ml
+from ..commonServices.AiMl.ai_ml_call import NeevCloud
 from ..commonServices.anthropic.anthropic_batch import AnthropicBatch
 from ..commonServices.anthropic.anthropicCall import Anthropic
 from ..commonServices.baseService.utils import sendResponse
@@ -272,8 +272,8 @@ class Helper:
             class_obj = OpenRouter(params)
         elif service == service_name["mistral"]:
             class_obj = Mistral(params)
-        elif service == service_name["ai_ml"]:
-            class_obj = Ai_Ml(params)
+        elif service == service_name["neev_cloud"]:
+            class_obj = NeevCloud(params)
         elif service == service_name["openai_completion"]:
             class_obj = OpenaiCompletion(params)
         else:
@@ -289,7 +289,7 @@ class Helper:
         if modelObj is None:
             raise AttributeError(f"Model function '{model}' not found in model_configuration.")
 
-        if service in ["openai", "groq", "grok", "ai_ml", "openai_completion"]:
+        if service in ["openai", "groq", "grok", "neev_cloud", "openai_completion"]:
             token_cost["input_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("input_cost") or 0
             token_cost["output_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("output_cost") or 0
             token_cost["cache_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("cached_cost") or 0

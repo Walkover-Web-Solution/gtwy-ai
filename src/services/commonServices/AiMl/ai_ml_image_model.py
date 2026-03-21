@@ -4,7 +4,7 @@ from src.services.utils.apiservice import fetch
 from src.services.utils.gcp_upload_service import uploadDoc
 
 
-async def AiMlImageModel(configuration, apiKey, execution_time_logs, timer, images):
+async def NeevCloudImageModel(configuration, apiKey, execution_time_logs, timer, images):
     try:
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {apiKey}"}
 
@@ -12,18 +12,18 @@ async def AiMlImageModel(configuration, apiKey, execution_time_logs, timer, imag
         timer.start()
         if images:
             configuration["images"] = images
-        # Call AI.ml image generation API
+        # Call NeevCloud image generation API
         generation_data, _ = await fetch(
-            url="https://api.ai.ml/v1/generation/images", method="POST", headers=headers, json_body=configuration
+            url="https://inference.ai.neevcloud.com/v1/generation/images", method="POST", headers=headers, json_body=configuration
         )
 
         execution_time_logs.append(
-            {"step": "AI.ml image generation time", "time_taken": timer.stop("AI.ml image generation time")}
+            {"step": "NeevCloud image generation time", "time_taken": timer.stop("NeevCloud image generation time")}
         )
 
         # Check if generation was successful
         if generation_data.get("status") != "success":
-            raise ValueError(f"AI.ml image generation failed: {generation_data}")
+            raise ValueError(f"NeevCloud image generation failed: {generation_data}")
 
         # Get the image URL from response
         image_url = generation_data["data"]["image"]["url"]
@@ -38,18 +38,18 @@ async def AiMlImageModel(configuration, apiKey, execution_time_logs, timer, imag
         # Start timer for fetching actual image
         timer.start()
 
-        # Call AI.ml media API to get the actual image URL
+        # Call NeevCloud media API to get the actual image URL
         media_data, _ = await fetch(
-            url=f"https://api.ai.ml/v1/media/images/{image_path}", method="GET", headers=headers
+            url=f"https://inference.ai.neevcloud.com/v1/media/images/{image_path}", method="GET", headers=headers
         )
 
         execution_time_logs.append(
-            {"step": "AI.ml fetch image URL time", "time_taken": timer.stop("AI.ml fetch image URL time")}
+            {"step": "NeevCloud fetch image URL time", "time_taken": timer.stop("NeevCloud fetch image URL time")}
         )
 
         # Check if media fetch was successful
         if media_data.get("status") != "success":
-            raise ValueError(f"AI.ml media fetch failed: {media_data}")
+            raise ValueError(f"NeevCloud media fetch failed: {media_data}")
 
         # Get the actual image URL (S3 signed URL)
         actual_image_url = media_data["url"]
@@ -82,8 +82,8 @@ async def AiMlImageModel(configuration, apiKey, execution_time_logs, timer, imag
         return {"success": True, "response": response}
     except Exception as error:
         execution_time_logs.append(
-            {"step": "AI.ml image Processing time", "time_taken": timer.stop("AI.ml image Processing time")}
+            {"step": "NeevCloud image Processing time", "time_taken": timer.stop("NeevCloud image Processing time")}
         )
-        print("AI.ml image model error=>", error)
+        print("NeevCloud image model error=>", error)
         traceback.print_exc()
         return {"success": False, "error": str(error)}

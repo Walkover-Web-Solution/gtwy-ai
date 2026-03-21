@@ -330,7 +330,7 @@ class ConversationService:
             raise ValueError(e.args[0]) from e
 
     @staticmethod
-    def createAiMlConversation(conversation, memory, files):
+    def createNeevCloudConversation(conversation, memory, files):
         try:
             threads = []
             # Track distinct PDF URLs across the entire conversation

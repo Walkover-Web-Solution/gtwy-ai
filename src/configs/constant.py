@@ -16,7 +16,7 @@ service_name = {
     "groq": "groq",
     "open_router": "open_router",
     "mistral": "mistral",
-    "ai_ml": "ai_ml",
+    "neev_cloud": "neev_cloud",
     "openai_completion": "openai_completion",
 }
 
@@ -81,7 +81,7 @@ new_agent_service = {
     "open_router": "deepseek/deepseek-chat-v3-0324:free",
     "mistral": "mistral-medium-latest",
     "gemini": "gemini-2.5-flash",
-    "ai_ml": "gpt-oss-20b",
+    "neev_cloud": "gpt-oss-20b",
     "grok": "grok-4-fast",
 }
 
