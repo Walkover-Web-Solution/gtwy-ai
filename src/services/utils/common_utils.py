@@ -482,7 +482,7 @@ def process_variable_state(parsed_data):
                 # 1. Variable doesn't exist in variables
                 # 2. Variable exists but is None or empty string
                 # 3. Variable_state has empty value
-                if current_value is None or current_value == "" or var_name not in parsed_data["variables"]:
+                if (current_value is None or current_value == "" or var_name not in parsed_data["variables"]) and var_state["default_value"] not in (None, ""):
                     parsed_data["variables"][var_name] = var_state["default_value"]
 
 
