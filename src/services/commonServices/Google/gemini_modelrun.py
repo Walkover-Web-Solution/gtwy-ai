@@ -9,7 +9,6 @@ import traceback
 async def gemini_modelrun_stream(configuration, apiKey):
     """Async generator yielding normalised delta dicts for Gemini generate_content_stream."""
     client = genai.Client(api_key=apiKey)
-    accumulated_text = ""
     accumulated_tool_calls = []
     usage = {}
     finish_reason = None
@@ -33,7 +32,6 @@ async def gemini_modelrun_stream(configuration, apiKey):
             parts = candidate.get("content", {}).get("parts", []) or []
             for part in parts:
                 if part.get("text"):
-                    accumulated_text += part["text"]
                     yield {"content": part["text"], "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
                 if part.get("function_call"):
                     fc = part["function_call"]

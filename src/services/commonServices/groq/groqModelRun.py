@@ -6,6 +6,14 @@ from globals import logger
 from src.exceptions import ApiCallError
 
 from ..api_executor import execute_api_call
+from ..openai_compat_stream import openai_compat_stream
+
+
+async def groq_stream(configuration, apiKey):
+    """Async generator yielding normalised delta dicts for Groq chat.completions."""
+    client = AsyncGroq(api_key=apiKey)
+    async for delta in openai_compat_stream(client, configuration):
+        yield delta
 
 
 async def groq_runmodel(
@@ -59,41 +67,6 @@ async def groq_runmodel(
             }
         )
         raise ApiCallError(str(e), status_code=getattr(e, "status_code", None), service=service) from e
-
-
-async def groq_stream(configuration, apiKey):
-    """Async generator yielding normalised delta dicts for Groq chat.completions."""
-    groq_client = AsyncGroq(api_key=apiKey)
-    config = {**configuration, "stream": True}
-    accumulated_tool_calls = {}
-    usage = {}
-    finish_reason = None
-    try:
-        stream = await groq_client.chat.completions.create(**config)
-        async for chunk in stream:
-            choice = chunk.choices[0] if chunk.choices else None
-            if chunk.usage:
-                usage = chunk.usage.to_dict() if hasattr(chunk.usage, "to_dict") else dict(chunk.usage)
-            if not choice:
-                continue
-            delta = choice.delta
-            finish_reason = choice.finish_reason or finish_reason
-            if delta.content:
-                yield {"content": delta.content, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    idx = tc.index
-                    if idx not in accumulated_tool_calls:
-                        accumulated_tool_calls[idx] = {"id": tc.id or "", "name": tc.function.name or "", "arguments": ""}
-                    if tc.function.arguments:
-                        accumulated_tool_calls[idx]["arguments"] += tc.function.arguments
-        tool_calls_list = [
-            {"id": v["id"], "type": "function", "function": {"name": v["name"], "arguments": v["arguments"]}}
-            for v in accumulated_tool_calls.values()
-        ] if accumulated_tool_calls else None
-        yield {"content": None, "tool_calls": tool_calls_list, "usage": usage, "finish_reason": finish_reason, "reasoning": None}
-    except Exception as error:
-        yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
 
 
 async def groq_test_model(configuration, api_key):

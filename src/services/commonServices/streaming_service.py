@@ -16,7 +16,7 @@ class StreamingService:
     def __init__(self, mode: str = "sse", rtlayer_cred: dict = None):
         self.mode = mode
         self.rtlayer_cred = rtlayer_cred or {}
-        self.queue = asyncio.Queue() if mode == "sse" else None
+        self.queue = asyncio.Queue(maxsize=1000) if mode == "sse" else None
         self._started = False
 
     async def _emit(self, payload: dict):
