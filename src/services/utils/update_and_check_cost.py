@@ -334,7 +334,7 @@ async def update_cost(parsed_data):
 
         limit_data = limit or {}
         has_any_limit = any(
-            (limit_data.get(lt) or {}).get("limit", 0) > 0
+            ((limit_data.get(lt) or {}).get("limit") or 0) > 0
             for lt in ("bridge", "folder", "apikey")
         )
         if expected_cost and has_any_limit:
