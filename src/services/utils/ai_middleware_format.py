@@ -109,28 +109,28 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                     else (
                         next(
                             (
-                                item.get("content", [{}])[0].get("text", None)
+                                (item.get("content") or [{}])[0].get("text", None)
                                 for item in response.get("output", [])
                                 if item.get("type") == "message"
-                                and item.get("content", [{}])[0].get("text", None) is not None
+                                and (item.get("content") or [{}])[0].get("text", None) is not None
                             ),
                             None,
                         )
                         or next(
                             (
-                                item.get("content", [{}])[0].get("text", None)
+                                (item.get("content") or [{}])[0].get("text", None)
                                 for item in response.get("output", [])
                                 if item.get("type") == "output_text"
-                                and item.get("content", [{}])[0].get("text", None) is not None
+                                and (item.get("content") or [{}])[0].get("text", None) is not None
                             ),
                             None,
                         )
                         or next(
                             (
-                                item.get("content", [{}])[0].get("text", None)
+                                (item.get("content") or [{}])[0].get("text", None)
                                 for item in response.get("output", [])
                                 if item.get("type") == "reasoning"
-                                and item.get("content", [{}])[0].get("text", None) is not None
+                                and (item.get("content") or [{}])[0].get("text", None) is not None
                             ),
                             None,
                         )
@@ -143,7 +143,7 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 else finish_reason_mapping(response.get("incomplete_details", {}).get("reason", None)),
                 "tools_data": tools_data or {},
                 "images": images,
-                "annotations": response.get("output", [{}])[0].get("content", [{}])[0].get("annotations", None),
+                "annotations": ((response.get("output") or [{}])[0].get("content") or [{}])[0].get("annotations", None),
                 "fallback": response.get("fallback") or False,
                 "firstAttemptError": response.get("firstAttemptError") or "",
             },

@@ -1,9 +1,10 @@
+import asyncio
 import json
 import traceback
 import uuid
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
@@ -41,6 +42,7 @@ from src.services.utils.common_utils import (
     update_usage_metrics,
     process_batch_background_tasks,
     update_cost_usage_and_apikey_status_in_background,
+    sse_stream_and_finalize,
 )
 from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
@@ -97,11 +99,23 @@ async def chat_multiple_agents(request_body):
         # Create a new body for the primary agent
         primary_body = body.copy()
         wrapper_id = primary_body.get("wrapper_id")
+
+        # Save request-level values from "configuration" that must survive the
+        # bridge-config merge (primary_config["configuration"] is the raw DB config
+        # and will fully overwrite primary_body["configuration"] via .update()).
+        original_response_format = (body.get("configuration") or {}).get("response_format")
+
         primary_body.update(primary_config)
         primary_body["wrapper_id"] = wrapper_id
         primary_body["bridge_id"] = primary_bridge_id
         # Store the original primary_bridge_id for Redis key consistency
         primary_body["primary_bridge_id"] = primary_bridge_id
+
+        # Restore response_format set at request-level (e.g. RTLayer from playground/
+        # interface middleware) that was clobbered by the bridge-config merge above.
+        if original_response_format is not None:
+            primary_body.setdefault("configuration", {})["response_format"] = original_response_format
+            print(f"[chat_multiple_agents] response_format restored: type={original_response_format.get('type')}, channel={original_response_format.get('cred', {}).get('channel')}")
 
         # Create a complete request_body structure for the primary agent
         primary_request_body = {
@@ -215,6 +229,11 @@ async def chat(request_body):
         custom_config = await configure_custom_settings(
             model_config["configuration"], custom_config, parsed_data["service"]
         )
+        # If template rendering is requested, streaming is not supported — force it off
+        response_type = parsed_data.get("response_type") or {}
+        if isinstance(response_type, dict) and response_type.get("is_template", False):
+            parsed_data["stream"] = False
+
         # Step 9: Execute Service Handler
         params = build_service_params(
             parsed_data,
@@ -234,6 +253,27 @@ async def chat(request_body):
 
         # Execute with retry mechanism
         class_obj = await Helper.create_service_handler(params, parsed_data["service"])
+
+        # If this request was a streamed agent transfer, reuse the existing SSE connection
+        injected_streamer = (request_body.get("body", {}) if isinstance(request_body, dict) else {}).get("_injected_streamer")
+        if injected_streamer and getattr(class_obj, "stream_mode", False):
+            class_obj.streamer = injected_streamer
+
+        # Streaming is SSE-only: if stream=true return StreamingResponse.
+        if getattr(class_obj, "stream_mode", False) and getattr(class_obj, "streamer", None):
+            if injected_streamer:
+                # Agent-transfer: existing SSE connection owned by the caller — background task, no new StreamingResponse
+                asyncio.create_task(sse_stream_and_finalize(
+                    class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
+                    request_body=request_body, chat_function=chat,
+                ))
+                return JSONResponse(status_code=200, content={"success": True})
+
+            asyncio.create_task(sse_stream_and_finalize(
+                class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
+                request_body=request_body, chat_function=chat,
+            ))
+            return StreamingResponse(class_obj.streamer.generator(), media_type="text/event-stream")
 
         original_exception = None
         try:

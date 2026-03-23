@@ -71,7 +71,10 @@ class OpenaiResponse(BaseService):
 
                     self.customConfig["tools"].append(web_search_tool)
 
-            openAIResponse = await self.chats(self.customConfig, self.apikey, service_name["openai"])
+            if self.stream_mode:
+                openAIResponse = await self.stream(self.customConfig, self.apikey, service_name["openai"])
+            else:
+                openAIResponse = await self.chats(self.customConfig, self.apikey, service_name["openai"])
             modelResponse = openAIResponse.get("modelResponse", {})
 
             if not openAIResponse.get("success"):
@@ -79,16 +82,19 @@ class OpenaiResponse(BaseService):
                     await self.handle_failure(openAIResponse)
                 raise ValueError(openAIResponse.get("error"))
 
-            # Check for function calls in multiple possible locations with fallback
-            has_function_call = (
-                any(output.get("type") == "function_call" for output in modelResponse.get("output", []))
-                or any(output.get("type") == "tool_call" for output in modelResponse.get("output", []))
-                or any(
-                    "function_call" in str(output)
-                    for output in modelResponse.get("output", [])
-                    if output.get("type") in ["reasoning", "message", "output_text"]
+            # Check for function calls — streaming returns has_tool_calls flag directly
+            if self.stream_mode:
+                has_function_call = openAIResponse.get("has_tool_calls", False)
+            else:
+                has_function_call = (
+                    any(output.get("type") == "function_call" for output in modelResponse.get("output", []))
+                    or any(output.get("type") == "tool_call" for output in modelResponse.get("output", []))
+                    or any(
+                        "function_call" in str(output)
+                        for output in modelResponse.get("output", [])
+                        if output.get("type") in ["reasoning", "message", "output_text"]
+                    )
                 )
-            )
 
             if has_function_call:
                 functionCallRes = await self.function_call(

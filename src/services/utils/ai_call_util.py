@@ -40,7 +40,7 @@ async def call_ai_middleware(user, bridge_id, variables=None, configuration=None
 
 async def call_gtwy_agent(args):
     # Initialize variables that might be used in exception handler
-    message_id = ""
+    message_id = args.get("message_id")
     version_id = args.get("version_id")
     bridge_id = args.get("bridge_id")
 
@@ -60,7 +60,7 @@ async def call_gtwy_agent(args):
         variables = args.get("variables") or {}
 
         # Step 1: Update request body with core data
-        request_body.update({"user": user_message, "bridge_id": bridge_id})
+        request_body.update({"user": user_message, "bridge_id": bridge_id, "message_id": message_id})
         # If version_id is provided, include it in the request body early
         if version_id:
             request_body["version_id"] = version_id
