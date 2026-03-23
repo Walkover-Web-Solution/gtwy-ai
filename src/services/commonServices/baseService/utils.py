@@ -329,6 +329,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                         "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
                         "user": tool_data.get("args").get("_query"),
                         "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
+                        "message_id": self.message_id,
                     }
 
                     # Add thread_id and sub_thread_id if bridge requires it
