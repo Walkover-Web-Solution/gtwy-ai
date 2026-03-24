@@ -71,7 +71,13 @@ class OpenaiBatch(BaseService):
         # Assume "self.batch" is the list of messages we want to process
         for idx, message in enumerate(self.batch):
             # Copy all keys from self.customConfig into the body
-            body_data = self.customConfig
+            body_data = self.customConfig.copy()
+
+            # OpenAI /v1/responses expects text.format (not response_type)
+            if "response_type" in body_data:
+                response_type = body_data.pop("response_type")
+                if response_type:
+                    body_data["text"] = {"format": response_type}
             
             # Generate a unique message_id for each message
             # This will be sent as custom_id to OpenAI API (required by their format)
