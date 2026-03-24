@@ -90,10 +90,6 @@ async def check_batch_status():
                                 except Exception as webhook_err:
                                     webhook_error = str(webhook_err)
                                     logger.error(f"Error sending webhook for batch {batch_id}: {webhook_error}")
-                            
-                            # Immediately delete Cache
-                            await delete_in_cache(cache_key)
-                            logger.info(f"Batch {batch_id} completed and removed from cache")
 
                             # Initialize TokenCalculator for batch cost calculation with 50% discount
                             token_calculator = TokenCalculator(service, {})
@@ -203,6 +199,9 @@ async def check_batch_status():
                                     logger.info(f"Published {len(batch_updates)} updates and {len(metrics_data)} metrics for batch {batch_id} to queue")
                                 except Exception as queue_error:
                                     logger.error(f"Error publishing batch results to queue for batch {batch_id}: {str(queue_error)}")
+                            
+                            await delete_in_cache(cache_key)
+                            logger.info(f"Batch {batch_id} completed and removed from cache")
                         else:
                             # No results but marked as completed - send generic error
                             # We cannot update specific logs here as we don't have message_ids
