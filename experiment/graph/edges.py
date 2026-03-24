@@ -23,19 +23,33 @@ def route_after_planner(state: AgentState) -> str:
     return "executor"
 
 
+def _has_pending_tasks(state: AgentState) -> bool:
+    """Check if any tasks are still pending (dependency-aware)."""
+    tasks = state.get("tasks", [])
+    completed_ids = {t["id"] for t in tasks if t["status"] in ("completed", "skipped")}
+    for t in tasks:
+        if t["status"] == "pending":
+            deps = t.get("depends_on", [])
+            if all(dep_id in completed_ids for dep_id in deps):
+                return True
+    return False
+
+
 def route_after_executor(state: AgentState) -> str:
-    """After executing a task:
-    - If more tasks remain AND next step not yet approved → wait for user approval
-    - If more tasks remain AND step already approved → execute next
+    """After executing a batch of tasks:
+    - If a task failed and needs re-plan → planner (re-plan path)
+    - If more runnable tasks remain AND step already approved → executor
+    - If more runnable tasks remain AND need approval → wait for step approval
     - If no more tasks → synthesizer
     """
-    idx = state["current_task_index"]
-    total = len(state["tasks"])
+    # Re-plan path: executor flagged a failure
+    if state.get("needs_replan"):
+        return "planner"
 
-    if idx >= total:
-        return "synthesizer"
+    # Check for remaining runnable tasks
+    if _has_pending_tasks(state):
+        if state.get("step_approved"):
+            return "executor"
+        return "wait_for_step_approval"
 
-    # More tasks remain — wait for per-step approval unless already granted
-    if state.get("step_approved"):
-        return "executor"
-    return "wait_for_step_approval"
+    return "synthesizer"

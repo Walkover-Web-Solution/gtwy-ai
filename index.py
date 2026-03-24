@@ -1,6 +1,5 @@
 import asyncio
 from contextlib import asynccontextmanager
-import src.services.grafana
 import uvicorn
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError

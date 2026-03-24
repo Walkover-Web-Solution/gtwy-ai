@@ -41,10 +41,11 @@ def _build_graph_skeleton(planner_fn, executor_fn, synthesizer_fn, direct_fn=Non
         "executor": "executor",
     })
 
-    # Executor → loop, wait for per-step approval, or synthesizer
+    # Executor → loop, wait for per-step approval, re-plan on failure, or synthesizer
     graph.add_conditional_edges("executor", route_after_executor, {
         "executor": "executor",
         "wait_for_step_approval": END,   # graph stops, WebSocket sends step proposal, waits for user
+        "planner": "planner",            # re-plan path when a task fails
         "synthesizer": "synthesizer",
     })
 

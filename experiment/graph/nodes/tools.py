@@ -68,5 +68,5 @@ def list_files(directory: str = ".") -> str:
         return f"Error listing files: {e}"
 
 
-TOOLS = []
-TOOLS_BY_NAME = {}
+TOOLS = [send_webhook, read_file, write_file, run_shell, list_files]
+TOOLS_BY_NAME = {t.name: t for t in TOOLS}

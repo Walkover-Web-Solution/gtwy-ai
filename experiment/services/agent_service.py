@@ -51,6 +51,14 @@ async def invoke_agent(agent_id: str, goal: str, api_key: str = None, org_id: st
         "question_options": None,
         "human_input": None,
         "plan_approved": True,  # Auto-approve for REST invocation
+        "step_approved": True,  # Auto-approve steps for REST invocation
+        "step_feedback": None,
+        "direct_messages": [],
+        "built_steps": [],
+        "scratchpad": [],
+        "plan_revision_count": 0,
+        "needs_replan": False,
+        "replan_reason": None,
     }
 
     # Run the graph to completion

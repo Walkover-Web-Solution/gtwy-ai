@@ -5,8 +5,13 @@ class TaskItem(TypedDict):
     id: str
     title: str
     description: str
-    status: str  # "pending" | "in_progress" | "completed" | "failed"
+    status: str  # "pending" | "in_progress" | "completed" | "failed" | "skipped"
     result: Optional[str]
+    depends_on: list[str]  # IDs of tasks this depends on
+    priority: str  # "high" | "medium" | "low"
+    acceptance_criteria: str  # what "done" looks like for this task
+    estimated_complexity: str  # "simple" | "moderate" | "complex"
+    reflection: Optional[str]  # self-reflection result after execution
 
 
 class AgentState(TypedDict):
@@ -28,3 +33,7 @@ class AgentState(TypedDict):
     step_feedback: Optional[str]  # Optional rejection/feedback message from user
     direct_messages: list  # Conversation history for direct mode (list of {role, content})
     built_steps: list  # Accumulated automation steps built so far (for FBAI flow)
+    scratchpad: list  # shared memory across worker executions [{note, source_task_id}]
+    plan_revision_count: int  # how many times the plan has been revised
+    needs_replan: bool  # True when worker signals a re-plan is needed
+    replan_reason: Optional[str]  # why re-planning was triggered

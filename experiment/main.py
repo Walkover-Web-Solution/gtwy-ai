@@ -136,9 +136,19 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                         if tasks:
                             await ws_send(ws, "plan_ready", {
                                 "tasks": [
-                                    {"id": t["id"], "title": t["title"], "description": t["description"], "status": t["status"]}
+                                    {
+                                        "id": t["id"],
+                                        "title": t["title"],
+                                        "description": t["description"],
+                                        "status": t["status"],
+                                        "depends_on": t.get("depends_on", []),
+                                        "priority": t.get("priority", "medium"),
+                                        "acceptance_criteria": t.get("acceptance_criteria", ""),
+                                        "estimated_complexity": t.get("estimated_complexity", "moderate"),
+                                    }
                                     for t in tasks
-                                ]
+                                ],
+                                "is_replan": planner_output.get("plan_revision_count", 0) > 0,
                             })
                             if pending_state_out is not None:
                                 pending_state_out.append({
@@ -147,7 +157,11 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                                     "needs_question": False,
                                     "plan_approved": False,
                                     "current_task_index": 0,
-                                    "completed_tasks": [],
+                                    "completed_tasks": state.get("completed_tasks", []),
+                                    "scratchpad": state.get("scratchpad", []),
+                                    "plan_revision_count": planner_output.get("plan_revision_count", 0),
+                                    "needs_replan": False,
+                                    "replan_reason": None,
                                     "human_input": planner_output.get("human_input", state.get("human_input")),
                                 })
                             return "waiting_for_approval"
@@ -191,24 +205,50 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                     await ws_send(ws, "task_done", {"task_id": current_task_id})
                     current_task_id = None
 
-                # Check if next step needs user approval
                 try:
                     executor_output = event.get("data", {}).get("output", {})
                     snap_state = {**state, **executor_output}
-                    idx = snap_state.get("current_task_index", 0)
-                    tasks = snap_state.get("tasks", [])
-                    if idx < len(tasks) and not snap_state.get("step_approved"):
-                        next_task = tasks[idx]
-                        await ws_send(ws, "step_proposal", {
-                            "step_index": idx,
-                            "total_steps": len(tasks),
-                            "task_id": next_task["id"],
-                            "title": next_task["title"],
-                            "description": next_task["description"],
+
+                    # Send reflection data if available
+                    for t in snap_state.get("tasks", []):
+                        if t.get("reflection"):
+                            await ws_send(ws, "task_reflection", {
+                                "task_id": t["id"],
+                                "reflection": t["reflection"],
+                            })
+
+                    # Check if re-plan is needed (task failed)
+                    if snap_state.get("needs_replan"):
+                        await ws_send(ws, "replan_needed", {
+                            "reason": snap_state.get("replan_reason", "A task failed"),
                         })
+                        # Graph will route to planner automatically
                         if pending_state_out is not None:
                             pending_state_out.append(snap_state)
-                        return "waiting_for_step_approval"
+                        # Don't return — let the graph continue to planner
+                    else:
+                        # Check for next step approval
+                        idx = snap_state.get("current_task_index", 0)
+                        tasks = snap_state.get("tasks", [])
+                        # Find next pending task (dependency-aware)
+                        next_task = None
+                        for t in tasks:
+                            if t["status"] == "pending":
+                                next_task = t
+                                break
+                        if next_task and not snap_state.get("step_approved"):
+                            await ws_send(ws, "step_proposal", {
+                                "step_index": idx,
+                                "total_steps": len(tasks),
+                                "task_id": next_task["id"],
+                                "title": next_task["title"],
+                                "description": next_task["description"],
+                                "depends_on": next_task.get("depends_on", []),
+                                "acceptance_criteria": next_task.get("acceptance_criteria", ""),
+                            })
+                            if pending_state_out is not None:
+                                pending_state_out.append(snap_state)
+                            return "waiting_for_step_approval"
                 except Exception:
                     pass
 
@@ -287,6 +327,10 @@ async def websocket_endpoint(ws: WebSocket):
                     "step_feedback": None,
                     "direct_messages": [],
                     "built_steps": [],
+                    "scratchpad": [],
+                    "plan_revision_count": 0,
+                    "needs_replan": False,
+                    "replan_reason": None,
                 }
 
                 ws.pending_state = {**initial_state}
@@ -462,6 +506,65 @@ async def websocket_endpoint(ws: WebSocket):
                     tb = traceback.format_exc()
                     print(f"[STEP APPROVE ERROR]\n{tb}")
                     await ws_send(ws, "error", {"message": f"Step approve error: {str(e)}"})
+
+            elif action == "edit_plan":
+                pending_state = getattr(ws, "pending_state", None)
+                agent_graph = getattr(ws, "agent_graph", default_compiled_graph)
+                edited_tasks = msg.get("tasks", [])
+
+                if not pending_state:
+                    await ws_send(ws, "error", {"message": "No pending plan to edit"})
+                    continue
+
+                if not edited_tasks:
+                    await ws_send(ws, "error", {"message": "No tasks provided"})
+                    continue
+
+                try:
+                    # User edited the plan — update tasks in pending state
+                    updated_tasks = []
+                    for t in edited_tasks:
+                        updated_tasks.append({
+                            "id": t.get("id", str(uuid.uuid4())[:8]),
+                            "title": t["title"],
+                            "description": t["description"],
+                            "status": "pending",
+                            "result": None,
+                            "depends_on": t.get("depends_on", []),
+                            "priority": t.get("priority", "medium"),
+                            "acceptance_criteria": t.get("acceptance_criteria", "Task completed successfully"),
+                            "estimated_complexity": t.get("estimated_complexity", "moderate"),
+                            "reflection": None,
+                        })
+
+                    ws.pending_state = {
+                        **pending_state,
+                        "tasks": updated_tasks,
+                        "current_task_index": 0,
+                    }
+
+                    await ws_send(ws, "plan_ready", {
+                        "tasks": [
+                            {
+                                "id": t["id"],
+                                "title": t["title"],
+                                "description": t["description"],
+                                "status": t["status"],
+                                "depends_on": t.get("depends_on", []),
+                                "priority": t.get("priority", "medium"),
+                                "acceptance_criteria": t.get("acceptance_criteria", ""),
+                                "estimated_complexity": t.get("estimated_complexity", "moderate"),
+                            }
+                            for t in updated_tasks
+                        ],
+                        "is_replan": False,
+                        "is_user_edit": True,
+                    })
+
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    print(f"[EDIT PLAN ERROR]\n{tb}")
+                    await ws_send(ws, "error", {"message": f"Edit plan error: {str(e)}"})
 
             elif action == "step_reject":
                 pending_state = getattr(ws, "pending_state", None)
