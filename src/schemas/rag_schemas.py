@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 
 class RAGQueryRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     query: str
     top_k: int = Field(default=2, ge=1)
@@ -24,7 +24,7 @@ class RAGQueryRequest(BaseModel):
 
 
 class RAGCreateFormRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
 
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -43,6 +43,6 @@ class RAGCreateFormRequest(BaseModel):
 
 
 class RAGDeleteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     id: str = Field(min_length=1)

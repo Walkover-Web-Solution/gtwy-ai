@@ -2,7 +2,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ChatbotSendMessageRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     slugName: str
     message: str | None = None
