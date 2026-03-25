@@ -59,19 +59,27 @@ You are re-planning after a task failure. Analyze what went wrong and produce an
 
 ## Failure context
 - **Goal:** {goal}
-- **Completed:** {completed_summary}
+- **Completed tasks (PRESERVED — do NOT repeat these):** {completed_summary}
 - **Failed task:** {failed_task}
 - **Failure reason:** {failure_reason}
-- **Scratchpad:** {scratchpad}
+- **Scratchpad (context from previous work):** {scratchpad}
 
 ## Rules
-- Do NOT repeat completed tasks — build on their results.
+- **NEVER repeat completed tasks.** They are already done and their results are preserved.
+- Only produce NEW tasks to replace the failed task and any remaining work.
 - Fix the failure with a different approach or work around it.
-- Use scratchpad context when available.
+- Use scratchpad context and completed task results when planning the new tasks.
+- If you need critical information from the user before re-planning, use Mode 1 (question).
 
-Respond with valid JSON (mode "tasks" only):
+# Mode 1 — ASK (only when genuinely needed)
 ```json
-{{"mode":"tasks","reasoning":"...","question":null,"tasks":[{{"title":"...","description":"...","depends_on":[],"priority":"high","acceptance_criteria":"...","estimated_complexity":"simple"}}]}}
+{{"mode":"question","reasoning":"...","question":{{"text":"...","options":["A","B","C"]}},"tasks":[]}}
+```
+
+# Mode 2 — PLAN (default)
+Provide ONLY the new/replacement tasks. Do NOT include already-completed tasks.
+```json
+{{"mode":"tasks","reasoning":"...","question":null,"tasks":[{{"title":"...","tool_name":"...","description":"...","depends_on":[],"priority":"high","acceptance_criteria":"...","estimated_complexity":"simple"}}]}}
 ```
 """
 
@@ -395,26 +403,55 @@ async def _run_planner(state: AgentState, model: str = None, temperature: float 
         thinking_steps.append({"type": "plan_reasoning", "content": reasoning})
 
     if mode == "question" and parsed.get("question"):
-        return {
+        result = {
             "needs_question": True,
             "question_text": parsed["question"]["text"],
             "question_options": parsed["question"].get("options", []),
-            "tasks": [],
             "planner_thinking": thinking_steps,
-            "needs_replan": False,
-            "replan_reason": None,
         }
+        if is_replan:
+            # Preserve existing tasks (completed ones stay) and keep replan flag
+            # so after user answers, planner re-enters replan mode
+            result["needs_replan"] = True
+            result["replan_reason"] = state.get("replan_reason")
+        else:
+            result["tasks"] = []
+            result["needs_replan"] = False
+            result["replan_reason"] = None
+        return result
 
-    tasks = _parse_tasks(parsed)
+    new_tasks = _parse_tasks(parsed)
     revision_count = state.get("plan_revision_count", 0)
     if is_replan:
         revision_count += 1
+
+    if is_replan:
+        # Preserve completed/skipped tasks and remove failed/pending ones, then append new plan
+        existing_tasks = state.get("tasks", [])
+        preserved = [t for t in existing_tasks if t["status"] in ("completed", "skipped")]
+        merged_tasks = preserved + new_tasks
+
+        # current_task_index should point to the first new task
+        next_idx = len(preserved)
+
+        return {
+            "needs_question": False,
+            "question_text": None,
+            "question_options": None,
+            "tasks": merged_tasks,
+            "human_input": None,
+            "planner_thinking": thinking_steps,
+            "needs_replan": False,
+            "replan_reason": None,
+            "plan_revision_count": revision_count,
+            "current_task_index": next_idx,
+        }
 
     return {
         "needs_question": False,
         "question_text": None,
         "question_options": None,
-        "tasks": tasks,
+        "tasks": new_tasks,
         "human_input": None,
         "planner_thinking": thinking_steps,
         "needs_replan": False,

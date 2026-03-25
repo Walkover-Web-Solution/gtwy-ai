@@ -19,6 +19,8 @@ class CreateAgentRequest(BaseModel):
     org_id: Optional[str] = Field("default", description="Organization ID")
     tools: Optional[list[str]] = Field(default_factory=list, description="List of tool_ids to attach")
     sub_agents: Optional[list[str]] = Field(default_factory=list, description="List of sub-agent agent_ids for A2A")
+    pretool: Optional[str] = Field(None, description="Tool ID to run before the AI API call. Output replaces {{pretool}} in system_prompt.")
+    pretool_input: Optional[dict] = Field(default_factory=dict, description="Static input parameters to pass to the pretool")
     status: Optional[str] = Field("active", description="Agent status: active, inactive, draft")
 
 
@@ -34,6 +36,8 @@ class UpdateAgentRequest(BaseModel):
     enable_reflection: Optional[bool] = None
     tools: Optional[list[str]] = None
     sub_agents: Optional[list[str]] = None
+    pretool: Optional[str] = None
+    pretool_input: Optional[dict] = None
     status: Optional[str] = None
 
 

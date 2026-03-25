@@ -24,6 +24,8 @@ async def create_agent(agent_data: dict) -> dict:
         "enable_reflection": agent_data.get("enable_reflection", True),
         "tools": agent_data.get("tools", []),
         "sub_agents": agent_data.get("sub_agents", []),
+        "pretool": agent_data.get("pretool"),
+        "pretool_input": agent_data.get("pretool_input", {}),
         "status": agent_data.get("status", "active"),
         "created_by": agent_data.get("created_by", "system"),
         "created_at": now,

@@ -1169,6 +1169,20 @@
                         <input type="number" id="agentTemp" value="0.3" min="0" max="2" step="0.1">
                     </div>
                 </div>
+                <hr style="border-color:var(--border);margin:12px 0;">
+                <div style="margin-bottom:8px;font-size:12px;color:var(--text-muted);line-height:1.5;">Pretool runs before the AI API call. Its output replaces <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:4px;">{{pretool}}</code> in the system prompt.</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Pretool</label>
+                        <select id="agentPretool">
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Pretool Input <span style="color:var(--text-muted);font-weight:400">(JSON)</span></label>
+                        <textarea id="agentPretoolInput" rows="2" placeholder='{"key": "value"}'></textarea>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button class="run-btn" onclick="createAgent()">Create</button>
                     <button class="reject-btn" onclick="hideCreateAgentForm()">Cancel</button>
@@ -1217,6 +1231,21 @@
                     <div class="form-group">
                         <label>Temperature</label>
                         <input type="number" id="editAgentTemp" value="0.3" min="0" max="2" step="0.1">
+                    </div>
+                </div>
+
+                <hr style="border-color:var(--border);margin:12px 0;">
+                <div style="margin-bottom:8px;font-size:12px;color:var(--text-muted);line-height:1.5;">Pretool runs before the AI API call. Its output replaces <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:4px;">{{pretool}}</code> in the system prompt.</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Pretool</label>
+                        <select id="editAgentPretool">
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Pretool Input <span style="color:var(--text-muted);font-weight:400">(JSON)</span></label>
+                        <textarea id="editAgentPretoolInput" rows="2" placeholder='{"key": "value"}'></textarea>
                     </div>
                 </div>
 
@@ -1810,11 +1839,22 @@
                     // Clear any previous plan
                     timeline.innerHTML = '';
                     totalTasks = data.tasks.length;
-                    completedCount = 0;
+                    // Count already-completed tasks (preserved from replan)
+                    completedCount = data.tasks.filter(t => t.status === 'completed' || t.status === 'skipped').length;
                     updateStepCounter();
                     stepCounter.classList.add('visible');
                     data.tasks.forEach((task, i) => {
-                        timeline.appendChild(createTaskCard(task, i));
+                        const card = createTaskCard(task, i);
+                        // If task is already completed/skipped (from replan), apply the right status
+                        if (task.status === 'completed' || task.status === 'skipped') {
+                            card.className = `task-card ${task.status}`;
+                            const badge = card.querySelector('.task-badge');
+                            if (badge) {
+                                badge.className = `task-badge badge-${task.status}`;
+                                badge.textContent = task.status;
+                            }
+                        }
+                        timeline.appendChild(card);
                     });
                     // Show approval card below the plan
                     approvalCard.classList.add('visible');
@@ -2056,6 +2096,7 @@
                         <span class="meta-tag success">${a.status || 'active'}</span>
                         <span class="meta-tag">${(a.tools || []).length} tools</span>
                         <span class="meta-tag">${(a.sub_agents || []).length} sub-agents</span>
+                        ${a.pretool ? `<span class="meta-tag accent">pretool</span>` : ''}
                     </div>
                     <div class="item-card-actions">
                         <button class="small-btn accent" onclick="showEditAgentPanel('${a.agent_id}')">Edit</button>
@@ -2065,7 +2106,20 @@
             `).join('');
         }
 
-        function showCreateAgentForm() { $('createAgentForm').style.display = 'block'; }
+        async function showCreateAgentForm() {
+            $('createAgentForm').style.display = 'block';
+            // Populate pretool dropdown with available tools
+            const toolsRes = await apiFetch('/tools');
+            const tools = toolsRes.data || [];
+            const sel = $('agentPretool');
+            sel.innerHTML = '<option value="">None</option>';
+            tools.forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.tool_id;
+                opt.textContent = `${t.name} (${t.tool_id})`;
+                sel.appendChild(opt);
+            });
+        }
         function hideCreateAgentForm() { $('createAgentForm').style.display = 'none'; }
 
         async function createAgent() {
@@ -2078,12 +2132,20 @@
                 model: $('agentModel').value,
                 temperature: parseFloat($('agentTemp').value) || 0.3,
             };
+            const pretoolId = $('agentPretool').value;
+            if (pretoolId) body.pretool = pretoolId;
+            const pretoolInputRaw = $('agentPretoolInput').value.trim();
+            if (pretoolInputRaw) {
+                try { body.pretool_input = JSON.parse(pretoolInputRaw); }
+                catch { return alert('Pretool Input must be valid JSON.'); }
+            }
             const res = await apiFetch('/agents', { method: 'POST', body: JSON.stringify(body) });
             if (res.success) {
                 hideCreateAgentForm();
                 $('agentName').value = '';
                 $('agentDesc').value = '';
                 $('agentPrompt').value = '';
+                $('agentPretoolInput').value = '';
                 await loadAgents();
                 await loadAgentsList();
             } else {
@@ -2130,9 +2192,22 @@
             $('editAgentModel').value = a.model || 'gpt-4o-mini';
             $('editAgentTemp').value = a.temperature ?? 0.3;
 
-            // Populate tool dropdown with all tools
+            // Populate pretool dropdown
             const toolsRes = await apiFetch('/tools');
             const allToolsList = toolsRes.data || [];
+            const pretoolSel = $('editAgentPretool');
+            pretoolSel.innerHTML = '<option value="">None</option>';
+            allToolsList.forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.tool_id;
+                opt.textContent = `${t.name} (${t.tool_id})`;
+                pretoolSel.appendChild(opt);
+            });
+            pretoolSel.value = a.pretool || '';
+            $('editAgentPretoolInput').value = a.pretool_input && Object.keys(a.pretool_input).length
+                ? JSON.stringify(a.pretool_input, null, 2) : '';
+
+            // Populate tool dropdown with all tools
             const attachedIds = new Set(a.tools || []);
             const sel = $('editAgentToolSelect');
             sel.innerHTML = '<option value="">— select tool to attach —</option>';
@@ -2185,6 +2260,15 @@
                 model: $('editAgentModel').value,
                 temperature: parseFloat($('editAgentTemp').value) || 0.3,
             };
+            const pretoolId = $('editAgentPretool').value;
+            body.pretool = pretoolId || null;
+            const pretoolInputRaw = $('editAgentPretoolInput').value.trim();
+            if (pretoolInputRaw) {
+                try { body.pretool_input = JSON.parse(pretoolInputRaw); }
+                catch { return alert('Pretool Input must be valid JSON.'); }
+            } else {
+                body.pretool_input = {};
+            }
             const res = await apiFetch(`/agents/${agentId}`, { method: 'PUT', body: JSON.stringify(body) });
             if (res.success) {
                 await loadAgents();

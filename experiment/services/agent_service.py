@@ -20,8 +20,8 @@ async def invoke_agent(agent_id: str, goal: str, api_key: str = None, org_id: st
     if not resolved_api_key:
         return {"error": "No API key available."}
 
-    # Build dynamic graph from agent config
-    compiled_graph, checkpointer, tool_schemas = await build_agent_graph(agent_config)
+    # Build dynamic graph from agent config (pretool runs here, resolving {{pretool}} in system_prompt)
+    compiled_graph, checkpointer, tool_schemas, resolved_config = await build_agent_graph(agent_config)
 
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
@@ -36,15 +36,15 @@ async def invoke_agent(agent_id: str, goal: str, api_key: str = None, org_id: st
 
     await append_message(session["session_id"], {"role": "user", "content": goal})
 
-    # Build user_config from agent's DB configuration
+    # Build user_config from resolved agent config (system_prompt has {{pretool}} replaced)
     user_config = {
-        "planner_model": agent_config.get("planner_model", agent_config.get("model", "gpt-4o")),
-        "planner_temperature": agent_config.get("temperature", 0.3),
-        "executor_model": agent_config.get("executor_model", agent_config.get("model", "gpt-4o-mini")),
-        "executor_temperature": agent_config.get("temperature", 0.5),
-        "synthesizer_model": agent_config.get("model", "gpt-4o-mini"),
-        "max_tokens": agent_config.get("max_tokens", 4096),
-        "system_prompt": agent_config.get("system_prompt", ""),
+        "planner_model": resolved_config.get("planner_model", resolved_config.get("model", "gpt-4o")),
+        "planner_temperature": resolved_config.get("temperature", 0.3),
+        "executor_model": resolved_config.get("executor_model", resolved_config.get("model", "gpt-4o-mini")),
+        "executor_temperature": resolved_config.get("temperature", 0.5),
+        "synthesizer_model": resolved_config.get("model", "gpt-4o-mini"),
+        "max_tokens": resolved_config.get("max_tokens", 4096),
+        "system_prompt": resolved_config.get("system_prompt", ""),
     }
 
     initial_state = {
@@ -112,4 +112,5 @@ async def get_compiled_graph_for_agent(agent_id: str = None):
         compiled, checkpointer = build_default_graph()
         return compiled, checkpointer, []
 
-    return await build_agent_graph(agent_config)
+    compiled, checkpointer, tool_schemas, _resolved = await build_agent_graph(agent_config)
+    return compiled, checkpointer, tool_schemas

@@ -159,6 +159,13 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                             "options": planner_output.get("question_options", []),
                             "worker_context": worker_ctx,  # so frontend knows this came from a worker doubt
                         })
+                        # Save state with planner output merged (preserves tasks/replan flag for replan questions)
+                        if pending_state_out is not None:
+                            pending_state_out.append({
+                                **state,
+                                **planner_output,
+                                "planner_thinking": thinking,
+                            })
                         return "waiting_for_answer"
                     else:
                         tasks = planner_output.get("tasks", [])
@@ -181,12 +188,14 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                                 "is_replan": planner_output.get("plan_revision_count", 0) > 0,
                             })
                             if pending_state_out is not None:
+                                # Use planner's current_task_index (on replan it points past preserved completed tasks)
+                                plan_task_idx = planner_output.get("current_task_index", 0)
                                 pending_state_out.append({
                                     **state,
                                     "tasks": tasks,
                                     "needs_question": False,
                                     "plan_approved": False,
-                                    "current_task_index": 0,
+                                    "current_task_index": plan_task_idx,
                                     "completed_tasks": state.get("completed_tasks", []),
                                     "scratchpad": state.get("scratchpad", []),
                                     "planner_thinking": thinking,
@@ -423,7 +432,7 @@ async def websocket_endpoint(ws: WebSocket):
                     elif result == "waiting_for_next":
                         ws.pending_state = pending[0] if pending else {**initial_state}
                     elif result == "waiting_for_answer":
-                        pass
+                        ws.pending_state = pending[0] if pending else {**initial_state}
 
                 except Exception as e:
                     await ws_send(ws, "error", {"message": f"Graph error: {str(e)}"})
@@ -445,9 +454,10 @@ async def websocket_endpoint(ws: WebSocket):
                         "question_text": None,
                         "question_options": None,
                         "plan_approved": False,
-                        "tasks": [],
-                        "completed_tasks": [],
-                        "current_task_index": 0,
+                        # Preserve tasks/progress from base_state (important for replan questions)
+                        "tasks": base_state.get("tasks", []),
+                        "completed_tasks": base_state.get("completed_tasks", []),
+                        "current_task_index": base_state.get("current_task_index", 0),
                     }
 
                     new_thread_id = str(uuid.uuid4())
@@ -464,7 +474,7 @@ async def websocket_endpoint(ws: WebSocket):
                     elif result == "waiting_for_answer":
                         ws.state_config = new_config
                         ws.state_thread_id = new_thread_id
-                        ws.pending_state = resume_state
+                        ws.pending_state = pending[0] if pending else resume_state
 
                 except Exception as e:
                     await ws_send(ws, "error", {"message": f"Resume error: {str(e)}"})
@@ -481,8 +491,10 @@ async def websocket_endpoint(ws: WebSocket):
                     resume_state = {
                         **pending_state,
                         "plan_approved": True,
-                        "current_task_index": 0,
-                        "completed_tasks": [],
+                        # Preserve current_task_index and completed_tasks from pending_state
+                        # (on replan, these point past the preserved completed tasks)
+                        "current_task_index": pending_state.get("current_task_index", 0),
+                        "completed_tasks": pending_state.get("completed_tasks", []),
                         "step_approved": True,   # approve the first step immediately
                         "step_feedback": None,
                     }
@@ -503,6 +515,7 @@ async def websocket_endpoint(ws: WebSocket):
                     elif result in ("waiting_for_answer", "waiting_for_approval"):
                         ws.state_config = new_config
                         ws.state_thread_id = new_thread_id
+                        ws.pending_state = pending[0] if pending else resume_state
 
                 except Exception as e:
                     tb = traceback.format_exc()
@@ -575,6 +588,7 @@ async def websocket_endpoint(ws: WebSocket):
                     elif result in ("waiting_for_answer", "waiting_for_approval"):
                         ws.state_config = new_config
                         ws.state_thread_id = new_thread_id
+                        ws.pending_state = pending[0] if pending else resume_state
 
                 except Exception as e:
                     tb = traceback.format_exc()
@@ -700,6 +714,7 @@ async def websocket_endpoint(ws: WebSocket):
                     elif result in ("waiting_for_answer", "waiting_for_approval"):
                         ws.state_config = new_config
                         ws.state_thread_id = new_thread_id
+                        ws.pending_state = pending[0] if pending else resume_state
 
                 except Exception as e:
                     tb = traceback.format_exc()

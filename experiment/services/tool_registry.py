@@ -262,6 +262,29 @@ def extract_tool_schemas(tools: list) -> list[dict]:
     return schemas
 
 
+async def execute_pretool(tool_id: str, pretool_input: dict = None) -> str:
+    """Execute a single tool by its ID with the given input and return its output string.
+
+    Used to run the agent's 'pretool' before the AI API call.
+    The output replaces {{pretool}} placeholders in the system prompt.
+    """
+    from db.tool_db_service import get_tool
+
+    tool_config = await get_tool(tool_id)
+    if not tool_config:
+        return f"[pretool error: tool '{tool_id}' not found]"
+
+    if tool_config.get("status") != "active":
+        return f"[pretool error: tool '{tool_id}' is not active]"
+
+    try:
+        lc_tool = build_langchain_tool(tool_config)
+        result = await lc_tool.ainvoke(pretool_input or {})
+        return str(result) if not isinstance(result, str) else result
+    except Exception as e:
+        return f"[pretool error: {e}]"
+
+
 async def load_tools_for_agent(agent_id: str) -> list:
     """Load all active tools for an agent from the DB and convert to LangChain tools."""
     agent = await get_agent(agent_id)
