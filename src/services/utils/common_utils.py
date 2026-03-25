@@ -842,6 +842,10 @@ async def process_batch_background_tasks(parsed_data, result, processed_prompts,
         await asyncio.gather(*tasks, return_exceptions=True)
 
 def build_service_params_for_batch(parsed_data, custom_config, model_output_config):
+
+    # Temporary fix for batch - stream bug
+    custom_config.pop("stream", None)
+
     return {
         "customConfig": custom_config,
         "configuration": parsed_data["configuration"],
