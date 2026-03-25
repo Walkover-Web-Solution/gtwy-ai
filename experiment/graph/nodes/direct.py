@@ -9,13 +9,15 @@ from graph.state import AgentState
 
 async def _run_direct(
     state: AgentState,
-    model: str = "gpt-4o-mini",
-    temperature: float = 0.3,
+    model: str = None,
+    temperature: float = None,
     tools: list = None,
     tools_by_name: dict = None,
     system_prompt: str = None,
 ) -> dict:
     """Direct mode: conversational agent with tools and persistent message history.
+
+    Reads configuration from state['user_config'] with fallback to function params and defaults.
 
     Designed for agents like FBAI that:
     - Build output incrementally across multiple turns (e.g. one automation step per turn)
@@ -27,13 +29,19 @@ async def _run_direct(
       built_steps      — all response objects accumulated so far
       human_input      — "continue" or user follow-up message for next turn
     """
+    config = state.get("user_config") or {}
+
+    resolved_model = model or config.get("direct_model", "gpt-4o-mini")
+    resolved_temp = temperature if temperature is not None else config.get("planner_temperature", 0.3)
+    resolved_prompt = system_prompt or config.get("system_prompt") or None
+
     resolved_tools = tools or TOOLS
     resolved_tools_by_name = tools_by_name or TOOLS_BY_NAME
 
     llm = ChatOpenAI(
-        model=model,
+        model=resolved_model,
         api_key=state["api_key"],
-        temperature=temperature,
+        temperature=resolved_temp,
         streaming=True,
     )
     if resolved_tools:
@@ -44,8 +52,8 @@ async def _run_direct(
     built_steps = list(state.get("built_steps") or [])
 
     lc_messages = []
-    if system_prompt:
-        lc_messages.append(SystemMessage(content=system_prompt))
+    if resolved_prompt:
+        lc_messages.append(SystemMessage(content=resolved_prompt))
 
     for m in history:
         role = m.get("role")
@@ -125,25 +133,30 @@ async def _run_direct(
 
 
 async def direct_node(state: AgentState) -> dict:
-    """Default direct node — uses built-in tools and gpt-4o-mini."""
+    """Default direct node — reads config from state['user_config']."""
     return await _run_direct(state)
 
 
 def make_direct_node(agent_config: dict, tools: list):
-    """Factory: creates a direct node parameterized by agent DB config."""
-    model = agent_config.get("model", "gpt-4o-mini")
-    temperature = agent_config.get("temperature", 0.3)
-    system_prompt = agent_config.get("system_prompt", "") or None
+    """Factory: creates a direct node parameterized by agent DB config.
+    
+    Injects agent_config values into state['user_config'] before calling _run_direct.
+    """
     tools_by_name = {t.name: t for t in tools}
 
+    agent_defaults = {
+        "direct_model": agent_config.get("model", "gpt-4o-mini"),
+        "planner_temperature": agent_config.get("temperature", 0.3),
+        "system_prompt": agent_config.get("system_prompt", ""),
+    }
+
     async def dynamic_direct_node(state: AgentState) -> dict:
+        merged_config = {**agent_defaults, **(state.get("user_config") or {})}
+        merged_state = {**state, "user_config": merged_config}
         return await _run_direct(
-            state,
-            model=model,
-            temperature=temperature,
+            merged_state,
             tools=tools,
             tools_by_name=tools_by_name,
-            system_prompt=system_prompt,
         )
 
     return dynamic_direct_node

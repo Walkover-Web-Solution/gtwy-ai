@@ -73,10 +73,12 @@ async def build_agent_graph(agent_config: dict):
 
     Loads tools from DB, creates A2A tools for sub-agents, and builds
     planner/executor/synthesizer nodes parameterized by the agent config.
+
+    Returns (compiled_graph, checkpointer, tool_schemas).
     """
     from db.agent_db_service import get_agent
     from services.a2a_service import create_a2a_tool
-    from services.tool_registry import load_tools_for_agent
+    from services.tool_registry import extract_tool_schemas, load_tools_for_agent
 
     agent_id = agent_config["agent_id"]
 
@@ -90,10 +92,14 @@ async def build_agent_graph(agent_config: dict):
             a2a_tool = create_a2a_tool(sub_agent_id, sub_agent)
             tools.append(a2a_tool)
 
-    # 3. Build parameterized node functions
-    dynamic_planner = make_planner_node(agent_config)
+    # 3. Extract tool schemas for planner visibility
+    tool_schemas = extract_tool_schemas(tools)
+
+    # 4. Build parameterized node functions
+    dynamic_planner = make_planner_node(agent_config, tools=tools)
     dynamic_executor = make_executor_node(agent_config, tools)
     dynamic_synthesizer = make_synthesizer_node(agent_config)
     dynamic_direct = make_direct_node(agent_config, tools)
 
-    return _build_graph_skeleton(dynamic_planner, dynamic_executor, dynamic_synthesizer, dynamic_direct)
+    compiled, checkpointer = _build_graph_skeleton(dynamic_planner, dynamic_executor, dynamic_synthesizer, dynamic_direct)
+    return compiled, checkpointer, tool_schemas

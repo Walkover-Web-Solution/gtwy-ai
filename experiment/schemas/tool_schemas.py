@@ -44,6 +44,36 @@ class CreateToolRequest(BaseModel):
     status: Optional[str] = Field("active", description="Tool status: active | inactive")
 
 
+class AddFieldRequest(BaseModel):
+    """Normal mode: add/update a single field variable to a tool."""
+    field_name: str = Field(..., min_length=1, max_length=100, description="Variable name (key)")
+    type: Optional[str] = Field("string", description="Data type: string | integer | number | boolean")
+    description: Optional[str] = Field("", max_length=500, description="What this variable is for (shown to LLM)")
+    source: Optional[str] = Field("ai", description="'ai' = LLM fills it, 'user' = injected from static_values")
+    required: Optional[bool] = Field(False, description="Whether this variable is required")
+    default: Optional[str] = Field(None, description="Default value if not provided")
+
+
+class BulkFieldsRequest(BaseModel):
+    """Advance mode: paste full fields JSON at once, replacing all existing fields."""
+    fields: dict = Field(
+        ...,
+        description=(
+            "Complete fields JSON object. "
+            'Example: {"query": {"type": "string", "description": "Search query", "source": "ai"}, '
+            '"api_key": {"type": "string", "source": "user"}}'
+        ),
+    )
+    required_params: Optional[list] = Field(
+        None,
+        description="List of required param names. If not provided, existing required_params are kept.",
+    )
+    static_values: Optional[dict] = Field(
+        None,
+        description="Static values for 'user' source fields. If not provided, existing static_values are kept.",
+    )
+
+
 class UpdateToolRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     title: Optional[str] = None

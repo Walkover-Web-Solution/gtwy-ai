@@ -15,7 +15,15 @@ def route_after_router(state: AgentState) -> str:
 
 
 def route_after_planner(state: AgentState) -> str:
-    """After planning: if AI needs to ask a question → interrupt, else wait for plan approval."""
+    """After planning:
+    - If planner answered a worker question → back to executor
+    - If AI needs to ask the user something → interrupt
+    - If plan not approved → wait for approval
+    - Otherwise → executor
+    """
+    # Planner answered a worker's clarification → resume executor
+    if state.get("planner_response") and state.get("worker_question_task_id"):
+        return "executor"
     if state.get("needs_question"):
         return "wait_for_human"
     if not state.get("plan_approved"):
@@ -37,11 +45,16 @@ def _has_pending_tasks(state: AgentState) -> bool:
 
 def route_after_executor(state: AgentState) -> str:
     """After executing a batch of tasks:
+    - If worker needs clarification from planner → planner
     - If a task failed and needs re-plan → planner (re-plan path)
     - If more runnable tasks remain AND step already approved → executor
     - If more runnable tasks remain AND need approval → wait for step approval
     - If no more tasks → synthesizer
     """
+    # Worker asked planner a question → route to planner for clarification
+    if state.get("needs_worker_clarification"):
+        return "planner"
+
     # Re-plan path: executor flagged a failure
     if state.get("needs_replan"):
         return "planner"

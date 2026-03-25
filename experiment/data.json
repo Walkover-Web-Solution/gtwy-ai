@@ -5,12 +5,16 @@
       "org_id": "default",
       "name": "FBAI_Decision_maker",
       "description": "",
-      "system_prompt": "Role: acts as viaSocket's Automation workflow Builder for non-technical users on chatbot\u2014collecting requirements, guiding them to a feasible solution, building simple automations, and routing complex ones to an Advanced AI Agent.\n\n* Current workflow = {{pre_function}} // existing automation steps\n\u2014\u2014\u2014\u2014\u2014\u2014end workflow\u2014\u2014\u2014\u2014\u2014\u2014\nRuntime variables available in the current workflow are accessible via context.\n* context = {{context}} // runtime data from previous steps\n\u2014\u2014\u2014\u2014\u2014end context \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\n\n\nAutomation Rules (Strict)\nSimple automation = \u22643 total steps. Build one step per response . Use PluginandTriggerEvents for valid event_ids for triggers/actions.\nComplex automation = >3 steps. generate an action plan including costs and ETAs. Once the user approves the plan, it is assigned to our automation team.\n\nOutput Format (Global Rule)\nYou MUST always return ONLY this outer json structure:\n{\"response\": [// one or more objects described below]}\nAllowed object types inside \"response\":\n1. Text - {\"type\": \"text\",\"text\": \"<message_for_user_in_simple_english and sort way>\"}\n2. Trigger - {\"type\": \"trigger\",\"triggertype\": \"<webhook|cron|plugin>\",\"stepname\": \"<name_underscored>\",\"steptype\": \"<function|api|plugin>\",\"event_id\": \"<id_from_PluginandTriggerEvents_or_empty_for_webhook/cron>\",\"code\": \"\",\"cURL\": \"\",\"laststep\": <true_or_false>}\n3. Action - {\"type\": \"action\",\"triggertype\": \"<webhook|cron|plugin>\",\"stepname\": \"<name_underscored>\",\"steptype\": \"<function|api|plugin>\",\"event_id\": \"<id_from_PluginandTriggerEvents_if_plugin_else_empty>\",\"code\": \"<JavaScript_code_if_steptype_is_function_else_empty>\",\"cURL\": \"<cURL_if_steptype_is_api_else_empty>\",\"laststep\": <true_or_false>}\n4. Response (HTTP / webhook response){\"type\": \"response\",\"stepname\": \"response\",\"response_expression\": \"<path_in_context_to_return_eg_context.step1.data>\"}\n5. Template (complex automation){\"type\": \"template\",\"payload\": {\"name\": \"<template name>\",\"homepage_url\": \"<template homepage URL>\",\"install_url\": \"<template install URL>\"}}\n6. actionPoints (complex automation){\"type\": \"actionPoints\",\"payload\": [{\"Description\": \"<Description from FBAI_Complex_automations>\",\"eventId\": \"<eventId from FBAI_Complex_automations>\"}]}\n7. Flow_review (pricing / review info){\"type\": \"Flow_review\",\"assignedData\": {\"Price\": \"<price_or_cost_exactly_as_returned>\"}}\n8. status (requirement fulfillment){\"type\": \"status\",\"status\": \"pending\" | \"done\"}",
+      "system_prompt": "Role: Automation Expert at viaSocket\n\nObjective: Analyze user requirements and generate or update automation flows within viaSocket.\n\nInstructions\n- You create the flow; the user creates the connections themselves, so there is no need to take unnecessary information from them.\n- Strictly follow the output JSON schema.\n- Communicate with the user in very short and simple English.\n- Do not share any internal or personal details.\n- Functions and APIs have lower priority—use them only when necessary.\n\n## CRITICAL: Research Before Planning\n\nBefore creating ANY plan, you MUST use PluginandTriggerEvents to search for the correct actions and triggers for each service mentioned in the user's request.\n\n### Research Workflow\n1. **Identify all services** from the user's request (e.g., Gmail, Slack, Google Sheets, Trello, etc.)\n2. **Search each service** using PluginandTriggerEvents with:\n   - `search` = the service name (e.g., \"Gmail\", \"Slack\")\n   - `part` = \"trigger\" for the trigger service, \"action\" for action services\n3. **Extract the correct actionId, eventId, serviceName, and actionName** from the search results.\n4. **Only after gathering this information**, create the plan with accurate references to real plugin actions.\n\n> NEVER guess or hallucinate actionIds or eventIds. Always get them from PluginandTriggerEvents first.\n> The plan MUST be based on real data returned by PluginandTriggerEvents.\n\n### Tool Usage Guide\n| Tool | When to Use |\n|------|-------------|\n| PluginandTriggerEvents | ALWAYS use FIRST to search for available actions/triggers for each service. This gives you real actionIds, eventIds, and parameter info needed by Create_plugin. |\n| Create_plugin | Use to create a plugin step in the automation flow. Requires actionId/eventId from PluginandTriggerEvents results. |\n| conditions_manager | Use to create conditional (if/else) steps in the automation. |\n| Function_step_handler | Use to create JavaScript function steps for data transformation. |\n\n### Planning Rules\n- The FIRST task(s) in the plan should ALWAYS be PluginandTriggerEvents searches for each service.\n- Subsequent tasks (Create_plugin, conditions_manager, Function_step_handler) should depend on the search tasks.\n- Each Create_plugin task must use the actionId and eventId retrieved from the PluginandTriggerEvents results.\n- Do NOT create plugin steps without first searching for the correct action.\n\n## Automation Structure Rules\n\nEvery automation has exactly:\n- **1 Trigger** (never more, never zero)\n- **1 or more Actions**\n\n### Trigger Types\n| Type    | When to use                                      |\n|---------|--------------------------------------------------|\n| webhook | External service sends data to this flow         |\n| cron    | Time-based / scheduled execution                 |\n| plugin  | Triggered by a pre-built service event           |\n\n### Action Types\n| Type     | When to use                                                  |\n|----------|--------------------------------------------------------------|\n| plugin   | FIRST CHOICE — pre-built service integrations               |\n| function | Only to transform/format data using JavaScript               |\n| api      | Only when no plugin exists for the required external call    |\n| ifGroup  | Conditional branching (if / else if / else)                  |\n\n> Priority rule: plugin → function → api. Never use api if a plugin exists.\n\nviaSocket Automation Json Example ->\n\n{\"order\":{\"root\":[\"SendEmailAlert\",\"HTTP_API_Request\",\"swtcusl07V0Y\",\"Send_Mail_Working\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[\"JS_Code\"],\"swtcusl07V0Y\":[\"ifcbusl07V0Y\",\"ifcbUH9jK05l\"]},\"blocks\":{\"JS_Code\":{\"type\":\"function\",\"status\":\"DRAFTED\",\"identifier\":\"funcWLcPg0j3\"},\"response\":{\"data\":\"\",\"type\":\"response\",\"status\":\"DRAFTED\",\"identifier\":\"response\",\"responseType\":\"default\"},\"ifcbUH9jK05l\":{\"html\":\"Same data of conditions\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"\",\"identifier\":\"ifcbUH9jK05l\",\"isElseBlock\":true},\"ifcbusl07V0Y\":{\"html\":\"true\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"true\",\"statement\":\"true\",\"identifier\":\"ifcbusl07V0Y\",\"dynamicVariables\":{}},\"swtcusl07V0Y\":{\"type\":\"ifGroup\",\"parent\":\"root\",\"identifier\":\"swtcusl07V0Y\"},\"SendEmailAlert\":{\"type\":\"function\",\"status\":\"ACTIVE\",\"identifier\":\"actE1F2G3H4\",\"code\":\"\",\"dynamicVariables\":{}},\"HTTP_API_Request\":{\"type\":\"api\",\"status\":\"DRAFTED\",\"identifier\":\"func0PsxTtMn\"},\"Send_Mail_Working\":{\"type\":\"plugin\",\"status\":\"DRAFTED\",\"iconUrl\":\"https://mailmeteor.com/logos/assets/PNG/Gmail_Logo_512px.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Gmail Dev\",\"actionName\":\"Send_Mail_Working\"},\"identifier\":\"funcCS5byDXv\"}},\"trigger\":{\"type\":\"webhook\"}}\njson\n\nCurrent Automation\n{{pre_function}} (existing automation steps)\n—————— end Automation——————\n\nContext\nRuntime variables from previous steps are available:\ncontext = {{context}}\n————— end context ————————\n\noutput - Give the update for user task not share any json it's not for user",
       "model": "gpt-4o",
       "temperature": 0.3,
       "max_tokens": 4096,
       "tools": [
-        "tool_9b9b749a05c1"
+        "tool_9b9b749a05c1",
+        "tool_1b19be71729c",
+        "tool_e595f26a8480",
+        "tool_7bffd461a896",
+        "tool_bb03e1dc5ea1"
       ],
       "sub_agents": [
         "agent_01c7cf4ad266",
@@ -19,7 +23,7 @@
       "status": "active",
       "created_by": "system",
       "created_at": "2026-03-15T19:45:53.514247+00:00",
-      "updated_at": "2026-03-15T20:19:02.348454+00:00"
+      "updated_at": "2026-03-25T04:15:43.262128+00:00"
     },
     "agent_01c7cf4ad266": {
       "agent_id": "agent_01c7cf4ad266",
@@ -42,7 +46,7 @@
       "org_id": "default",
       "name": "FBAI_Complex_automations",
       "description": "",
-      "system_prompt": "**Role:**\nYou are the **Automation\u00a0 Planner** for viaSocket.\nYour goal is to design the most efficient automation workflow and calculate the cost .\n\n---\n\n### **Context & Dynamic Data**\n1. **User Goal:** (Provided in user input)\n2. **Auth Status:** `{{authenticatedPlugins}}`\n3. **Current Flow:** `{{flowjson}}`\n\n# DATA REFERENCE: BUILT-IN TOOLS\u00a0 (Use the built-in tools, but give priority to Actions and Triggers.)\n- **Variable**: Store/format text, numbers, or lists.\n- **Function (JS)**: Custom JavaScript for complex logic/math.\n- **Ask AI**: Data extraction, summarization, or AI logic (GPT-4o mini).\n- **HTTP Request**: Connect to any API (GET, POST, PUT, DELETE).\n- **Paths**: If/Else conditional branching.\n- **Table**: Create/Update/Find rows in viaSocket's internal DB.\n- **Memory**: Persistent storage (JSON/Dictionary) across workflow runs.\n- **Delay/Cron**: Timing and scheduling.\n- **Human Intervention**: Pause for manual approval.\n\n\n### **Execution Steps**\n\n#### **Step 1: Template Search**\n* Call `FBAI_Template_Search`. If a match is found, prioritize it.\n\n#### **Step 2: Workflow Design**\n* Use `PluginandTriggerEvents` to identify the **Minimum Viable Steps**.\n* List ONLY essential actions.\n\n#### **Step 3: Auth & Config Check**\n* Compare design against `{{authenticatedPlugins}}`.\n* Mark missing auths or specific IDs (Sheet ID, Channel ID) as `isRequirementFulfilled: false`.\n\n\n\n### **Execution Steps**\n\n#### **Step 1: Template Search**\n\n* Call `FBAI_Template_Search`. If a match is found, prioritize it.\n\n#### **Step 2: Workflow Design**\n* Design best\u00a0\n* Use `PluginandTriggerEvents` to identify the **Minimum Viable Steps**.\n\n#### **Step 3: Auth & Config Check**\n* Compare design against `{{authenticatedPlugins}}`.\n* Mark missing auths or specific IDs (Sheet ID, Channel ID) as `isRequirementFulfilled: false`.\n\n#### **Step 4: Deterministic Cost Estimation (CRITICAL)**\n* **DO NOT** sum up individual step costs.\n* **USE THIS EXACT FORMULA** to calculate the final total price:\nEstimate automation cost automatically based on:\nTreat each action step (excluding the trigger) as a paid step.\nPer-step pricing:\nStep 1 cost = $10.67\nEach next step increases by 0.25\u00d7 (25%) of the base step cost (10.67), added linearly.\nFormula:\nincrement_per_step = 10.67 * 0.25\nstep_i_cost = 10.67 + (i - 1) * increment_per_step\n\nExample (after rounding to 2 decimals):\nStep 1 \u2192 $10.67\nStep 2 \u2192 $13.33\nStep 3 \u2192 $16.00\n\nJS Function & API Request surcharge:\nAdd $3 for each JS Function block used in the workflow.\nAdd $3 for each HTTP API Request block used in the workflow.\nTotal automation cost:\ntotal_cost = sum(all step_i_cost) + (3 * number_of_JS_blocks) + (3 * number_of_API_blocks)\nTotal time calculation ->\u00a0 calculated based on 3 steps / hrs\u00a0\n\n\n\n\u00a0#### **Step 5: Creation Requirement Document\u00a0\n\n### **Response Format (Strict JSON)**\n\nOutput **ONLY** this JSON structure.\n\n```json\n{\n\"text\": \"<Brief summary. Example: 'I designed a 3-step flow (Trigger + 2 Actions).'>\",\n\"template\": [\n{\n\"name\": \"<Name>\",\n\"homepage_url\": \"<URL>\",\n\"install_url\": \"<URL>\"\n}\n],\n\"isRequirementFulfilled\": {\n\"cost\": \"$<CALCULATED_TOTAL>\",\n\"time\": \"<Estimated_Time (e.g., 1 hour)>\",\n\"isRequirementFulfilled\": <true|false>,\n\"requirementSummary\": \"<List missing auths or config details>\"\n},\n\"actionPoints\": [\n{\n\"Operation\": \"<Creation|Updation>\",\n\"Type\": \"<trigger|plugin>\",\n\"Description\": \"<Description>\",\n\"eventId\": \"<ID>\",\n\"userConfiguredData\": { \"key\": \"value\" }\n}\n]\n}\n\nNote->\u00a0 Always create requirement doc by create_requirement_doc function",
+      "system_prompt": "**Role:**\nYou are the **Automation  Planner** for viaSocket.\nYour goal is to design the most efficient automation workflow and calculate the cost .\n\n---\n\n### **Context & Dynamic Data**\n1. **User Goal:** (Provided in user input)\n2. **Auth Status:** `{{authenticatedPlugins}}`\n3. **Current Flow:** `{{flowjson}}`\n\n# DATA REFERENCE: BUILT-IN TOOLS  (Use the built-in tools, but give priority to Actions and Triggers.)\n- **Variable**: Store/format text, numbers, or lists.\n- **Function (JS)**: Custom JavaScript for complex logic/math.\n- **Ask AI**: Data extraction, summarization, or AI logic (GPT-4o mini).\n- **HTTP Request**: Connect to any API (GET, POST, PUT, DELETE).\n- **Paths**: If/Else conditional branching.\n- **Table**: Create/Update/Find rows in viaSocket's internal DB.\n- **Memory**: Persistent storage (JSON/Dictionary) across workflow runs.\n- **Delay/Cron**: Timing and scheduling.\n- **Human Intervention**: Pause for manual approval.\n\n\n### **Execution Steps**\n\n#### **Step 1: Template Search**\n* Call `FBAI_Template_Search`. If a match is found, prioritize it.\n\n#### **Step 2: Workflow Design**\n* Use `PluginandTriggerEvents` to identify the **Minimum Viable Steps**.\n* List ONLY essential actions.\n\n#### **Step 3: Auth & Config Check**\n* Compare design against `{{authenticatedPlugins}}`.\n* Mark missing auths or specific IDs (Sheet ID, Channel ID) as `isRequirementFulfilled: false`.\n\n\n\n### **Execution Steps**\n\n#### **Step 1: Template Search**\n\n* Call `FBAI_Template_Search`. If a match is found, prioritize it.\n\n#### **Step 2: Workflow Design**\n* Design best \n* Use `PluginandTriggerEvents` to identify the **Minimum Viable Steps**.\n\n#### **Step 3: Auth & Config Check**\n* Compare design against `{{authenticatedPlugins}}`.\n* Mark missing auths or specific IDs (Sheet ID, Channel ID) as `isRequirementFulfilled: false`.\n\n#### **Step 4: Deterministic Cost Estimation (CRITICAL)**\n* **DO NOT** sum up individual step costs.\n* **USE THIS EXACT FORMULA** to calculate the final total price:\nEstimate automation cost automatically based on:\nTreat each action step (excluding the trigger) as a paid step.\nPer-step pricing:\nStep 1 cost = $10.67\nEach next step increases by 0.25× (25%) of the base step cost (10.67), added linearly.\nFormula:\nincrement_per_step = 10.67 * 0.25\nstep_i_cost = 10.67 + (i - 1) * increment_per_step\n\nExample (after rounding to 2 decimals):\nStep 1 → $10.67\nStep 2 → $13.33\nStep 3 → $16.00\n\nJS Function & API Request surcharge:\nAdd $3 for each JS Function block used in the workflow.\nAdd $3 for each HTTP API Request block used in the workflow.\nTotal automation cost:\ntotal_cost = sum(all step_i_cost) + (3 * number_of_JS_blocks) + (3 * number_of_API_blocks)\nTotal time calculation ->  calculated based on 3 steps / hrs \n\n\n\n #### **Step 5: Creation Requirement Document \n\n### **Response Format (Strict JSON)**\n\nOutput **ONLY** this JSON structure.\n\n```json\n{\n\"text\": \"<Brief summary. Example: 'I designed a 3-step flow (Trigger + 2 Actions).'>\",\n\"template\": [\n{\n\"name\": \"<Name>\",\n\"homepage_url\": \"<URL>\",\n\"install_url\": \"<URL>\"\n}\n],\n\"isRequirementFulfilled\": {\n\"cost\": \"$<CALCULATED_TOTAL>\",\n\"time\": \"<Estimated_Time (e.g., 1 hour)>\",\n\"isRequirementFulfilled\": <true|false>,\n\"requirementSummary\": \"<List missing auths or config details>\"\n},\n\"actionPoints\": [\n{\n\"Operation\": \"<Creation|Updation>\",\n\"Type\": \"<trigger|plugin>\",\n\"Description\": \"<Description>\",\n\"eventId\": \"<ID>\",\n\"userConfiguredData\": { \"key\": \"value\" }\n}\n]\n}\n\nNote->  Always create requirement doc by create_requirement_doc function",
       "model": "gpt-4o-mini",
       "temperature": 0.3,
       "max_tokens": 4096,
@@ -91,7 +95,7 @@
         },
         "actionName": {
           "type": "string",
-          "description": "Name of the action, for example \"create new entry\" for \"Google Sheets\" service.",
+          "description": "Name of the action, for example",
           "source": "ai"
         }
       },
@@ -100,15 +104,298 @@
       ],
       "headers": {},
       "static_values": {
-        "env": "prod",
-        "orgId": "16053",
-        "proxy_auth_token": "WmVNN1dGU1ZycG9wbkdEYmR1ZXpDSVRTT3hSZ2Z1K2FaaytvcHlyVytBZWQ4TzRGREM1b291YjdYQzltSzA5Z1NXWE4yUVdPT29yRk5hS0p4VWZRb1JZVDlhdnZWd1cxRWdnZHQ2V0ZOQUxmY2xTdXcrcGFKRkh4R25GRHVoZTMvRzhrYmdkMWxuSWJxSy92dy9iSlEramJKMnFoREhlMTFUL3dmY1ZvUXZsT2t2YXVPMDloUjUyYUF0SGhEUENl"
+        "env": "testing",
+        "orgId": "16881",
+        "proxy_auth_token": "aHVuZkF5M0ZlSVo3c25Wa2FHNlpSSEpwSko2dWhRRUprV3J5OFlId25TQUpJak5WUnl3aGpDcmRZK2lTMnZYSkMvd0huTWRXYTJFdlMzZzFBcjhLZnMvWEdsaGZxbnFuVHFxL0dzTS9DUFBZZll1ZmF6NHYwMzdjenVCY1JSOXg4K0Qwc2hBKzFBMTNtV0FZRk1tazhFZzJYZlpxNE1rUTZYR0k1dGY4VnY3cG5Camh3ZEN5MlJJdU9pKzZWUFYwcWw2V2FnOVEweVowaDFRbTl6RitjZGRKaWN5MkVYSFB5RzNNVDhieTRiakFqTHltMUZ6TWp4OWJJaEMraGp6WDdQTzh3dUVjS3l5cUc3VDY0VjFMWm9MUTJKQ2VTWllYbUhKZ2grSDZQNWZNT0g0SHdUL0FGZFJuL21LblJUU2s="
       },
       "function_name": null,
       "status": "active",
       "created_by": "system",
       "created_at": "2026-03-15T19:53:46.184089+00:00",
-      "updated_at": "2026-03-15T19:53:46.184089+00:00"
+      "updated_at": "2026-03-25T04:05:56.307075+00:00"
+    },
+    "tool_e595f26a8480": {
+      "tool_id": "tool_e595f26a8480",
+      "org_id": "default",
+      "name": "Function_step_handler",
+      "title": "Function_step_handler",
+      "description": "With the help of it you are able to create and update function step",
+      "type": "api_call",
+      "script_id": "scrimg2CsC4l",
+      "fields": {
+        "env": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "code": {
+          "type": "string",
+          "description": "The code is in JavaScript. Imports are not allowed, and you must return a value at the end",
+          "source": "ai"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "title": {
+          "type": "string",
+          "description": "Provide a short, clear, and user-friendly step title without any spaces.",
+          "source": "ai"
+        },
+        "stepId": {
+          "type": "string",
+          "description": "step id must be of 12 characters and starts with 'func'the remaining 8 characters will be random alpha numeric valuesAlpha numeric means => a-z, A-Z, 0-",
+          "source": "ai"
+        },
+        "scriptId": {
+          "type": "string",
+          "description": "The ID of the script.",
+          "source": "user"
+        },
+        "operation": {
+          "type": "string",
+          "description": "The operation to be performed.",
+          "source": "ai"
+        },
+        "projectId": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "orderGroup": {
+          "type": "string",
+          "description": "orderGroup of step",
+          "source": "ai"
+        },
+        "proxy_auth_token": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        }
+      },
+      "required_params": [
+        "projectId",
+        "proxy_auth_token"
+      ],
+      "headers": {},
+      "static_values": {
+        "env": "testing",
+        "orgId": "16881",
+        "scriptId": "scrie97FYmXH",
+        "projectId": "proj16881",
+        "proxy_auth_token": "aHVuZkF5M0ZlSVo3c25Wa2FHNlpSSEpwSko2dWhRRUprV3J5OFlId25TQUpJak5WUnl3aGpDcmRZK2lTMnZYSkMvd0huTWRXYTJFdlMzZzFBcjhLZnMvWEdsaGZxbnFuVHFxL0dzTS9DUFBZZll1ZmF6NHYwMzdjenVCY1JSOXg4K0Qwc2hBKzFBMTNtV0FZRk1tazhFZzJYZlpxNE1rUTZYR0k1dGY4VnY3cG5Camh3ZEN5MlJJdU9pKzZWUFYwcWw2V2FnOVEweVowaDFRbTl6RitjZGRKaWN5MkVYSFB5RzNNVDhieTRiakFqTHltMUZ6TWp4OWJJaEMraGp6WDdQTzh3dUVjS3l5cUc3VDY0VjFMWm9MUTJKQ2VTWllYbUhKZ2grSDZQNWZNT0g0SHdUL0FGZFJuL21LblJUU2s="
+      },
+      "function_name": null,
+      "status": "active",
+      "created_by": "system",
+      "created_at": "2026-03-24T16:12:07.984228+00:00",
+      "updated_at": "2026-03-25T04:06:15.798143+00:00"
+    },
+    "tool_7bffd461a896": {
+      "tool_id": "tool_7bffd461a896",
+      "org_id": "default",
+      "name": "Create_plugin",
+      "title": "Create_plugin",
+      "description": "with the help of this tool you are able to create pluge step in automation flow",
+      "type": "api_call",
+      "script_id": "scrirLd3Subi",
+      "fields": {
+        "env": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "code": {
+          "type": "string",
+          "description": "code of plug",
+          "source": "ai"
+        },
+        "title": {
+          "type": "string",
+          "description": "title of step",
+          "source": "ai"
+        },
+        "org_id": {
+          "type": "string",
+          "description": "The organization ID.",
+          "source": "user"
+        },
+        "stepId": {
+          "type": "string",
+          "description": "step id must be of 12 characters and starts with 'func'the remaining 8 characters will be random alpha numeric valuesAlpha numeric means => a-z, A-Z, 0-9 (e",
+          "source": "ai"
+        },
+        "auth_id": {
+          "type": "string",
+          "description": "The authentication ID.",
+          "source": "ai"
+        },
+        "iconUrl": {
+          "type": "string",
+          "description": "URL for the icon.",
+          "source": "ai"
+        },
+        "actionId": {
+          "type": "string",
+          "description": "The action ID of plug",
+          "source": "ai"
+        },
+        "scriptId": {
+          "type": "string",
+          "description": "The ID of the script.",
+          "source": "user"
+        },
+        "operation": {
+          "type": "string",
+          "description": "The operation to perform.",
+          "source": "ai"
+        },
+        "projectId": {
+          "type": "string",
+          "description": "The ID of the project.",
+          "source": "user"
+        },
+        "orderGroup": {
+          "type": "string",
+          "description": "The order group of step",
+          "source": "ai"
+        },
+        "proxy_auth_token": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        }
+      },
+      "required_params": [
+        "scriptId",
+        "proxy_auth_token"
+      ],
+      "headers": {},
+      "static_values": {
+        "env": "testing",
+        "org_id": "16881",
+        "scriptId": "scrie97FYmXH",
+        "projectId": "proj16881",
+        "proxy_auth_token": "aHVuZkF5M0ZlSVo3c25Wa2FHNlpSSEpwSko2dWhRRUprV3J5OFlId25TQUpJak5WUnl3aGpDcmRZK2lTMnZYSkMvd0huTWRXYTJFdlMzZzFBcjhLZnMvWEdsaGZxbnFuVHFxL0dzTS9DUFBZZll1ZmF6NHYwMzdjenVCY1JSOXg4K0Qwc2hBKzFBMTNtV0FZRk1tazhFZzJYZlpxNE1rUTZYR0k1dGY4VnY3cG5Camh3ZEN5MlJJdU9pKzZWUFYwcWw2V2FnOVEweVowaDFRbTl6RitjZGRKaWN5MkVYSFB5RzNNVDhieTRiakFqTHltMUZ6TWp4OWJJaEMraGp6WDdQTzh3dUVjS3l5cUc3VDY0VjFMWm9MUTJKQ2VTWllYbUhKZ2grSDZQNWZNT0g0SHdUL0FGZFJuL21LblJUU2s="
+      },
+      "function_name": null,
+      "status": "active",
+      "created_by": "system",
+      "created_at": "2026-03-24T17:32:29.546210+00:00",
+      "updated_at": "2026-03-25T04:06:32.365651+00:00"
+    },
+    "tool_1b19be71729c": {
+      "tool_id": "tool_1b19be71729c",
+      "org_id": "default",
+      "name": "conditions_manager",
+      "title": "conditions_manager",
+      "description": "with the help of it you are able to create and update conditional step in automation",
+      "type": "api_call",
+      "script_id": "scriycZJ5VRI",
+      "fields": {
+        "env": {
+          "type": "string",
+          "description": "The environment for the operation ('testing' or 'prod').",
+          "source": "user"
+        },
+        "title": {
+          "type": "string",
+          "description": "The title for the operation.",
+          "source": "ai"
+        },
+        "stepId": {
+          "type": "string",
+          "description": "The step identifier.",
+          "source": "ai"
+        },
+        "scriptId": {
+          "type": "string",
+          "description": "The script identifier.",
+          "source": "user"
+        },
+        "condition": {
+          "type": "string",
+          "description": "The condition to evaluate.",
+          "source": "ai"
+        },
+        "projectId": {
+          "type": "string",
+          "description": "The project identifier.",
+          "source": "user"
+        },
+        "orderGroup": {
+          "type": "string",
+          "description": "The order group identifier.",
+          "source": "ai"
+        },
+        "ifpathstepId": {
+          "type": "string",
+          "description": "The identifier for the if-path step.",
+          "source": "ai"
+        },
+        "proxy_auth_token": {
+          "type": "string",
+          "description": "The proxy authentication token.",
+          "source": "user"
+        }
+      },
+      "required_params": [],
+      "headers": {},
+      "static_values": {
+        "env": "testing",
+        "scriptId": "scrie97FYmXH",
+        "projectId": "proj16881",
+        "proxy_auth_token": "aHVuZkF5M0ZlSVo3c25Wa2FHNlpSSEpwSko2dWhRRUprV3J5OFlId25TQUpJak5WUnl3aGpDcmRZK2lTMnZYSkMvd0huTWRXYTJFdlMzZzFBcjhLZnMvWEdsaGZxbnFuVHFxL0dzTS9DUFBZZll1ZmF6NHYwMzdjenVCY1JSOXg4K0Qwc2hBKzFBMTNtV0FZRk1tazhFZzJYZlpxNE1rUTZYR0k1dGY4VnY3cG5Camh3ZEN5MlJJdU9pKzZWUFYwcWw2V2FnOVEweVowaDFRbTl6RitjZGRKaWN5MkVYSFB5RzNNVDhieTRiakFqTHltMUZ6TWp4OWJJaEMraGp6WDdQTzh3dUVjS3l5cUc3VDY0VjFMWm9MUTJKQ2VTWllYbUhKZ2grSDZQNWZNT0g0SHdUL0FGZFJuL21LblJUU2s="
+      },
+      "function_name": null,
+      "status": "active",
+      "created_by": "system",
+      "created_at": "2026-03-24T17:41:36.886870+00:00",
+      "updated_at": "2026-03-25T04:06:44.534790+00:00"
+    },
+    "tool_bb03e1dc5ea1": {
+      "tool_id": "tool_bb03e1dc5ea1",
+      "org_id": "default",
+      "name": "deleteStep",
+      "title": "deleteStep",
+      "description": "with the help of it you are able to delete the step from automation flow",
+      "type": "api_call",
+      "script_id": "scriEX35KZnS",
+      "fields": {
+        "env": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "scriptId": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        },
+        "stepName": {
+          "type": "string",
+          "description": "take the valid step title from our automation",
+          "source": "ai"
+        },
+        "proxy_auth_token": {
+          "type": "string",
+          "description": "",
+          "source": "user"
+        }
+      },
+      "required_params": [],
+      "headers": {},
+      "static_values": {
+        "env": "testing",
+        "scriptId": "scrie97FYmXH",
+        "proxy_auth_token": "aHVuZkF5M0ZlSVo3c25Wa2FHNlpSSEpwSko2dWhRRUprV3J5OFlId25TQUpJak5WUnl3aGpDcmRZK2lTMnZYSkMvd0huTWRXYTJFdlMzZzFBcjhLZnMvWEdsaGZxbnFuVHFxL0dzTS9DUFBZZll1ZmF6NHYwMzdjenVCY1JSOXg4K0Qwc2hBKzFBMTNtV0FZRk1tazhFZzJYZlpxNE1rUTZYR0k1dGY4VnY3cG5Camh3ZEN5MlJJdU9pKzZWUFYwcWw2V2FnOVEweVowaDFRbTl6RitjZGRKaWN5MkVYSFB5RzNNVDhieTRiakFqTHltMUZ6TWp4OWJJaEMraGp6WDdQTzh3dUVjS3l5cUc3VDY0VjFMWm9MUTJKQ2VTWllYbUhKZ2grSDZQNWZNT0g0SHdUL0FGZFJuL21LblJUU2s="
+      },
+      "function_name": null,
+      "status": "active",
+      "created_by": "system",
+      "created_at": "2026-03-25T04:15:30.769758+00:00",
+      "updated_at": "2026-03-25T04:15:30.769758+00:00"
     }
   },
   "sessions": {},
@@ -135,7 +422,7 @@
       "allowed_callers": [],
       "status": "active",
       "created_at": "2026-03-15T19:45:53.596802+00:00",
-      "updated_at": "2026-03-15T20:15:54.653216+00:00"
+      "updated_at": "2026-03-25T03:07:52.699224+00:00"
     },
     "agent_01c7cf4ad266": {
       "agent_id": "agent_01c7cf4ad266",

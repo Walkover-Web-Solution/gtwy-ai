@@ -646,6 +646,145 @@
             word-break: break-word;
         }
 
+        /* Planner Thinking Panel */
+        .thinking-panel {
+            display: none;
+            background: var(--bg-secondary);
+            border: 1px solid rgba(108,92,231,0.25);
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+            animation: fadeIn 0.3s ease;
+            overflow: hidden;
+        }
+        .thinking-panel.visible { display: block; }
+        .thinking-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.15s;
+        }
+        .thinking-toggle:hover { background: var(--bg-hover); }
+        .thinking-toggle-icon {
+            font-size: 12px;
+            color: var(--accent-light);
+            transition: transform 0.25s;
+        }
+        .thinking-panel.expanded .thinking-toggle-icon { transform: rotate(90deg); }
+        .thinking-toggle-label {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--accent-light);
+        }
+        .thinking-toggle-count {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-left: auto;
+        }
+        .thinking-body {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.35s ease;
+        }
+        .thinking-panel.expanded .thinking-body { max-height: 2000px; }
+        .thinking-body-inner {
+            padding: 0 16px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .thinking-step {
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .thinking-step.type-reasoning {
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            border-left: 3px solid var(--accent);
+        }
+        .thinking-step.type-tool_call {
+            background: var(--blue-bg);
+            color: var(--text-primary);
+            border-left: 3px solid var(--blue);
+        }
+        .thinking-step.type-plan_reasoning {
+            background: var(--success-bg);
+            color: var(--text-primary);
+            border-left: 3px solid var(--success);
+        }
+        .thinking-step-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .thinking-step.type-reasoning .thinking-step-label { color: var(--accent-light); }
+        .thinking-step.type-tool_call .thinking-step-label { color: var(--blue); }
+        .thinking-step.type-plan_reasoning .thinking-step-label { color: var(--success); }
+        .thinking-tool-result {
+            margin-top: 6px;
+            padding: 6px 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 11px;
+            color: var(--text-secondary);
+            max-height: 120px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* Tool name badge on task card */
+        .task-tool-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: var(--blue-bg);
+            color: var(--blue);
+            border: 1px solid rgba(116,185,255,0.25);
+            flex-shrink: 0;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        /* Worker-Planner Clarification */
+        .clarification-badge {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 8px;
+            padding: 8px 10px;
+            border-radius: var(--radius-sm);
+            font-size: 11px;
+            line-height: 1.5;
+        }
+        .clarification-badge.question {
+            background: rgba(253,203,110,0.12);
+            border-left: 3px solid #fdcb6e;
+            color: var(--text-secondary);
+        }
+        .clarification-badge.answer {
+            background: rgba(108,92,231,0.10);
+            border-left: 3px solid var(--accent);
+            color: var(--text-secondary);
+        }
+        .clarification-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .clarification-badge.question .clarification-label { color: #fdcb6e; }
+        .clarification-badge.answer .clarification-label { color: var(--accent-light); }
+
         /* Summary */
         .summary-card {
             display: none;
@@ -924,6 +1063,18 @@
         </div>
 
         <div class="direct-response" id="directResponse"></div>
+
+        <!-- Planner Thinking Panel -->
+        <div class="thinking-panel" id="thinkingPanel">
+            <div class="thinking-toggle" onclick="toggleThinkingPanel()">
+                <span class="thinking-toggle-icon">▶</span>
+                <span class="thinking-toggle-label">Planner Thinking</span>
+                <span class="thinking-toggle-count" id="thinkingCount"></span>
+            </div>
+            <div class="thinking-body">
+                <div class="thinking-body-inner" id="thinkingSteps"></div>
+            </div>
+        </div>
 
         <div class="step-counter" id="stepCounter">
             <span>Steps: <span class="done-count" id="doneCount">0</span> / <span id="totalCount">0</span></span>
@@ -1501,6 +1652,10 @@
             $('stepProposalCard').classList.remove('visible');
             $('stepRejectBox').style.display = 'none';
             stepCounter.classList.remove('visible');
+            // Reset planner thinking panel
+            $('thinkingPanel').classList.remove('visible', 'expanded');
+            $('thinkingSteps').innerHTML = '';
+            $('thinkingCount').textContent = '';
             completedCount = 0;
             totalTasks = 0;
         }
@@ -1520,6 +1675,49 @@
             questionCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
 
+        // --- Planner Thinking Panel ---
+        function toggleThinkingPanel() {
+            $('thinkingPanel').classList.toggle('expanded');
+        }
+
+        function renderThinking(steps) {
+            const panel = $('thinkingPanel');
+            const container = $('thinkingSteps');
+            container.innerHTML = '';
+
+            if (!steps || !steps.length) return;
+
+            steps.forEach(step => {
+                const el = document.createElement('div');
+                el.className = `thinking-step type-${step.type}`;
+
+                if (step.type === 'reasoning') {
+                    el.innerHTML = `
+                        <div class="thinking-step-label">💭 Reasoning (round ${step.round || ''})</div>
+                        <div>${escapeHtml(step.content)}</div>
+                    `;
+                } else if (step.type === 'tool_call') {
+                    el.innerHTML = `
+                        <div class="thinking-step-label">⚙ Tool: ${escapeHtml(step.tool_name)}</div>
+                        <div>Args: ${escapeHtml(JSON.stringify(step.args || {}))}</div>
+                        <div class="thinking-tool-result">${escapeHtml(step.result || '')}</div>
+                    `;
+                } else if (step.type === 'plan_reasoning') {
+                    el.innerHTML = `
+                        <div class="thinking-step-label">📋 Plan Reasoning</div>
+                        <div>${escapeHtml(step.content)}</div>
+                    `;
+                }
+
+                container.appendChild(el);
+            });
+
+            $('thinkingCount').textContent = `${steps.length} step${steps.length > 1 ? 's' : ''}`;
+            panel.classList.add('visible');
+            panel.classList.add('expanded');
+            panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
         function createTaskCard(task, index) {
             if (index > 0) {
                 const conn = document.createElement('div');
@@ -1530,10 +1728,12 @@
             const card = document.createElement('div');
             card.className = `task-card ${task.status}`;
             card.id = `task-${task.id}`;
+            const toolBadge = task.tool_name ? `<span class="task-tool-badge">${escapeHtml(task.tool_name)}</span>` : '';
             card.innerHTML = `
                 <div class="task-header-bar" onclick="toggleCard('${task.id}')">
                     <div class="task-dot"></div>
                     <span class="task-title">${escapeHtml(task.title)}</span>
+                    ${toolBadge}
                     <span class="task-badge badge-${task.status}">${task.status.replace('_', ' ')}</span>
                     ${chevronSvg}
                 </div>
@@ -1601,6 +1801,10 @@
                     runBtn.textContent = 'Run';
                     break;
 
+                case 'planner_thinking':
+                    renderThinking(data.steps);
+                    break;
+
                 case 'plan_ready':
                     hideStatus();
                     // Clear any previous plan
@@ -1654,6 +1858,34 @@
                     const failOutput = document.getElementById(`output-${data.task_id}`);
                     if (failOutput) failOutput.textContent = `Error: ${data.error}`;
                     break;
+
+                case 'worker_clarification': {
+                    // Worker asked planner a question — show on the task card
+                    showStatus('Worker asking planner for clarification...');
+                    const wcOutput = document.getElementById(`output-${data.task_id}`);
+                    if (wcOutput) {
+                        const badge = document.createElement('div');
+                        badge.className = 'clarification-badge question';
+                        badge.innerHTML = `<span class="clarification-label">Worker asks planner</span><span>${escapeHtml(data.question)}</span>`;
+                        wcOutput.appendChild(badge);
+                        wcOutput.scrollTop = wcOutput.scrollHeight;
+                    }
+                    break;
+                }
+
+                case 'planner_response': {
+                    // Planner answered the worker's question — show on the task card
+                    showStatus('Planner answered, worker resuming...');
+                    const prOutput = document.getElementById(`output-${data.task_id}`);
+                    if (prOutput) {
+                        const badge = document.createElement('div');
+                        badge.className = 'clarification-badge answer';
+                        badge.innerHTML = `<span class="clarification-label">Planner answers</span><span>${escapeHtml(data.answer)}</span>`;
+                        prOutput.appendChild(badge);
+                        prOutput.scrollTop = prOutput.scrollHeight;
+                    }
+                    break;
+                }
 
                 case 'step_proposal': {
                     hideStatus();

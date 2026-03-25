@@ -66,6 +66,7 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
     # Stream events from the graph
     current_node = None
     current_task_id = None
+    running_task_ids = []  # all task IDs in current executor batch
     streamed_text = ""
 
     async for event in graph.astream_events(state, config, version="v2"):
@@ -83,14 +84,25 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
             elif name == "executor":
                 try:
                     node_input = event.get("data", {}).get("input", {})
-                    task_idx = node_input.get("current_task_index", 0)
                     tasks = node_input.get("tasks", [])
-                    if task_idx < len(tasks):
-                        current_task_id = tasks[task_idx]["id"]
-                        await ws_send(ws, "task_start", {
-                            "task_id": current_task_id,
-                            "title": tasks[task_idx]["title"],
-                        })
+                    # Find ALL runnable tasks in this batch (mirrors executor logic)
+                    completed_ids = {t["id"] for t in tasks if t["status"] in ("completed", "skipped")}
+                    running_task_ids = []
+                    for t in tasks:
+                        if t["status"] == "pending":
+                            deps = t.get("depends_on", [])
+                            if all(dep_id in completed_ids for dep_id in deps):
+                                running_task_ids.append(t["id"])
+                                await ws_send(ws, "task_start", {
+                                    "task_id": t["id"],
+                                    "title": t["title"],
+                                })
+                    current_task_id = running_task_ids[0] if running_task_ids else None
+                    if len(running_task_ids) > 1:
+                        await ws_send(ws, "status", {"message": f"Executing {len(running_task_ids)} tasks in parallel..."})
+                    elif len(running_task_ids) == 1:
+                        title = next((t["title"] for t in tasks if t["id"] == running_task_ids[0]), "")
+                        await ws_send(ws, "status", {"message": f"Executing: {title}"})
                 except Exception:
                     pass
                 streamed_text = ""
@@ -125,10 +137,27 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
             if name == "planner":
                 try:
                     planner_output = event.get("data", {}).get("output", {})
-                    if planner_output.get("needs_question"):
+                    # Emit planner thinking (research + reasoning) to frontend
+                    thinking = planner_output.get("planner_thinking", [])
+                    if thinking:
+                        await ws_send(ws, "planner_thinking", {"steps": thinking})
+
+                    # Planner answered a worker's question → emit event, graph routes back to executor
+                    if planner_output.get("planner_response") and not planner_output.get("needs_question"):
+                        await ws_send(ws, "planner_response", {
+                            "task_id": state.get("worker_question_task_id", ""),
+                            "question": state.get("worker_question", ""),
+                            "answer": planner_output["planner_response"],
+                        })
+                        # Don't return — graph continues to executor automatically
+
+                    elif planner_output.get("needs_question"):
+                        # Could be a normal question OR planner escalating a worker question to user
+                        worker_ctx = state.get("worker_question")
                         await ws_send(ws, "question", {
                             "text": planner_output.get("question_text", ""),
                             "options": planner_output.get("question_options", []),
+                            "worker_context": worker_ctx,  # so frontend knows this came from a worker doubt
                         })
                         return "waiting_for_answer"
                     else:
@@ -140,6 +169,7 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                                         "id": t["id"],
                                         "title": t["title"],
                                         "description": t["description"],
+                                        "tool_name": t.get("tool_name"),
                                         "status": t["status"],
                                         "depends_on": t.get("depends_on", []),
                                         "priority": t.get("priority", "medium"),
@@ -159,6 +189,7 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                                     "current_task_index": 0,
                                     "completed_tasks": state.get("completed_tasks", []),
                                     "scratchpad": state.get("scratchpad", []),
+                                    "planner_thinking": thinking,
                                     "plan_revision_count": planner_output.get("plan_revision_count", 0),
                                     "needs_replan": False,
                                     "replan_reason": None,
@@ -201,24 +232,45 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                     pass
 
             elif name == "executor":
-                if current_task_id:
-                    await ws_send(ws, "task_done", {"task_id": current_task_id})
-                    current_task_id = None
-
                 try:
                     executor_output = event.get("data", {}).get("output", {})
                     snap_state = {**state, **executor_output}
+                    output_tasks = executor_output.get("tasks", [])
+
+                    # Emit task_done / task_failed for ALL tasks that completed in this batch
+                    for t in output_tasks:
+                        if t["id"] in running_task_ids:
+                            if t["status"] == "completed":
+                                await ws_send(ws, "task_done", {"task_id": t["id"]})
+                            elif t["status"] == "failed":
+                                await ws_send(ws, "task_failed", {
+                                    "task_id": t["id"],
+                                    "error": t.get("result", "Task failed"),
+                                })
+
+                    running_task_ids = []
+                    current_task_id = None
 
                     # Send reflection data if available
-                    for t in snap_state.get("tasks", []):
+                    for t in output_tasks:
                         if t.get("reflection"):
                             await ws_send(ws, "task_reflection", {
                                 "task_id": t["id"],
                                 "reflection": t["reflection"],
                             })
 
+                    # Worker asked planner for clarification
+                    if snap_state.get("needs_worker_clarification"):
+                        await ws_send(ws, "worker_clarification", {
+                            "task_id": snap_state.get("worker_question_task_id", ""),
+                            "question": snap_state.get("worker_question", ""),
+                        })
+                        if pending_state_out is not None:
+                            pending_state_out.append(snap_state)
+                        # Don't return — graph continues to planner for answer
+
                     # Check if re-plan is needed (task failed)
-                    if snap_state.get("needs_replan"):
+                    elif snap_state.get("needs_replan"):
                         await ws_send(ws, "replan_needed", {
                             "reason": snap_state.get("replan_reason", "A task failed"),
                         })
@@ -298,8 +350,9 @@ async def websocket_endpoint(ws: WebSocket):
                     continue
 
                 # Build graph: dynamic if agent_id provided, else default
+                tool_schemas = []
                 try:
-                    agent_graph, agent_checkpointer = await get_compiled_graph_for_agent(agent_id)
+                    agent_graph, agent_checkpointer, tool_schemas = await get_compiled_graph_for_agent(agent_id)
                 except Exception:
                     agent_graph = default_compiled_graph
                     agent_checkpointer = default_checkpointer
@@ -308,12 +361,27 @@ async def websocket_endpoint(ws: WebSocket):
                 config = {"configurable": {"thread_id": thread_id}}
 
                 mode = msg.get("mode", "plan")
+
+                # Build user_config from optional fields in the start message
+                user_config = {}
+                config_fields = [
+                    "planner_model", "planner_temperature",
+                    "executor_model", "executor_temperature",
+                    "synthesizer_model", "direct_model",
+                    "max_tokens", "system_prompt",
+                    "enable_reflection", "max_retries",
+                ]
+                for field in config_fields:
+                    if field in msg:
+                        user_config[field] = msg[field]
+
                 initial_state = {
                     "thread_id": thread_id,
                     "goal": goal,
                     "mode": mode,
                     "api_key": api_key,
                     "agent_id": agent_id,
+                    "user_config": user_config,
                     "tasks": [],
                     "completed_tasks": [],
                     "current_task_index": 0,
@@ -328,9 +396,15 @@ async def websocket_endpoint(ws: WebSocket):
                     "direct_messages": [],
                     "built_steps": [],
                     "scratchpad": [],
+                    "tool_schemas": tool_schemas,
+                    "planner_thinking": [],
                     "plan_revision_count": 0,
                     "needs_replan": False,
                     "replan_reason": None,
+                    "needs_worker_clarification": False,
+                    "worker_question": None,
+                    "worker_question_task_id": None,
+                    "planner_response": None,
                 }
 
                 ws.pending_state = {**initial_state}
@@ -528,6 +602,7 @@ async def websocket_endpoint(ws: WebSocket):
                             "id": t.get("id", str(uuid.uuid4())[:8]),
                             "title": t["title"],
                             "description": t["description"],
+                            "tool_name": t.get("tool_name"),
                             "status": "pending",
                             "result": None,
                             "depends_on": t.get("depends_on", []),

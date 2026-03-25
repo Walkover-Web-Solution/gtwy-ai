@@ -4,8 +4,31 @@ import json
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
+from langchain_core.tools import tool as langchain_tool
+
 from graph.nodes.tools import TOOLS, TOOLS_BY_NAME
 from graph.state import AgentState
+
+# Sentinel value returned by the ask_planner tool so executor can detect it
+ASK_PLANNER_MARKER = "__ASK_PLANNER__"
+
+
+def _create_ask_planner_tool():
+    """Create a tool that workers can call to ask the planner for clarification."""
+    @langchain_tool
+    def ask_planner(question: str) -> str:
+        """Ask the planner a clarification question when you are unsure how to proceed with the current task.
+        Use this when:
+        - The task description is ambiguous or missing critical details
+        - You need guidance on which approach to take
+        - You need information that isn't available in the context or via other tools
+        
+        Args:
+            question: Your specific question for the planner
+        """
+        return f"{ASK_PLANNER_MARKER}:{question}"
+    return ask_planner
+
 
 EXECUTOR_SYSTEM_PROMPT = """You are a focused task executor working on a subtask as part of a larger goal.
 
@@ -17,6 +40,7 @@ RULES:
 - Use tools when needed to complete the task (read files, write files, run commands, call APIs, delegate to sub-agents).
 - Be specific and produce real output, not just descriptions.
 - If you encounter an error, try an alternative approach before giving up.
+- If you are unsure or confused about the task, use the `ask_planner` tool to ask for clarification.
 - Your output should satisfy the acceptance criteria for this task."""
 
 REFLECTION_PROMPT = """You are a quality reviewer. Evaluate whether the executor's output satisfies the task requirements.
@@ -99,6 +123,11 @@ async def _execute_single_task(
         )
         messages.append(AIMessage(content=f"Previously completed steps:\n{context_summary}"))
 
+    # Inject planner's response if resuming after a clarification
+    planner_response = state.get("planner_response")
+    if planner_response and state.get("worker_question_task_id") == task["id"]:
+        messages.append(AIMessage(content=f"Planner's answer to your question:\n{planner_response}"))
+
     acceptance = task.get("acceptance_criteria", "Task completed successfully")
     messages.append(HumanMessage(
         content=(
@@ -111,6 +140,7 @@ async def _execute_single_task(
     ))
 
     result_text = ""
+    asked_planner_question = None
     max_iterations = 15
 
     # ReAct loop: LLM → tool call → result → LLM → ... → final text answer
@@ -119,7 +149,21 @@ async def _execute_single_task(
 
         if response.tool_calls:
             messages.append(response)
+
+            # Check if any tool call is ask_planner
+            planner_asked = False
             for tool_call in response.tool_calls:
+                if tool_call["name"] == "ask_planner":
+                    question = tool_call["args"].get("question", "")
+                    asked_planner_question = question
+                    # Return a placeholder so the LLM message list stays valid
+                    messages.append(ToolMessage(
+                        content="Your question has been forwarded to the planner. Waiting for response...",
+                        tool_call_id=tool_call["id"],
+                    ))
+                    planner_asked = True
+                    break
+
                 tool_fn = tools_by_name.get(tool_call["name"])
                 if tool_fn:
                     try:
@@ -133,6 +177,9 @@ async def _execute_single_task(
                     content=str(tool_result),
                     tool_call_id=tool_call["id"],
                 ))
+
+            if planner_asked:
+                break
         else:
             result_text = response.content
             break
@@ -142,6 +189,7 @@ async def _execute_single_task(
         "task_id": task["id"],
         "title": task["title"],
         "result_text": result_text,
+        "asked_planner": asked_planner_question,
     }
 
 
@@ -179,15 +227,25 @@ async def _reflect_on_result(
 
 async def _run_executor(
     state: AgentState,
-    model: str = "gpt-4o-mini",
-    temperature: float = 0.5,
+    model: str = None,
+    temperature: float = None,
     tools: list = None,
     tools_by_name: dict = None,
     system_prompt_override: str = None,
-    enable_reflection: bool = True,
-    max_retries: int = 2,
+    enable_reflection: bool = None,
+    max_retries: int = None,
 ) -> dict:
-    """Core executor logic with dependency-aware scheduling, self-reflection, and scratchpad."""
+    """Core executor logic with dependency-aware scheduling, self-reflection, and scratchpad.
+    
+    Reads configuration from state['user_config'] with fallback to function params and defaults.
+    """
+    config = state.get("user_config") or {}
+
+    resolved_model = model or config.get("executor_model", "gpt-4o-mini")
+    resolved_temp = temperature if temperature is not None else config.get("executor_temperature", 0.5)
+    resolved_reflection = enable_reflection if enable_reflection is not None else config.get("enable_reflection", True)
+    resolved_retries = max_retries if max_retries is not None else config.get("max_retries", 2)
+
     resolved_tools = tools or TOOLS
     resolved_tools_by_name = tools_by_name or TOOLS_BY_NAME
 
@@ -219,8 +277,8 @@ async def _run_executor(
                 task=task,
                 task_idx=idx,
                 state=state,
-                model=model,
-                temperature=temperature,
+                model=resolved_model,
+                temperature=resolved_temp,
                 tools=resolved_tools,
                 tools_by_name=resolved_tools_by_name,
                 system_prompt_override=system_prompt_override,
@@ -233,6 +291,9 @@ async def _run_executor(
 
     needs_replan = False
     replan_reason = None
+    needs_worker_clarification = False
+    worker_question = None
+    worker_question_task_id = None
 
     for res in results:
         if isinstance(res, Exception):
@@ -249,11 +310,19 @@ async def _run_executor(
         task = tasks[task_idx]
         result_text = res["result_text"]
 
+        # Check if worker asked planner for clarification
+        if res.get("asked_planner"):
+            tasks[task_idx] = {**task, "status": "pending"}  # keep as pending for retry after answer
+            needs_worker_clarification = True
+            worker_question = res["asked_planner"]
+            worker_question_task_id = task["id"]
+            continue
+
         # Self-reflection
         reflection = None
-        if enable_reflection and task.get("estimated_complexity", "moderate") != "simple":
+        if resolved_reflection and task.get("estimated_complexity", "moderate") != "simple":
             reflection_result = await _reflect_on_result(
-                task, result_text, state["api_key"], model
+                task, result_text, state["api_key"], resolved_model
             )
 
             quality_score = reflection_result.get("quality_score", 5)
@@ -263,7 +332,7 @@ async def _run_executor(
             # Retry if reflection says quality is poor
             if not passed and quality_score < 5:
                 retry_count = 0
-                while retry_count < max_retries and not passed:
+                while retry_count < resolved_retries and not passed:
                     retry_count += 1
                     hint = reflection_result.get("improvement_hint", "Try a different approach")
                     # Re-execute with the hint
@@ -271,8 +340,8 @@ async def _run_executor(
                         task={**task, "description": f"{task['description']}\n\nPREVIOUS ATTEMPT FEEDBACK: {hint}"},
                         task_idx=task_idx,
                         state=state,
-                        model=model,
-                        temperature=temperature,
+                        model=resolved_model,
+                        temperature=resolved_temp,
                         tools=resolved_tools,
                         tools_by_name=resolved_tools_by_name,
                         system_prompt_override=system_prompt_override,
@@ -282,7 +351,7 @@ async def _run_executor(
                     result_text = retry_res["result_text"]
 
                     reflection_result = await _reflect_on_result(
-                        task, result_text, state["api_key"], model
+                        task, result_text, state["api_key"], resolved_model
                     )
                     passed = reflection_result.get("passed", True)
                     quality_score = reflection_result.get("quality_score", 5)
@@ -297,7 +366,7 @@ async def _run_executor(
                         "reflection": reflection,
                     }
                     needs_replan = True
-                    replan_reason = f"Task '{task['title']}' failed quality check after {max_retries} retries: {reflection_result.get('reasoning', '')}"
+                    replan_reason = f"Task '{task['title']}' failed quality check after {resolved_retries} retries: {reflection_result.get('reasoning', '')}"
                     continue
 
         # Task succeeded
@@ -329,22 +398,37 @@ async def _run_executor(
         "scratchpad": scratchpad,
         "needs_replan": needs_replan,
         "replan_reason": replan_reason,
+        "needs_worker_clarification": needs_worker_clarification,
+        "worker_question": worker_question,
+        "worker_question_task_id": worker_question_task_id,
+        "planner_response": None,  # clear previous answer
     }
 
 
 async def executor_node(state: AgentState) -> dict:
-    """Default executor node — uses built-in tools and gpt-4o-mini with self-reflection."""
+    """Default executor node — reads config from state['user_config']."""
     return await _run_executor(state)
 
 
 def make_executor_node(agent_config: dict, tools: list):
-    """Factory: creates an executor node with dynamic tools and agent config."""
-    model = agent_config.get("model", "gpt-4o-mini")
-    temperature = agent_config.get("temperature", 0.5)
+    """Factory: creates an executor node with dynamic tools and agent config.
+    
+    Injects agent_config values into state['user_config'] before calling _run_executor,
+    so the agent's DB settings override defaults but user-provided overrides still win.
+    """
+    # Add ask_planner tool so workers can request clarification
+    ask_planner_tool = _create_ask_planner_tool()
+    all_tools = tools + [ask_planner_tool]
+    tools_by_name = {t.name: t for t in all_tools}
+    tool_names = ", ".join(tools_by_name.keys())
     agent_system_prompt = agent_config.get("system_prompt", "")
 
-    tools_by_name = {t.name: t for t in tools}
-    tool_names = ", ".join(tools_by_name.keys())
+    # Pre-compute agent-level defaults from DB config
+    agent_defaults = {
+        "executor_model": agent_config.get("executor_model", agent_config.get("model", "gpt-4o-mini")),
+        "executor_temperature": agent_config.get("temperature", 0.5),
+        "system_prompt": agent_system_prompt,
+    }
 
     custom_prompt = None
     if agent_system_prompt:
@@ -358,12 +442,13 @@ def make_executor_node(agent_config: dict, tools: list):
         )
 
     async def dynamic_executor_node(state: AgentState) -> dict:
+        # Merge: agent DB defaults < state user_config (user overrides win)
+        merged_config = {**agent_defaults, **(state.get("user_config") or {})}
+        merged_state = {**state, "user_config": merged_config}
         prompt = custom_prompt.replace("{goal}", state["goal"]) if custom_prompt else None
         return await _run_executor(
-            state,
-            model=model,
-            temperature=temperature,
-            tools=tools,
+            merged_state,
+            tools=all_tools,
             tools_by_name=tools_by_name,
             system_prompt_override=prompt,
         )

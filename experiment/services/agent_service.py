@@ -21,7 +21,7 @@ async def invoke_agent(agent_id: str, goal: str, api_key: str = None, org_id: st
         return {"error": "No API key available."}
 
     # Build dynamic graph from agent config
-    compiled_graph, checkpointer = await build_agent_graph(agent_config)
+    compiled_graph, checkpointer, tool_schemas = await build_agent_graph(agent_config)
 
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
@@ -36,12 +36,24 @@ async def invoke_agent(agent_id: str, goal: str, api_key: str = None, org_id: st
 
     await append_message(session["session_id"], {"role": "user", "content": goal})
 
+    # Build user_config from agent's DB configuration
+    user_config = {
+        "planner_model": agent_config.get("planner_model", agent_config.get("model", "gpt-4o")),
+        "planner_temperature": agent_config.get("temperature", 0.3),
+        "executor_model": agent_config.get("executor_model", agent_config.get("model", "gpt-4o-mini")),
+        "executor_temperature": agent_config.get("temperature", 0.5),
+        "synthesizer_model": agent_config.get("model", "gpt-4o-mini"),
+        "max_tokens": agent_config.get("max_tokens", 4096),
+        "system_prompt": agent_config.get("system_prompt", ""),
+    }
+
     initial_state = {
         "thread_id": thread_id,
         "goal": goal,
         "mode": "plan",
         "api_key": resolved_api_key,
         "agent_id": agent_id,
+        "user_config": user_config,
         "tasks": [],
         "completed_tasks": [],
         "current_task_index": 0,
@@ -56,9 +68,15 @@ async def invoke_agent(agent_id: str, goal: str, api_key: str = None, org_id: st
         "direct_messages": [],
         "built_steps": [],
         "scratchpad": [],
+        "tool_schemas": tool_schemas,
+        "planner_thinking": [],
         "plan_revision_count": 0,
         "needs_replan": False,
         "replan_reason": None,
+        "needs_worker_clarification": False,
+        "worker_question": None,
+        "worker_question_task_id": None,
+        "planner_response": None,
     }
 
     # Run the graph to completion
@@ -81,12 +99,17 @@ async def invoke_agent(agent_id: str, goal: str, api_key: str = None, org_id: st
 
 
 async def get_compiled_graph_for_agent(agent_id: str = None):
-    """Get a compiled graph for an agent. Falls back to default graph if no agent_id."""
+    """Get a compiled graph for an agent. Falls back to default graph if no agent_id.
+    
+    Returns (compiled_graph, checkpointer, tool_schemas).
+    """
     if not agent_id:
-        return build_default_graph()
+        compiled, checkpointer = build_default_graph()
+        return compiled, checkpointer, []
 
     agent_config = await get_agent(agent_id)
     if not agent_config:
-        return build_default_graph()
+        compiled, checkpointer = build_default_graph()
+        return compiled, checkpointer, []
 
     return await build_agent_graph(agent_config)

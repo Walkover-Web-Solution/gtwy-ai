@@ -1,0 +1,1 @@
+Error handling for email analysis: If the email content cannot be processed, return a message indicating that the analysis failed and suggest checking the input format.

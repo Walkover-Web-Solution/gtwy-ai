@@ -231,6 +231,37 @@ def build_langchain_tool(tool_config: dict) -> Any:
         )
 
 
+def extract_tool_schemas(tools: list) -> list[dict]:
+    """Extract lightweight schema dicts from LangChain tools for planner visibility.
+
+    Returns a list of {name, description, parameters} where parameters lists
+    each param's name, type, required status, and description.
+    """
+    schemas = []
+    for t in tools:
+        params = []
+        try:
+            schema = t.args_schema.schema() if t.args_schema else {}
+            properties = schema.get("properties", {})
+            required_fields = schema.get("required", [])
+            for pname, pmeta in properties.items():
+                params.append({
+                    "name": pname,
+                    "type": pmeta.get("type", "string"),
+                    "required": pname in required_fields,
+                    "description": pmeta.get("description", ""),
+                })
+        except Exception:
+            pass
+
+        schemas.append({
+            "name": t.name,
+            "description": t.description or "",
+            "parameters": params,
+        })
+    return schemas
+
+
 async def load_tools_for_agent(agent_id: str) -> list:
     """Load all active tools for an agent from the DB and convert to LangChain tools."""
     agent = await get_agent(agent_id)
