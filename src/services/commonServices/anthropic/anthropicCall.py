@@ -46,7 +46,7 @@ class Anthropic(BaseService):
                 if images_input or self.user
                 else conversation
             )
-        self.customConfig["tools"] = self.tool_call if self.tool_call and len(self.tool_call) != 0 else []
+        # self.customConfig["tools"] = self.tool_call if self.tool_call and len(self.tool_call) != 0 else []
 
         # Add web search support for Anthropic
         self.customConfig = self.service_formatter(self.customConfig, service_name["anthropic"])
