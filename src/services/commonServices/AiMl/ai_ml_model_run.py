@@ -11,7 +11,7 @@ from ..api_executor import execute_api_call
 async def ai_ml_stream(configuration, apiKey):
     """Async generator yielding normalised delta dicts for AI/ML chat.completions."""
     openAI = AsyncOpenAI(api_key=apiKey, base_url="https://api.ai.ml/openai")
-    config = {**configuration, "stream": True}
+    config = {**configuration}
     accumulated_tool_calls = {}
     usage = {}
     finish_reason = None

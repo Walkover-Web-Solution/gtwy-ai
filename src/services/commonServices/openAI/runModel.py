@@ -48,7 +48,7 @@ def remove_duplicate_ids_from_input(configuration):
 async def openai_response_stream(configuration, apiKey):
     """Async generator yielding normalised delta dicts for openai responses API."""
     client = AsyncOpenAI(api_key=apiKey)
-    config = {**configuration, "stream": True}
+    config = {**configuration}
     accumulated_output = []
     accumulated_tool_calls = {}  # item_id -> {"name": str, "call_id": str, "arguments": str}
     usage = {}

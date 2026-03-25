@@ -12,7 +12,7 @@ from ..api_executor import execute_api_call
 async def openrouter_stream(configuration, apiKey):
     """Async generator yielding normalised delta dicts for OpenRouter chat.completions."""
     openAI = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=apiKey)
-    config = {**configuration, "stream": True}
+    config = {**configuration}
     accumulated_tool_calls = {}
     usage = {}
     finish_reason = None

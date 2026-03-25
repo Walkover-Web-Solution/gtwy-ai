@@ -64,7 +64,7 @@ async def groq_runmodel(
 async def groq_stream(configuration, apiKey):
     """Async generator yielding normalised delta dicts for Groq chat.completions."""
     groq_client = AsyncGroq(api_key=apiKey)
-    config = {**configuration, "stream": True}
+    config = {**configuration}
     accumulated_tool_calls = {}
     usage = {}
     finish_reason = None

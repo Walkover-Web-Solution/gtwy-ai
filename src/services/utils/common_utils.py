@@ -227,7 +227,6 @@ def parse_request_body(request_body):
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
         "limit": body.get("limit"),
-        "stream": body.get("stream", False),
     }
 
 
@@ -617,7 +616,6 @@ def build_service_params(
         "bridge_configurations": bridge_configurations,
         "owner_id": parsed_data.get("owner_id"),
         "limit": parsed_data.get("limit"),
-        "stream": parsed_data.get("stream", False),
     }
 
 

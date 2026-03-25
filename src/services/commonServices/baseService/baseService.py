@@ -95,8 +95,7 @@ class BaseService:
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
 
-        explicit_stream = bool(params.get("stream"))
-        self.stream_mode = explicit_stream
+        self.stream_mode = params.get("configuration", {}).get("stream", False)
         if self.stream_mode:
             self.streamer = StreamingService(mode="sse")
         else:
@@ -398,6 +397,10 @@ class BaseService:
                 ServiceKeys[service].get(self.type, ServiceKeys[service]["default"]).get(key, key): value
                 for key, value in configuration.items()
             }
+
+            if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
+                new_config.pop("stream")
+
             if configuration.get("tools", ""):
                 if service == service_name["anthropic"]:
                     new_config["tool_choice"] = configuration.get("tool_choice", {"type": "auto"})
@@ -454,7 +457,7 @@ class BaseService:
                             new_config["response_mime_type"] = "application/json" 
 
                 # Build config_params excluding "model", and remove None values
-                config_params = {k: v for k, v in new_config.items() if v is not None and k not in {"model", "tool_choice", "parallel_tool_calls"}}
+                config_params = {k: v for k, v in new_config.items() if v is not None and k not in {"model", "tool_choice", "parallel_tool_calls", "stream"}}
                 
                 new_config = {
                     "model": new_config["model"],
@@ -464,7 +467,8 @@ class BaseService:
             return new_config
         except Exception as e:
             logger.error(f"An error occurred: {str(e)}")
-            raise ValueError(f"Service key error: {e.args[0]}") from e
+            error = e.args
+            raise ValueError(f"Service key error: {error[0] if error else str(e)}") from e
 
     async def chats(self, configuration, apikey, service, count=0):
         try:

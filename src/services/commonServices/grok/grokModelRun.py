@@ -15,7 +15,6 @@ async def grok_stream(configuration, api_key):
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
         **configuration,
-        "stream": True,
         "stream_options": {
             "include_usage": True
         },
