@@ -5,18 +5,16 @@ import time
 from urllib.parse import urlparse
 
 import aiohttp
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from google import genai
 
 from src.configs.constant import redis_keys
+from src.schemas.image_schemas import FileUploadRequest, VideoUrlUploadRequest
 from src.services.cache_service import store_in_cache
 from src.services.utils.gcp_upload_service import uploadDoc
 
 
-async def image_processing(request):
-    body = await request.form()
-    file = body.get("image")
-
+async def image_processing(file: UploadFile):
     file_content = await file.read()
 
     try:
@@ -44,14 +42,8 @@ async def file_processing(request):
     # Handle video URL upload (JSON request)
     if "application/json" in content_type:
         body = await request.json()
-        video_url = body.get("video_url")
-
-        if video_url:
-            return await _process_video_url(body)
-        else:
-            raise HTTPException(
-                status_code=400, detail={"success": False, "error": "Video URL is required for JSON requests"}
-            )
+        vid_req = VideoUrlUploadRequest.model_validate(body)
+        return await _process_video_url(video_url=str(vid_req.video_url), api_key=vid_req.apikey or "")
 
     # Handle file upload (form data)
     else:
@@ -60,78 +52,29 @@ async def file_processing(request):
         # Check for video_url in form data as well
         video_url = body.get("video_url")
         if video_url:
-            # Convert form data to dict for video URL processing
-            form_dict = dict(body.items())
-            return await _process_video_url(form_dict)
+            vid_req = VideoUrlUploadRequest.model_validate({
+                "video_url": video_url,
+                "apikey": body.get("apikey"),
+            })
+            return await _process_video_url(video_url=str(vid_req.video_url), api_key=vid_req.apikey or "")
 
         # Check for both 'file' and 'video' in form data
         file = body.get("file") or body.get("video")
-
-        if file is None:
-            raise HTTPException(status_code=400, detail={"success": False, "error": "File or video_url not found"})
 
     # Extract thread parameters from form data
     thread_id = body.get("thread_id")
     sub_thread_id = body.get("sub_thread_id")
     bridge_id = body.get("agent_id")
 
+    upload = FileUploadRequest.model_validate({"file": file, "apikey": body.get("apikey") or ""})
     file_content = await file.read()
-
-    # Define non-previewable file extensions that should be rejected
-    non_previewable_extensions = [
-        ".doc",
-        ".docx",
-        ".xls",
-        ".xlsx",
-        ".ppt",
-        ".pptx",
-        ".zip",
-        ".rar",
-        ".tar",
-        ".gz",
-        ".7z",
-        ".exe",
-        ".dmg",
-        ".apk",
-        ".msi",
-        ".deb",
-        ".rpm",
-        ".bin",
-        ".iso",
-        ".dll",
-    ]
-
-    # Check if file has a non-previewable extension
-    if any(file.filename.lower().endswith(ext) for ext in non_previewable_extensions):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "success": False,
-                "error": f"File type not supported. '{file.filename}' cannot be previewed in browser. Please upload images, PDFs, videos, or text files.",
-            },
-        )
-
-    # Check file type
-    is_pdf = file.content_type == "application/pdf" or file.filename.lower().endswith(".pdf")
-
-    # Check for various video formats
-    video_content_types = ["video/mp4", "video/quicktime", "video/avi", "video/mov", "video/webm", "video/mkv"]
-    video_extensions = [".mp4", ".mov", ".avi", ".webm", ".mkv", ".qt"]
-
-    is_video = file.content_type in video_content_types or any(
-        file.filename.lower().endswith(ext) for ext in video_extensions
-    )
+    is_pdf = upload.is_pdf
+    is_video = upload.is_video
+    api_key = upload.apikey or ""
 
     try:
         # Handle video files with Gemini processing
         if is_video:
-            # Get API key from form data - required for video processing
-            api_key = body.get("apikey")
-            if not api_key:
-                raise HTTPException(
-                    status_code=400, detail={"success": False, "error": "API key is required for video processing"}
-                )
-
             # Create Gemini client
             gemini_client = genai.Client(api_key=api_key)
 
@@ -195,38 +138,8 @@ async def file_processing(request):
         raise HTTPException(status_code=400, detail={"success": False, "error": error_message + str(e)}) from e
 
 
-async def _process_video_url(body_dict):
+async def _process_video_url(video_url: str, api_key: str):
     """Helper function to process video URL uploads"""
-    video_url = body_dict.get("video_url")
-    if not video_url:
-        raise HTTPException(status_code=400, detail={"success": False, "error": "Video URL is required"})
-
-    # Get API key from request body - required for video processing
-    api_key = body_dict.get("api_key")
-    if not api_key:
-        raise HTTPException(
-            status_code=400, detail={"success": False, "error": "API key is required for video processing"}
-        )
-
-    # Validate URL format
-    try:
-        parsed_url = urlparse(video_url)
-        if not parsed_url.scheme or not parsed_url.netloc:
-            raise HTTPException(status_code=400, detail={"success": False, "error": "Invalid video URL format"})
-    except Exception:
-        raise HTTPException(status_code=400, detail={"success": False, "error": "Invalid video URL format"}) from None
-
-    # Check if URL points to a video file based on extension
-    video_extensions = [".mp4", ".mov", ".avi", ".webm", ".mkv", ".qt"]
-    url_path = parsed_url.path.lower()
-    is_video_url = any(url_path.endswith(ext) for ext in video_extensions)
-
-    if not is_video_url:
-        raise HTTPException(
-            status_code=400,
-            detail={"success": False, "error": "URL does not appear to point to a supported video file"},
-        )
-
     try:
         # Create Gemini client
         gemini_client = genai.Client(api_key=api_key)
@@ -244,7 +157,7 @@ async def _process_video_url(body_dict):
                     )
 
                 # Get file extension from URL or default to .mp4
-                file_extension = os.path.splitext(parsed_url.path)[1] or ".mp4"
+                file_extension = os.path.splitext(urlparse(video_url).path)[1] or ".mp4"
 
                 # Create temporary file
                 with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:

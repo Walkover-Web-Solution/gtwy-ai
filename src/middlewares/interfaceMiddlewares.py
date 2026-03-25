@@ -8,35 +8,33 @@ from config import Config
 
 from ..db_services import ConfigurationServices
 from ..routes.v2.modelRouter import chat_completion
+from ..schemas.chatbot_schemas import ChatbotSendMessageRequest
 from ..services.commonServices.baseService.utils import sendResponse
 from ..services.utils.time import Timer
 from .getDataUsingBridgeId import add_configuration_data_to_body
 
 
-async def send_data_middleware(request: Request, botId: str):
+async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMessageRequest):
     try:
-        body = await request.json()
         org_id = request.state.profile["org"]["id"]
-        slugName = body.get("slugName")
+        slugName = body.slugName
         isPublic = "ispublic" in request.state.profile
         user_email = (
             request.state.profile.get("user", {}).get("email", None)
             if isPublic
-            else body.get("state", {}).get("profile", {}).get("user", {}).get("email", "")
+            else request.state.profile.get("user", {}).get("email", "")
         )
         if isPublic and "user" in request.state.profile:
             threadId = str(request.state.profile["user"]["id"])
         else:
-            threadId = str(body.get("threadId")) if body.get("threadId") is not None else None
+            threadId = str(body.threadId) if body.threadId is not None else None
         profile = request.state.profile
-        message = (body.get("message") or "").strip()
+        message = (body.message or "").strip()
         userId = profile["user"]["id"]
-        subThreadId = threadId if isPublic and body.get("subThreadId") is None else body.get("subThreadId")
+        subThreadId = threadId if isPublic and body.subThreadId is None else body.subThreadId
         chatBotId = botId
-        images = body.get("images") or []
-        flag = body.get("flag") or False
-        if not message and not images:
-            return JSONResponse(status_code=400, content={"error": "Message cannot be null"})
+        images = body.images
+        flag = body.flag
 
         channelId = f"{chatBotId}{threadId.strip() if threadId and threadId.strip() else userId}{subThreadId.strip() if subThreadId and subThreadId.strip() else userId}"
         channelId = channelId.replace(" ", "_")
@@ -67,15 +65,15 @@ async def send_data_middleware(request: Request, botId: str):
             "thread_id": threadId,
             "sub_thread_id": subThreadId,
             "variables": {
-                **body.get("interfaceContextData", {}),
-                **body.get("variables", {}),
+                **body.interfaceContextData,
+                **body.variables,
                 **json.loads(profile.get("variables", "{}")),
             },
             "configuration": {
                 "response_format": {"type": "default", "cred": {}}
                 if flag
                 else {"type": "RTLayer", "cred": {"channel": channelId, "ttl": 1, "apikey": Config.RTLAYER_AUTH}},
-                **body.get("configuration", {}),
+                **body.configuration,
                 "max_token": bridges.get("max_token", None) if isPublic else None,
             },
             "chatbot": True,
