@@ -253,6 +253,36 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
 
+def reasoning_formatter(service: str, new_config: dict) -> None:
+    if service == service_name["openai"]:
+        if isinstance(new_config.get("reasoning"), dict):
+            new_config["reasoning"]["summary"] = "auto"
+
+    elif service == service_name["gemini"]:
+        effort = new_config["reasoning"].get("effort", "medium")
+        new_config["thinking_config"] = types.ThinkingConfig(
+            include_thoughts=True,
+            thinking_level=effort
+        )
+        new_config.pop("reasoning", None)
+
+    elif service == service_name["anthropic"]:
+        new_config["thinking"] = {"type": "adaptive"}
+        effort = new_config["reasoning"].get("effort", "medium")
+        if new_config.get("output_config"):
+            new_config["output_config"]["effort"] = effort
+        else:
+            new_config["output_config"] = {"effort": effort}
+        
+        new_config.pop("reasoning", None)
+
+    elif service == service_name["groq"]:
+        effort = new_config["reasoning"].get("effort", "medium")
+        new_config["reasoning_effort"] = effort
+        new_config.pop("reasoning", None)
+
+    # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
+
 
 async def send_request(url, data, method, headers):
     try:

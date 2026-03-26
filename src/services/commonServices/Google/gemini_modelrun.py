@@ -33,8 +33,23 @@ async def gemini_modelrun_stream(configuration, apiKey):
             parts = candidate.get("content", {}).get("parts", []) or []
             for part in parts:
                 if part.get("text"):
-                    accumulated_text += part["text"]
-                    yield {"content": part["text"], "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
+                    if part.get("thought") is True:
+                        yield {
+                            "content": None,
+                            "tool_calls": None,
+                            "usage": None,
+                            "finish_reason": None,
+                            "reasoning": part["text"],
+                        }
+                    else:
+                        accumulated_text += part["text"]
+                        yield {
+                            "content": part["text"],
+                            "tool_calls": None,
+                            "usage": None,
+                            "finish_reason": None,
+                            "reasoning": None,
+                        }
                 if part.get("function_call"):
                     fc = part["function_call"]
                     accumulated_tool_calls.append(fc)

@@ -35,6 +35,7 @@ class OrchestratorConversationLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     llm_message = Column(JSON, nullable=True)  # {"bridge_id": "message"}
+    reasoning = Column(JSON, nullable=True)  # {"bridge_id": "reasoning"}
     user = Column(JSON, nullable=True)  # {"bridge_id": "user"}
     chatbot_message = Column(JSON, nullable=True)  # {"bridge_id": "chatbot_message"}
     updated_llm_message = Column(JSON, nullable=True)  # {"bridge_id": "updated_llm_message"}
@@ -70,6 +71,7 @@ class ConversationLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     llm_message = Column(Text, nullable=True)
+    reasoning = Column(Text, nullable=True)
     user = Column(Text, nullable=True)
     chatbot_message = Column(Text, nullable=True)
     updated_llm_message = Column(Text, nullable=True)

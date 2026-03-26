@@ -125,16 +125,15 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                             ),
                             None,
                         )
-                        or next(
-                            (
-                                (item.get("content") or [{}])[0].get("text", None)
-                                for item in response.get("output", [])
-                                if item.get("type") == "reasoning"
-                                and (item.get("content") or [{}])[0].get("text", None) is not None
-                            ),
-                            None,
-                        )
                     )
+                ),
+                "reasoning": next(
+                    (
+                        " ".join(s.get("text", "") for s in (item.get("summary") or []) if s.get("type") == "summary_text").strip() or None
+                        for item in response.get("output", [])
+                        if item.get("type") == "reasoning"
+                    ),
+                    None,
                 ),
                 "model": response.get("model", None),
                 "role": "assistant",
@@ -161,7 +160,8 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
         return {
             "data" : {
                 "id" : response.get("response_id", None),
-                "content" : parts[0].get('text') if parts else None,
+                "content" : next((p.get("text") for p in parts if not p.get("thought")), None),
+                "reasoning": next((p.get("text") for p in parts if p.get("thought")), None),
                 "model" : response.get("model_version", None),
                 "role" : "assistant",
                 "tools_data": tools_data or {},
@@ -224,10 +224,14 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
         }
     
     elif service == service_name['anthropic']:
+        content_blocks = response.get("content", [])
+        text_content = next((b.get("text") for b in content_blocks if b.get("type") == "text"), None)
+        thinking_content = next((b.get("thinking") for b in content_blocks if b.get("type") == "thinking"), None)
         return {
             "data" : {
                 "id" : response.get("id", None),
-                "content" : response.get("content", [{}])[0].get("text", None),
+                "content" : text_content,
+                "reasoning": thinking_content,
                 "model" : response.get("model", None),
                 "role" : response.get("role", None),
                 "tools_data": tools_data or {},
@@ -246,20 +250,24 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
             },
         }
     elif service == service_name["groq"]:
+        message = response.get("choices", [{}])[0].get("message", {})
+        usage = response.get("usage", {})
         return {
             "data": {
                 "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
+                "content": message.get("content", None),
+                "reasoning": message.get("reasoning", None),
                 "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
+                "role": message.get("role", None),
                 "tools_data": tools_data or {},
                 "fallback": response.get("fallback") or False,
                 "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
             },
             "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
+                "input_tokens": usage.get("prompt_tokens", None),
+                "output_tokens": usage.get("completion_tokens", None),
+                "total_tokens": usage.get("total_tokens", None),
+                "reasoning_tokens": usage.get("completion_tokens_details", {}).get("reasoning_tokens", None),
             },
         }
     elif service == service_name["grok"]:

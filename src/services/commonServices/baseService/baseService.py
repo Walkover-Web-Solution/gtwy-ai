@@ -35,6 +35,7 @@ from .utils import (
     sendResponse,
     tool_call_formatter,
     validate_tool_call,
+    reasoning_formatter
 )
 from src.exceptions import ApiCallError
 
@@ -336,6 +337,7 @@ class BaseService:
     def prepare_history_params(self, response, model_response, tools, transfer_agent_config=None, is_cached=False):
         # Get the original message content
         original_message = response.get("data", {}).get("content") or ""
+        reasoning = response.get("data", {}).get("reasoning")
 
         # If message is empty but we have transfer config, create custom message
         if not original_message and transfer_agent_config:
@@ -346,6 +348,7 @@ class BaseService:
             "sub_thread_id": self.sub_thread_id,
             "user": self.original_user or "",
             "message": original_message,
+            "reasoning": reasoning,
             "org_id": self.org_id,
             "bridge_id": self.bridge_id,
             "model": model_response.get("model") or self.configuration.get("model"),
@@ -427,13 +430,10 @@ class BaseService:
             if service == service_name["openai"] and "text" in new_config:
                 data = new_config["text"]
                 new_config["text"] = {"format": data}
-            if service == service_name["openai"] and "reasoning" in new_config:
-                if (
-                    isinstance(new_config["reasoning"], dict)
-                    and "key" in new_config["reasoning"]
-                    and "type" in new_config["reasoning"]
-                ):
-                    new_config["reasoning"] = {new_config["reasoning"]["key"]: new_config["reasoning"]["type"]}
+            
+            # Handle Reasoning config 
+            if new_config.get("reasoning", False):
+                reasoning_formatter(service, new_config)
 
             if service == service_name['gemini']:
                 from google.genai import types

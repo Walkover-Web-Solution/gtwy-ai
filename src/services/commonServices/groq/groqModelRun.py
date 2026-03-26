@@ -78,6 +78,15 @@ async def groq_stream(configuration, apiKey):
                 continue
             delta = choice.delta
             finish_reason = choice.finish_reason or finish_reason
+            reasoning_delta = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+            if reasoning_delta:
+                yield {
+                    "content": None,
+                    "tool_calls": None,
+                    "usage": None,
+                    "finish_reason": None,
+                    "reasoning": reasoning_delta,
+                }
             if delta.content:
                 yield {"content": delta.content, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
             if delta.tool_calls:
