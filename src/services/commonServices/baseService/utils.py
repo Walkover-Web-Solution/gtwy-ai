@@ -561,9 +561,9 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "bridge_id": parsed_data.get("bridge_id"),
             "user": parsed_data.get("user"),
         },
-        "metrics_service": {
+        "save_history": {
             "dataset": [parsed_data.get("usage", {})],
-            "history_params": result.get("historyParams", {}),
+            "save_history": result.get("historyParams", {}),
             "version_id": parsed_data.get("version_id"),
         },
         "validateResponse": {
