@@ -346,9 +346,10 @@ async def websocket_endpoint(ws: WebSocket):
             action = msg.get("action", "")
 
             if action == "start":
-                goal = msg.get("goal", "").strip()
+                variables = msg.get("variables") or {}
+                goal = (msg.get("goal") or variables.get("userMessage") or "").strip()
                 api_key = msg.get("api_key") or OPENAI_API_KEY
-                agent_id = msg.get("agent_id")  # Optional: use a specific agent
+                agent_id = msg.get("agent_id") or variables.get("agent_id")
 
                 if not goal:
                     await ws_send(ws, "error", {"message": "goal is required"})
@@ -414,6 +415,7 @@ async def websocket_endpoint(ws: WebSocket):
                     "worker_question": None,
                     "worker_question_task_id": None,
                     "planner_response": None,
+                    "runtime_variables": variables,
                 }
 
                 ws.pending_state = {**initial_state}

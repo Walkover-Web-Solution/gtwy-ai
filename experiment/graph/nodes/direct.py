@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 
 from graph.nodes.tools import TOOLS, TOOLS_BY_NAME
 from graph.state import AgentState
+from services.tool_registry import runtime_variables_ctx
 
 
 async def _run_direct(
@@ -73,6 +74,8 @@ async def _run_direct(
         user_turn = human_input if human_input else "continue"
 
     lc_messages.append(HumanMessage(content=user_turn))
+
+    runtime_variables_ctx.set(state.get("runtime_variables") or {})
 
     max_iterations = 10
     final_text = ""

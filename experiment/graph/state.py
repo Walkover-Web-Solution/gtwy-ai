@@ -60,3 +60,4 @@ class AgentState(TypedDict):
     worker_question: Optional[str]  # the question from worker to planner
     worker_question_task_id: Optional[str]  # which task the worker was executing when it asked
     planner_response: Optional[str]  # planner's answer back to the worker
+    runtime_variables: Optional[dict]  # variables passed by caller at run time (available to tools via {{path}} templates)

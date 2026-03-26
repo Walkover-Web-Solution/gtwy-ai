@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_openai import ChatOpenAI
 
 from graph.state import AgentState
+from services.tool_registry import runtime_variables_ctx
 
 PLANNER_SYSTEM_PROMPT = """\
 You are a senior AI planner. Analyze the user's goal thoroughly, then respond with **valid JSON** in one of two modes.
@@ -178,6 +179,8 @@ async def _run_research_phase(state: AgentState, tools: list, model: str, temper
         SystemMessage(content=RESEARCH_SYSTEM_PROMPT + "\n\n" + prompt),
         HumanMessage(content=user_message),
     ]
+
+    runtime_variables_ctx.set(state.get("runtime_variables") or {})
 
     research_notes = []
     thinking_steps = []

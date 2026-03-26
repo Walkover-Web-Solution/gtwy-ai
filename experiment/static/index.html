@@ -325,6 +325,39 @@
         .run-btn:active { transform: scale(0.97); }
         .run-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
+        /* Variables Panel */
+        .variables-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            user-select: none;
+            transition: color 0.2s;
+        }
+        .variables-toggle:hover { color: var(--text-secondary); }
+        .variables-toggle svg { width: 14px; height: 14px; transition: transform 0.2s; }
+        .variables-toggle.open svg { transform: rotate(90deg); }
+        .variables-panel { display: none; margin-bottom: 14px; }
+        .variables-panel.visible { display: block; }
+        .variables-panel textarea {
+            width: 100%; min-height: 120px; max-height: 300px;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); color: var(--text-primary);
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            font-size: 12px; padding: 12px; resize: vertical;
+            outline: none; line-height: 1.6; tab-size: 2;
+        }
+        .variables-panel textarea:focus { border-color: var(--accent); }
+        .variables-panel textarea::placeholder { color: var(--text-muted); }
+        .variables-error { font-size: 11px; color: var(--danger); margin-top: 4px; display: none; }
+        .variables-error.visible { display: block; }
+
         /* Connection Indicator */
         .ws-status {
             display: flex;
@@ -1044,6 +1077,16 @@
             <button class="mode-btn" id="modeDirect" onclick="setMode('direct')">⚡ Direct mode</button>
         </div>
 
+        <!-- Variables Panel -->
+        <div class="variables-toggle" id="variablesToggle" onclick="toggleVariablesPanel()">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
+            Runtime Variables
+        </div>
+        <div class="variables-panel" id="variablesPanel">
+            <textarea id="variablesInput" placeholder='Paste runtime payload JSON here...'></textarea>
+            <div class="variables-error" id="variablesError"></div>
+        </div>
+
         <div class="input-area">
             <textarea id="goalInput" placeholder="What would you like to build or accomplish?" rows="1"></textarea>
             <div class="input-actions">
@@ -1503,10 +1546,48 @@
             $('modeDirect').classList.toggle('active', mode === 'direct');
         }
 
+        // --- Variables Panel ---
+        function toggleVariablesPanel() {
+            const toggle = $('variablesToggle');
+            const panel = $('variablesPanel');
+            toggle.classList.toggle('open');
+            panel.classList.toggle('visible');
+        }
+
+        function parseVariablesInput() {
+            const raw = $('variablesInput').value.trim();
+            const errEl = $('variablesError');
+            errEl.classList.remove('visible');
+            errEl.textContent = '';
+            if (!raw) return null;
+            try {
+                const parsed = JSON.parse(raw);
+                if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+                    errEl.textContent = 'Must be a JSON object.';
+                    errEl.classList.add('visible');
+                    return false;
+                }
+                return parsed;
+            } catch (e) {
+                errEl.textContent = 'Invalid JSON: ' + e.message;
+                errEl.classList.add('visible');
+                return false;
+            }
+        }
+
         // --- Send Goal ---
         function sendGoal() {
             const goal = goalInput.value.trim();
-            if (!goal || !ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+            const varsPayload = parseVariablesInput();
+            if (varsPayload === false) return; // JSON parse error
+
+            // If variables provided, goal can come from userMessage in the payload
+            const effectiveGoal = goal || (varsPayload && varsPayload.userMessage) || '';
+            if (!effectiveGoal) {
+                if (!goal) return; // nothing to send
+            }
 
             resetUI();
             runBtn.disabled = true;
@@ -1514,12 +1595,16 @@
             showStatus('Analyzing your request...');
 
             const agentId = $('agentSelect').value || undefined;
-            ws.send(JSON.stringify({
+            const payload = {
                 action: 'start',
-                goal: goal,
+                goal: effectiveGoal,
                 mode: currentMode,
                 agent_id: agentId,
-            }));
+            };
+            if (varsPayload) {
+                payload.variables = varsPayload;
+            }
+            ws.send(JSON.stringify(payload));
         }
 
         // --- Direct Mode: Send Next Step ---
@@ -1596,10 +1681,13 @@
             totalTasks = 0;
             showStatus('Regenerating plan...');
             const goal = goalInput.value.trim();
-            ws.send(JSON.stringify({
-                action: 'start',
-                goal: goal,
-            }));
+            const agentId = $('agentSelect').value || undefined;
+            const varsPayload = parseVariablesInput();
+            const payload = { action: 'start', goal: goal, agent_id: agentId };
+            if (varsPayload && varsPayload !== false) {
+                payload.variables = varsPayload;
+            }
+            ws.send(JSON.stringify(payload));
         }
 
         // --- Step-by-step approval ---
@@ -2445,14 +2533,41 @@
             const required = new Set(t.required_params || []);
             const container = $('testToolArgs');
 
+            // Runtime variables textarea for the test panel
+            const staticVals = t.static_values || {};
+            const hasTemplates = Object.values(staticVals).some(v => typeof v === 'string' && /\{\{.+?\}\}/.test(v));
+
+            let html = '';
+            if (hasTemplates) {
+                html += `<div class="form-group" style="margin-bottom:14px;">
+                    <label style="font-weight:600;">Runtime Variables <span style="color:var(--text-muted);font-weight:400;font-size:11px;">— paste payload JSON to resolve {{path}} templates in static values</span></label>
+                    <textarea id="testToolVars" rows="4" style="font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:12px;" placeholder='Paste runtime payload JSON here...'></textarea>
+                    <div id="testToolVarsError" style="font-size:11px;color:var(--danger);margin-top:4px;display:none;"></div>
+                </div>`;
+
+                // Show user-source fields that will be auto-filled
+                const userFields = Object.entries(fields).filter(([k, v]) => v.source === 'user');
+                if (userFields.length) {
+                    html += `<div style="margin-bottom:14px;padding:10px 12px;background:var(--bg-secondary);border-radius:6px;font-size:12px;">
+                        <span style="font-weight:600;color:var(--text-muted);">Auto-filled from runtime variables:</span><br>
+                        ${userFields.map(([k]) => {
+                            const tpl = staticVals[k] || '';
+                            return `<span style="color:var(--accent);">${esc(k)}</span> ← <code style="background:var(--bg-primary);padding:1px 4px;border-radius:3px;font-size:11px;">${esc(String(tpl))}</code>`;
+                        }).join('<br>')}
+                    </div>`;
+                }
+            }
+
             if (!Object.keys(fields).length) {
-                container.innerHTML = `
+                html += `
                     <div class="form-group">
                         <label>Args <span style="color:var(--text-muted);font-weight:400">(raw JSON)</span></label>
                         <textarea id="testToolRawArgs" rows="4" placeholder='{"key": "value"}'>{}</textarea>
                     </div>`;
             } else {
-                container.innerHTML = Object.entries(fields).map(([key, schema]) => {
+                // Only show AI-source fields as editable inputs
+                const aiFields = Object.entries(fields).filter(([k, v]) => v.source !== 'user');
+                html += aiFields.map(([key, schema]) => {
                     const isRequired = required.has(key);
                     const desc = schema.description || '';
                     const type = schema.type || 'string';
@@ -2465,6 +2580,7 @@
                     </div>`;
                 }).join('');
             }
+            container.innerHTML = html;
 
             $('testToolResult').style.display = 'none';
             $('testToolResult').innerHTML = '';
@@ -2490,14 +2606,36 @@
                 try { args = JSON.parse($('testToolRawArgs').value || '{}'); }
                 catch { return alert('Args must be valid JSON.'); }
             } else {
-                // field-by-field mode
+                // field-by-field mode — only collect AI-source fields (user fields come from runtime vars)
                 for (const [key, schema] of Object.entries(fields)) {
+                    if (schema.source === 'user') continue; // skip — resolved from static_values + runtime vars
                     const el = $(`testArg_${key}`);
                     if (!el) continue;
                     const raw = el.value.trim();
                     if (raw === '') continue;
                     const type = schema.type || 'string';
                     args[key] = (type === 'number' || type === 'integer') ? Number(raw) : raw;
+                }
+            }
+
+            // Parse runtime variables from the test panel's own textarea
+            let runtimeVars = {};
+            const varsEl = $('testToolVars');
+            const varsErrEl = $('testToolVarsError');
+            if (varsEl) {
+                const raw = varsEl.value.trim();
+                if (varsErrEl) { varsErrEl.style.display = 'none'; varsErrEl.textContent = ''; }
+                if (raw) {
+                    try {
+                        runtimeVars = JSON.parse(raw);
+                        if (typeof runtimeVars !== 'object' || Array.isArray(runtimeVars)) {
+                            if (varsErrEl) { varsErrEl.textContent = 'Must be a JSON object.'; varsErrEl.style.display = 'block'; }
+                            return;
+                        }
+                    } catch (e) {
+                        if (varsErrEl) { varsErrEl.textContent = 'Invalid JSON: ' + e.message; varsErrEl.style.display = 'block'; }
+                        return;
+                    }
                 }
             }
 
@@ -2510,10 +2648,15 @@
             resultBox.style.color = 'var(--text-secondary)';
             resultBox.textContent = 'Calling flow.sokt.io...';
 
+            const testBody = { args };
+            if (Object.keys(runtimeVars).length) {
+                testBody.runtime_variables = runtimeVars;
+            }
+
             try {
                 const res = await apiFetch(`/tools/${toolId}/test`, {
                     method: 'POST',
-                    body: JSON.stringify({ args }),
+                    body: JSON.stringify(testBody),
                 });
                 const isOk = res.success;
                 resultBox.style.color = isOk ? '#4caf50' : '#e57373';
@@ -2579,7 +2722,7 @@
                             👤 User
                         </button>
                     </div>
-                    <input type="text" placeholder="Static value (User only)" value="${esc(val)}"
+                    <input type="text" placeholder="{{variables.orgId}} or static value" value="${esc(val)}"
                         id="fieldVal_${id}" class="field-value" data-row="${id}"
                         style="width:100%;font-size:12px;display:${source==='user'?'block':'none'};"
                         data-source="${source}">
@@ -2594,7 +2737,9 @@
         function setFieldSource(rowId, source) {
             $(`fieldSrc_${rowId}`).value = source;
             const valInput = $(`fieldVal_${rowId}`);
+            const hintEl = $(`fieldHint_${rowId}`);
             valInput.style.display = source === 'user' ? 'block' : 'none';
+            if (hintEl) hintEl.style.display = source === 'user' ? 'block' : 'none';
             valInput.dataset.source = source;
 
             const aiBtn   = $(`srcAi_${rowId}`);

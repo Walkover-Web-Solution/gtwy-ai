@@ -1,3 +1,4 @@
+import contextvars
 import json
 import re
 import subprocess
@@ -10,6 +11,48 @@ from db.agent_db_service import get_agent
 from db.tool_db_service import get_tools_by_ids
 
 SOKT_BASE_URL = "https://flow.sokt.io/func"
+
+# Context variable to pass runtime variables to tool functions at call time
+runtime_variables_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "runtime_variables", default={}
+)
+
+
+def _resolve_path(data: dict, path: str) -> Any:
+    """Resolve a dot-separated path like 'variables.orgId' from a nested dict."""
+    keys = path.split(".")
+    current = data
+    for key in keys:
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+        else:
+            return None
+    return current
+
+
+def _resolve_template(value: Any, runtime_vars: dict) -> Any:
+    """Resolve {{path}} templates in a value using runtime variables.
+
+    Examples:
+        '{{variables.orgId}}'  -> '16053'
+        'prefix_{{variables.env}}_suffix' -> 'prefix_prod_suffix'
+        42 (non-string) -> 42 (returned as-is)
+    """
+    if not isinstance(value, str) or runtime_vars is None:
+        return value
+
+    # Full-match: entire value is a single {{path}} — return resolved value with original type
+    full_match = re.fullmatch(r"\{\{\s*(.+?)\s*\}\}", value)
+    if full_match:
+        resolved = _resolve_path(runtime_vars, full_match.group(1))
+        return resolved if resolved is not None else value
+
+    # Partial-match: replace all {{path}} occurrences within the string
+    def _replacer(m):
+        resolved = _resolve_path(runtime_vars, m.group(1).strip())
+        return str(resolved) if resolved is not None else m.group(0)
+
+    return re.sub(r"\{\{\s*(.+?)\s*\}\}", _replacer, value)
 
 
 # ──────────────────────────────────────────────
@@ -136,12 +179,17 @@ def _build_api_call_tool(tool_config: dict) -> StructuredTool:
     # Only required_params that are AI-driven stay in the LLM schema
     ai_required = [p for p in required_params if p not in user_field_names]
 
-    # Build the dynamic async function — merges AI kwargs + user static values
+    # Build the dynamic async function — merges AI kwargs + user static values + runtime variable resolution
     async def _call(**kwargs) -> str:
+        runtime_vars = runtime_variables_ctx.get()
         merged = dict(kwargs)
         for k, v in static_values.items():
             if k not in merged:
-                merged[k] = v
+                resolved = _resolve_template(v, runtime_vars)
+                # Skip unresolved {{path}} templates so they don't hit the API
+                if isinstance(resolved, str) and re.search(r"\{\{.+?\}\}", resolved):
+                    continue
+                merged[k] = resolved
         result = await _axios_work(merged, url, headers)
         if result["status"] == 1:
             resp = result["response"]

@@ -1,15 +1,18 @@
+import re
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from db.tool_db_service import create_tool, delete_tool, get_tool, list_tools, update_tool
 from schemas.tool_schemas import AddFieldRequest, BulkFieldsRequest, CreateToolRequest, UpdateToolRequest
-from services.tool_registry import _axios_work
+from services.tool_registry import _axios_work, _resolve_template
 
 router = APIRouter(prefix="/tools", tags=["Tools"])
 
 
 class TestToolRequest(BaseModel):
     args: dict = {}
+    runtime_variables: dict = {}
 
 
 @router.post("")
@@ -150,7 +153,18 @@ async def test_tool_endpoint(tool_id: str, request: TestToolRequest):
     url = f"https://flow.sokt.io/func/{script_id}"
     headers = tool.get("headers") or {}
 
-    static_values = tool.get("static_values") or {}
+    raw_static = tool.get("static_values") or {}
+    runtime_vars = request.runtime_variables or {}
+
+    # Resolve {{path}} templates and skip values that remain unresolved
+    static_values = {}
+    for k, v in raw_static.items():
+        resolved = _resolve_template(v, runtime_vars)
+        # Skip unresolved string templates so they don't hit the API as raw {{...}}
+        if isinstance(resolved, str) and re.search(r"\{\{.+?\}\}", resolved):
+            continue
+        static_values[k] = resolved
+
     merged_args = {**static_values, **request.args}
 
     result = await _axios_work(merged_args, url, headers)

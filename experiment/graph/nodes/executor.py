@@ -8,6 +8,7 @@ from langchain_core.tools import tool as langchain_tool
 
 from graph.nodes.tools import TOOLS, TOOLS_BY_NAME
 from graph.state import AgentState
+from services.tool_registry import runtime_variables_ctx
 
 # Sentinel value returned by the ask_planner tool so executor can detect it
 ASK_PLANNER_MARKER = "__ASK_PLANNER__"
@@ -97,6 +98,8 @@ async def _execute_single_task(
     scratchpad: list[dict],
 ) -> dict:
     """Execute a single task with ReAct loop + self-reflection."""
+    runtime_variables_ctx.set(state.get("runtime_variables") or {})
+
     tool_names = ", ".join(tools_by_name.keys())
     prompt = system_prompt_override or EXECUTOR_SYSTEM_PROMPT.format(
         goal=state["goal"], tool_names=tool_names
