@@ -45,6 +45,100 @@ def remove_duplicate_ids_from_input(configuration):
     return config_copy
 
 
+async def openai_response_stream(configuration, apiKey):
+    """Async generator yielding normalised delta dicts for openai responses API."""
+    client = AsyncOpenAI(api_key=apiKey)
+    config = {**configuration}
+    accumulated_output = []
+    accumulated_tool_calls = {}  # item_id -> {"name": str, "call_id": str, "arguments": str}
+    usage = {}
+    finish_reason = None
+    try:
+        stream = await client.responses.create(**config)
+        async for event in stream:
+            event_type = getattr(event, "type", "")
+            if event_type == "response.output_text.delta":
+                yield {"content": event.delta, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
+            elif event_type == "response.reasoning_summary_text.delta":
+                yield {"content": None, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": event.delta}
+            elif event_type == "response.function_call_arguments.delta":
+                item_id = getattr(event, "item_id", "")
+                if item_id not in accumulated_tool_calls:
+                    accumulated_tool_calls[item_id] = {"name": "", "call_id": "", "arguments": ""}
+                accumulated_tool_calls[item_id]["arguments"] += getattr(event, "delta", "")
+            elif event_type == "response.function_call_arguments.done":
+                item_id = getattr(event, "item_id", "")
+                if item_id not in accumulated_tool_calls:
+                    accumulated_tool_calls[item_id] = {"name": "", "call_id": "", "arguments": ""}
+                done_args = getattr(event, "arguments", None)
+                if isinstance(done_args, str) and done_args:
+                    accumulated_tool_calls[item_id]["arguments"] = done_args
+                done_name = getattr(event, "name", None)
+                if isinstance(done_name, str) and done_name:
+                    accumulated_tool_calls[item_id]["name"] = done_name
+            elif event_type == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                else:
+                    item_type = getattr(item, "type", None) if item else None
+                if item_type == "function_call":
+                    if isinstance(item, dict):
+                        item_id = item.get("id", "")
+                        call_id = item.get("call_id", "")
+                        name = item.get("name", "")
+                    else:
+                        item_id = getattr(item, "id", "")
+                        call_id = getattr(item, "call_id", "")
+                        name = getattr(item, "name", "")
+                    if item_id not in accumulated_tool_calls:
+                        accumulated_tool_calls[item_id] = {"name": name, "call_id": call_id, "arguments": ""}
+                    else:
+                        if call_id:
+                            accumulated_tool_calls[item_id]["call_id"] = call_id
+                        if name:
+                            accumulated_tool_calls[item_id]["name"] = name
+            elif event_type == "response.output_item.done":
+                item = getattr(event, "item", None)
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                else:
+                    item_type = getattr(item, "type", None) if item else None
+                if item_type == "function_call":
+                    if isinstance(item, dict):
+                        item_id = item.get("id", "")
+                        call_id = item.get("call_id", "")
+                        name = item.get("name", "")
+                        item_arguments = item.get("arguments", "")
+                    else:
+                        item_id = getattr(item, "id", "")
+                        call_id = getattr(item, "call_id", "")
+                        name = getattr(item, "name", "")
+                        item_arguments = getattr(item, "arguments", "")
+                    if item_id not in accumulated_tool_calls:
+                        accumulated_tool_calls[item_id] = {"name": name, "call_id": call_id, "arguments": item_arguments}
+                    else:
+                        accumulated_tool_calls[item_id]["name"] = name
+                        accumulated_tool_calls[item_id]["call_id"] = call_id
+                else:
+                    if item is not None:
+                        accumulated_output.append(item.model_dump() if hasattr(item, "model_dump") else vars(item))
+            elif event_type == "response.completed":
+                resp = getattr(event, "response", None)
+                if resp:
+                    usage_obj = getattr(resp, "usage", None)
+                    if usage_obj:
+                        usage = usage_obj.model_dump() if hasattr(usage_obj, "model_dump") else vars(usage_obj)
+                    finish_reason = getattr(resp, "status", None)
+        tool_calls_list = [
+            {"id": k, "call_id": v["call_id"], "type": "function", "function": {"name": v["name"], "arguments": v["arguments"]}}
+            for k, v in accumulated_tool_calls.items()
+        ] if accumulated_tool_calls else None
+        yield {"content": None, "tool_calls": tool_calls_list, "usage": usage, "finish_reason": finish_reason, "reasoning": None, "output": accumulated_output}
+    except Exception as error:
+        yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
+
+
 async def openai_test_model(configuration, api_key):
     openAI = AsyncOpenAI(api_key=api_key)
     try:

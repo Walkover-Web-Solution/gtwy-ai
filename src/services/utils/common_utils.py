@@ -62,7 +62,8 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
         for param, var_name in tool_args_mapping.items():
             if var_name in agent_variables:
                 resolved_args[param] = agent_variables[var_name]
-
+            elif tool_type != "custom_function":
+                resolved_args[param] = var_name
         if tool_type == "custom_function":
             function_data = pre_tool.get("function_data", {})
             required_params = tool_config.get("required_params", [])
@@ -72,13 +73,16 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
                         resolved_args[param] = agent_variables[param]
             resolved_pre_tools.append({
                 "type": "custom_function",
-                "name": function_data.get("script_id"),
+                "name":  tool_config.get("script_id"),
                 "args": resolved_args,
             })
         else:
             resolved_pre_tools.append({
                 "type": tool_type,
                 "args": resolved_args,
+                "config": tool_config,
+                
+                
             })
 
     parsed_data["pre_tools"] = resolved_pre_tools
@@ -412,7 +416,6 @@ async def handle_pre_tools(parsed_data, custom_config):
                 response = web_response.get('response')
                 error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
                 parsed_data["variables"]["web_search_pre_result"] = error_msg
-        
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
     sub_thread_id = parsed_data["sub_thread_id"]
@@ -483,7 +486,7 @@ def process_variable_state(parsed_data):
                 # 1. Variable doesn't exist in variables
                 # 2. Variable exists but is None or empty string
                 # 3. Variable_state has empty value
-                if current_value is None or current_value == "" or var_name not in parsed_data["variables"]:
+                if (current_value is None or current_value == "" or var_name not in parsed_data["variables"]) and var_state["default_value"] not in (None, ""):
                     parsed_data["variables"][var_name] = var_state["default_value"]
 
 
@@ -839,6 +842,10 @@ async def process_batch_background_tasks(parsed_data, result, processed_prompts,
         await asyncio.gather(*tasks, return_exceptions=True)
 
 def build_service_params_for_batch(parsed_data, custom_config, model_output_config):
+
+    # Temporary fix for batch - stream bug
+    custom_config.pop("stream", None)
+
     return {
         "customConfig": custom_config,
         "configuration": parsed_data["configuration"],
@@ -1277,3 +1284,184 @@ async def update_cost_usage_and_apikey_status_in_background(original_service, pa
     if completion_success:
         asyncio.create_task(update_cost_and_last_used(parsed_data))
     asyncio.create_task(mark_apikey_status_from_response(original_service, parsed_data, code))
+
+
+async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations, request_body=None, chat_function=None):
+    import traceback as tb
+    original_service = parsed_data["service"]
+    original_model = parsed_data["model"]
+    timer.start()
+    original_error = None
+
+    try:
+        from src.services.commonServices.response_caching_service import handle_response_caching
+        result = await handle_response_caching(parsed_data=parsed_data, class_obj=class_obj)
+
+    except Exception as first_err:
+        original_error = str(first_err)
+        logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")
+        fall_back = parsed_data.get("fall_back")
+
+        if fall_back and fall_back.get("is_enable", False):
+            try:
+                parsed_data["model"] = fall_back.get("model", parsed_data["model"])
+                parsed_data["service"] = fall_back.get("service", parsed_data["service"])
+                parsed_data["configuration"]["model"] = fall_back.get("model")
+
+                if parsed_data["service"] != original_service:
+                    parsed_data["apikey"] = fall_back.get("apikey") or (
+                        Config.AI_ML_APIKEY if fall_back.get("service") == "ai_ml" else None
+                    )
+                    fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
+                        parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
+                    )
+                    fb_custom_config = await configure_custom_settings(
+                        fb_model_config["configuration"], fb_custom_config, parsed_data["service"]
+                    )
+                    fallback_params = build_service_params(
+                        parsed_data,
+                        fb_custom_config,
+                        fb_model_output_config,
+                        thread_info,
+                        timer,
+                        params.get("memory"),
+                        params.get("send_error_to_webhook"),
+                        bridge_configurations,
+                    )
+                    fallback_class_obj = await Helper.create_service_handler(fallback_params, parsed_data["service"])
+                else:
+                    fallback_class_obj = class_obj
+                    fallback_class_obj.model = parsed_data["model"]
+                    if fall_back.get("apikey"):
+                        fallback_class_obj.apikey = fall_back["apikey"]
+                    fallback_params = params
+
+                # Transfer the live streamer so the same SSE queue/RTLayer channel is reused
+                fallback_class_obj.streamer = class_obj.streamer
+                fallback_class_obj.stream_mode = True
+
+                from src.services.commonServices.response_caching_service import handle_response_caching
+                result = await handle_response_caching(parsed_data=parsed_data, class_obj=fallback_class_obj)
+
+                if result.get("response", {}).get("data") is not None:
+                    result["response"]["data"]["fallback"] = True
+                    result["response"]["data"]["firstAttemptError"] = (
+                        f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
+                        f"Retried with {parsed_data['service']}/{parsed_data['model']}"
+                    )
+
+                class_obj = fallback_class_obj
+                params = fallback_params
+
+            except Exception as retry_err:
+                logger.error(f"SSE fallback attempt also failed ({parsed_data['service']}/{parsed_data['model']}): {retry_err}, {tb.format_exc()}")
+                if class_obj.streamer:
+                    await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
+                    await class_obj.streamer.close()
+                return
+        else:
+            if class_obj.streamer:
+                await class_obj.streamer.emit_error(original_error)
+                await class_obj.streamer.close()
+            return
+
+    # Handle agent transfer: save agent A's metrics/history, then fire agent B with the live streamer
+    transfer_agent_config = result.get("transfer_agent_config") if isinstance(result, dict) else None
+    if transfer_agent_config and transfer_agent_config.get("action_type") == "transfer" and chat_function and request_body:
+        try:
+            result["response"]["usage"] = params["token_calculator"].get_total_usage()
+            if parsed_data.get("type") != "image":
+                parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
+                    parsed_data["model"], parsed_data["service"]
+                )
+                result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
+
+            current_version_id = bridge_configurations.get(parsed_data["bridge_id"], {}).get(
+                "version_id", parsed_data.get("version_id")
+            )
+            latency = create_latency_object(timer, params)
+            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+
+            current_history_data = {
+                "bridge_id": parsed_data["bridge_id"],
+                "history_params": result.get("historyParams"),
+                "dataset": [parsed_data.get("usage", {})],
+                "version_id": current_version_id,
+                "thread_info": thread_info,
+                "parent_id": parsed_data.get("parent_bridge_id", ""),
+            }
+            TRANSFER_HISTORY[transfer_request_id].append(current_history_data)
+
+            target_agent_id = transfer_agent_config.get("agent_id")
+            user_query = transfer_agent_config.get("user_query")
+
+            if target_agent_id and target_agent_id in bridge_configurations:
+                target_agent_cfg = bridge_configurations[target_agent_id]
+                transfer_body = request_body.get("body", {}).copy()
+                transfer_body.update(target_agent_cfg)
+                transfer_body["bridge_id"] = target_agent_id
+                transfer_body["user"] = user_query
+                transfer_body["parent_bridge_id"] = parsed_data["bridge_id"]
+                transfer_body["transfer_request_id"] = transfer_request_id
+                transfer_body["bridge_configurations"] = bridge_configurations
+                # Inject the live streamer so agent B writes to the same SSE connection
+                transfer_body["_injected_streamer"] = class_obj.streamer
+
+                transfer_request_body = {
+                    "body": transfer_body,
+                    "state": request_body.get("state", {}).copy(),
+                    "path_params": request_body.get("path_params", {}),
+                }
+                await chat_function(transfer_request_body)
+            else:
+                logger.warning(f"SSE transfer: target agent {target_agent_id} not found, closing stream")
+                if class_obj.streamer:
+                    await class_obj.streamer.emit_error(f"Transfer target agent {target_agent_id} not found in bridge_configurations")
+                    await class_obj.streamer.close()
+        except Exception as transfer_err:
+            logger.error(f"SSE transfer handling error: {transfer_err}, {tb.format_exc()}")
+            if class_obj.streamer:
+                await class_obj.streamer.emit_error(str(transfer_err))
+                await class_obj.streamer.close()
+        return  # Agent B owns emit_done + close from here
+
+    try:
+        result["response"]["usage"] = params["token_calculator"].get_total_usage()
+        if parsed_data.get("type") != "image":
+            parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
+                parsed_data["model"], parsed_data["service"]
+            )
+            result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
+        params["execution_time_logs"].append({"step": "streaming", "time_taken": round(timer.stop("streaming"), 4)})
+        latency = create_latency_object(timer, params)
+        if not parsed_data["is_playground"]:
+            if result.get("response") and result["response"].get("data"):
+                result["response"]["data"]["message_id"] = parsed_data["message_id"]
+            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+            await process_background_tasks(
+                parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
+            )
+        else:
+            await process_background_tasks_for_playground(result, parsed_data)
+
+        if class_obj.streamer:
+            model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
+            formatted_response = result.get("response", {}) if isinstance(result, dict) else {}
+            finish_reason = (
+                result.get("stream_finish_reason")
+                or model_response.get("finish_reason")
+                or model_response.get("status")
+                or ""
+            )
+            await class_obj.streamer.emit_done(
+                usage=formatted_response.get("usage", {}),
+                message_id=str(parsed_data.get("message_id") or ""),
+                finish_reason=finish_reason,
+                accumulated_data=formatted_response,
+            )
+            await class_obj.streamer.close()
+    except Exception as err:
+        logger.error(f"SSE finalization error: {str(err)}, {tb.format_exc()}")
+        if class_obj.streamer:
+            await class_obj.streamer.emit_error(str(err))
+            await class_obj.streamer.close()

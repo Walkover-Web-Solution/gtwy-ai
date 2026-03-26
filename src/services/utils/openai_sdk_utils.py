@@ -110,7 +110,7 @@ async def build_and_override_request_body(request: Request) -> None:
     internal_body: Dict[str, Any] = {
         "agent_id": agent_id,
         "bridge_id": agent_id,
-
+        
         "user": user_message,
         "messages": payload.get("messages", []),
         "thread_id": payload.get("conversation_id")
@@ -118,7 +118,11 @@ async def build_and_override_request_body(request: Request) -> None:
         "sub_thread_id": payload.get("sub_thread_id") or None,
         "variables": payload.get("variables") or {},
         "configuration": configuration,
-        "attachments": payload.get("attachments", []),
+        "apikey": payload.get("apikey"),
+        "service": payload.get("service"),
+        "user_urls": payload.get("user_urls") or [],
+        "auto_model_select": payload.get("auto_model_select"),
+        "cache_on": payload.get("cache_on")
     }
 
     body_bytes = json.dumps(internal_body).encode("utf-8")
@@ -213,12 +217,23 @@ async def run_openai_chat_and_format(
             except Exception:
                 content_dict = {}
             chat_response = content_dict
+            if internal_response.status_code >= 400:
+                raise HTTPException(
+                    status_code=internal_response.status_code,
+                    detail=chat_response or "Upstream request failed",
+                )
         else:
             chat_response = internal_response
 
+        if isinstance(chat_response, dict) and chat_response.get("success") is False:
+            status_code = chat_response.get("status_code") or 400
+            raise HTTPException(
+                status_code=status_code,
+                detail=chat_response.get("error") or chat_response,
+            )
+
         return format_openai_response(chat_response, openai_payload)
-    except HTTPException as err:
-        raise HTTPException(
-            status_code=400,
-            detail=err
-        )
+    except HTTPException:
+        raise
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err

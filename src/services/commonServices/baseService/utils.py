@@ -253,6 +253,36 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
 
+def reasoning_formatter(service: str, new_config: dict) -> None:
+    if service == service_name["openai"]:
+        if isinstance(new_config.get("reasoning"), dict):
+            new_config["reasoning"]["summary"] = "auto"
+
+    elif service == service_name["gemini"]:
+        effort = new_config["reasoning"].get("effort", "medium")
+        new_config["thinking_config"] = types.ThinkingConfig(
+            include_thoughts=True,
+            thinking_level=effort
+        )
+        new_config.pop("reasoning", None)
+
+    elif service == service_name["anthropic"]:
+        new_config["thinking"] = {"type": "adaptive"}
+        effort = new_config["reasoning"].get("effort", "medium")
+        if new_config.get("output_config"):
+            new_config["output_config"]["effort"] = effort
+        else:
+            new_config["output_config"] = {"effort": effort}
+        
+        new_config.pop("reasoning", None)
+
+    elif service == service_name["groq"]:
+        effort = new_config["reasoning"].get("effort", "medium")
+        new_config["reasoning_effort"] = effort
+        new_config.pop("reasoning", None)
+
+    # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
+
 
 async def send_request(url, data, method, headers):
     try:
@@ -329,6 +359,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                         "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
                         "user": tool_data.get("args").get("_query"),
                         "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
+                        "message_id": self.message_id,
                     }
 
                     # Add thread_id and sub_thread_id if bridge requires it
@@ -440,11 +471,12 @@ def make_code_mapping_by_service(responses, service):
         
         case 'gemini':
             for part in responses['candidates'][0]["content"]["parts"]:
-                if part['function_call']:
-                    name = part["function_call"]["name"]
-                    args = part['function_call']['args']
-                        
-                    codes_mapping[part['function_call']['id']] = {
+                function_call = part.get('function_call') if isinstance(part, dict) else None
+                if function_call:
+                    name = function_call.get("name")
+                    args = function_call.get('args')
+
+                    codes_mapping[function_call.get('id')] = {
                         'name': name,
                         'args': args,
                         "error": False
@@ -635,3 +667,113 @@ def serialize_config(config) -> dict:
 
     serialized = json.loads(json.dumps(config, default=default))
     return remove_nulls(serialized)
+
+
+def build_accumulated_response(service, configuration, message_id, accumulated_content,
+                                final_tool_calls, final_usage, final_finish_reason, last_delta):
+    """Build a complete response dict from streamed data, matching the shape of each service's non-stream response."""
+    full_text = "".join(accumulated_content)
+    if service in [service_name["groq"], service_name["grok"],
+                   service_name["open_router"], service_name["mistral"], service_name["ai_ml"]]:
+        return {
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls},
+                "finish_reason": final_finish_reason,
+            }],
+            "model": configuration.get("model", ""),
+            "usage": final_usage,
+        }
+    elif service == service_name["anthropic"]:
+        content = [{"type": "text", "text": full_text}] if full_text else []
+        if final_tool_calls:
+            content += final_tool_calls
+        return {
+            "id": str(message_id or ""),
+            "type": "message",
+            "role": "assistant",
+            "content": content,
+            "model": configuration.get("model", ""),
+            "stop_reason": final_finish_reason,
+            "stop_sequence": None,
+            "usage": final_usage,
+        }
+    elif service == service_name["gemini"]:
+        parts = [{"text": full_text}] if full_text else []
+        if final_tool_calls:
+            parts += [{"function_call": tc} for tc in final_tool_calls]
+        return {
+            "candidates": [{"content": {"parts": parts, "role": "model"}, "finish_reason": final_finish_reason}],
+            "usage_metadata": final_usage,
+        }
+    elif service == service_name["openai"]:
+        output = list((last_delta or {}).get("output") or [])
+        if not output:
+            output = [{"type": "message", "content": [{"type": "output_text", "text": full_text}]}]
+        if final_tool_calls:
+            for tc in final_tool_calls:
+                output.append({
+                    "type": "function_call",
+                    "id": tc.get("id", ""),
+                    "call_id": tc.get("call_id") or tc.get("id", ""),
+                    "name": tc.get("function", {}).get("name", ""),
+                    "arguments": tc.get("function", {}).get("arguments", ""),
+                })
+        return {"output": output, "model": configuration.get("model", ""), "usage": final_usage, "status": final_finish_reason}
+    return {"content": full_text, "usage": final_usage, "finish_reason": final_finish_reason}
+
+
+async def run_stream_and_collect(generator, streamer):
+    accumulated_content = []
+    final_tool_calls = None
+    final_usage = {}
+    final_finish_reason = None
+    error_in_stream = None
+    last_delta = {}
+
+    async for delta in generator:
+        last_delta = delta
+        if delta.get("error"):
+            error_in_stream = delta["error"]
+            break
+        if delta.get("content"):
+            accumulated_content.append(delta["content"])
+            await streamer.emit_delta(delta["content"])
+        if delta.get("reasoning"):
+            await streamer.emit_reasoning(delta["reasoning"])
+        if delta.get("tool_calls") is not None:
+            final_tool_calls = delta["tool_calls"]
+            for tc in final_tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                tool_name = fn.get("name") or tc.get("name", "")
+                raw_args = fn.get("arguments", tc.get("args", {}))
+
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {}
+                elif isinstance(raw_args, dict):
+                    args = raw_args
+                else:
+                    args = {}
+                await streamer.emit_tool_call(
+                    name=tool_name,
+                    args=args,
+                    call_id=tc.get("call_id") or tc.get("id", ""),
+                )
+        if delta.get("usage"):
+            final_usage = delta["usage"]
+        if delta.get("finish_reason"):
+            final_finish_reason = delta["finish_reason"]
+
+    return {
+        "accumulated_content": accumulated_content,
+        "final_tool_calls": final_tool_calls,
+        "final_usage": final_usage,
+        "final_finish_reason": final_finish_reason,
+        "error_in_stream": error_in_stream,
+        "last_delta": last_delta,
+    }

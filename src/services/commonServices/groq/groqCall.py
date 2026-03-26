@@ -20,7 +20,10 @@ class Groq(BaseService):
         )
         self.customConfig = self.service_formatter(self.customConfig, service_name["groq"])
 
-        groq_response = await self.chats(self.customConfig, self.apikey, "groq")
+        if self.stream_mode:
+            groq_response = await self.stream(self.customConfig, self.apikey, service_name["groq"])
+        else:
+            groq_response = await self.chats(self.customConfig, self.apikey, "groq")
         model_response = groq_response.get("modelResponse", {})
 
         if not groq_response.get("success"):

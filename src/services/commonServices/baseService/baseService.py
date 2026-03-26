@@ -14,23 +14,28 @@ from ....db_services import metrics_service
 from ....services.cache_service import make_json_serializable
 from ....services.commonServices.queueService.queueLogService import sub_queue_obj
 from ..AiMl.ai_ml_image_model import AiMlImageModel
-from ..AiMl.ai_ml_model_run import ai_ml_model_run
-from ..anthropic.anthropicModelRun import anthropic_runmodel
+from ..AiMl.ai_ml_model_run import ai_ml_model_run, ai_ml_stream
+from ..anthropic.anthropicModelRun import anthropic_runmodel, anthropic_stream
 from ..Google.gemini_image_model import gemini_image_model
-from ..Google.gemini_modelrun import gemini_modelrun
+from ..Google.gemini_modelrun import gemini_modelrun, gemini_modelrun_stream
 from ..Google.gemini_video_model import gemini_video_model
-from ..grok.grokModelRun import grok_runmodel
-from ..groq.groqModelRun import groq_runmodel
-from ..Mistral.mistral_model_run import mistral_model_run
+from ..grok.grokModelRun import grok_runmodel, grok_stream
+from ..groq.groqModelRun import groq_runmodel, groq_stream
+from ..Mistral.mistral_model_run import mistral_model_run, mistral_stream
 from ..openAI.image_model import OpenAIImageModel
-from ..openAI.runModel import openai_completion, openai_response_model
-from ..openRouter.openRouter_modelrun import openrouter_modelrun
+from ..openAI.runModel import openai_completion, openai_response_model, openai_response_stream
+from ..openAI.openai_stream_utils import sanitize_openai_response_item
+from ..openRouter.openRouter_modelrun import openrouter_modelrun, openrouter_stream
+from ..streaming_service import StreamingService
 from .utils import (
+    build_accumulated_response,
     make_code_mapping_by_service,
     process_data_and_run_tools,
+    run_stream_and_collect,
     sendResponse,
     tool_call_formatter,
     validate_tool_call,
+    reasoning_formatter
 )
 from src.exceptions import ApiCallError
 
@@ -91,6 +96,12 @@ class BaseService:
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
 
+        self.stream_mode = params.get("customConfig", {}).get("stream") is True
+        if self.stream_mode:
+            self.streamer = StreamingService(mode="sse")
+        else:
+            self.streamer = None
+
     def aiconfig(self):
         return self.customConfig
 
@@ -128,17 +139,27 @@ class BaseService:
                     tool_calls_id = assistant_tool_calls['id']
                     configuration['messages'].append(mapping_response_data[tool_calls_id])
                 case 'openai':
+                    should_sanitize_openai_items = bool(self.stream_mode)
+
                     # First, add all reasoning outputs to the configuration
                     for output in response["output"]:
                         if output.get("type") == "reasoning":
-                            configuration["input"].append(output)
+                            configuration["input"].append(
+                                sanitize_openai_response_item(output)
+                                if should_sanitize_openai_items
+                                else output
+                            )
 
                     # Then handle function calls using the index parameter
                     function_call_outputs = [
                         output for output in response["output"] if output.get("type") == "function_call"
                     ]
                     if index < len(function_call_outputs):
-                        output = function_call_outputs[index]
+                        output = (
+                            sanitize_openai_response_item(function_call_outputs[index])
+                            if should_sanitize_openai_items
+                            else function_call_outputs[index]
+                        )
                         configuration['input'].append(output)
                         tool_calls_id = output['id']
                         configuration['input'].append({                           
@@ -203,20 +224,31 @@ class BaseService:
         if validate_tool_call(service, model_response) and loop_count <= int(self.tool_call_count or 0):
             loop_count += 1
         else:
+            if self.stream_mode and self.streamer and response.get("has_tool_calls"):
+                response["stream_finish_reason"] = "tool_call_limit_reached"
             return response
         func_response_data, mapping_response_data, tools_call_data = await self.run_tool(model_response, service)
         self.func_tool_call_data.append(tools_call_data)
 
         # Check if transfer was detected in run_tool
         if isinstance(tools_call_data, dict) and "transfer_agent_config" in tools_call_data:
-            # Return response with transfer config
+            if self.stream_mode and self.streamer:
+                response["stream_finish_reason"] = "tool_transfer"
             response["transfer_agent_config"] = tools_call_data["transfer_agent_config"]
             return response
+
+        if self.stream_mode and self.streamer:
+            for tool_result in func_response_data:
+                await self.streamer.emit_tool_result(
+                    name=tool_result.get("name", ""),
+                    content=tool_result.get("content", ""),
+                    call_id=tool_result.get("tool_call_id", ""),
+                )
 
         configuration, tools = self.update_configration(
             model_response, func_response_data, configuration, mapping_response_data, service, tools
         )
-        if not self.playground:
+        if not self.playground and not self.stream_mode:
             asyncio.create_task(
                 sendResponse(
                     self.response_format,
@@ -224,7 +256,10 @@ class BaseService:
                     success=True,
                 )
             )
-        ai_response = await self.chats(configuration, self.apikey, service, loop_count)
+        if self.stream_mode and self.streamer:
+            ai_response = await self.stream(configuration, self.apikey, service, loop_count)
+        else:
+            ai_response = await self.chats(configuration, self.apikey, service, loop_count)
         ai_response["tools"] = tools
         return await self.function_call(configuration, service, ai_response, loop_count, tools)
 
@@ -302,6 +337,7 @@ class BaseService:
     def prepare_history_params(self, response, model_response, tools, transfer_agent_config=None, is_cached=False):
         # Get the original message content
         original_message = response.get("data", {}).get("content") or ""
+        reasoning = response.get("data", {}).get("reasoning")
 
         # If message is empty but we have transfer config, create custom message
         if not original_message and transfer_agent_config:
@@ -312,6 +348,7 @@ class BaseService:
             "sub_thread_id": self.sub_thread_id,
             "user": self.original_user or "",
             "message": original_message,
+            "reasoning": reasoning,
             "org_id": self.org_id,
             "bridge_id": self.bridge_id,
             "model": model_response.get("model") or self.configuration.get("model"),
@@ -363,6 +400,10 @@ class BaseService:
                 ServiceKeys[service].get(self.type, ServiceKeys[service]["default"]).get(key, key): value
                 for key, value in configuration.items()
             }
+
+            if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
+                new_config.pop("stream")
+
             if configuration.get("tools", ""):
                 if service == service_name["anthropic"]:
                     new_config["tool_choice"] = configuration.get("tool_choice", {"type": "auto"})
@@ -389,13 +430,10 @@ class BaseService:
             if service == service_name["openai"] and "text" in new_config:
                 data = new_config["text"]
                 new_config["text"] = {"format": data}
-            if service == service_name["openai"] and "reasoning" in new_config:
-                if (
-                    isinstance(new_config["reasoning"], dict)
-                    and "key" in new_config["reasoning"]
-                    and "type" in new_config["reasoning"]
-                ):
-                    new_config["reasoning"] = {new_config["reasoning"]["key"]: new_config["reasoning"]["type"]}
+            
+            # Handle Reasoning config 
+            if new_config.get("reasoning", False):
+                reasoning_formatter(service, new_config)
 
             if service == service_name['gemini']:
                 from google.genai import types
@@ -419,7 +457,7 @@ class BaseService:
                             new_config["response_mime_type"] = "application/json" 
 
                 # Build config_params excluding "model", and remove None values
-                config_params = {k: v for k, v in new_config.items() if v is not None and k not in {"model", "tool_choice", "parallel_tool_calls"}}
+                config_params = {k: v for k, v in new_config.items() if v is not None and k not in {"model", "tool_choice", "parallel_tool_calls", "stream"}}
                 
                 new_config = {
                     "model": new_config["model"],
@@ -429,7 +467,8 @@ class BaseService:
             return new_config
         except Exception as e:
             logger.error(f"An error occurred: {str(e)}")
-            raise ValueError(f"Service key error: {e.args[0]}") from e
+            error = e.args
+            raise ValueError(f"Service key error: {error[0] if error else str(e)}") from e
 
     async def chats(self, configuration, apikey, service, count=0):
         try:
@@ -584,6 +623,76 @@ class BaseService:
                 service=self.service,
             )
             raise err from e
+
+    async def stream(self, configuration, apikey, service, count=0):
+        """Parallel to chats() — streams from the per-service SDK, emits SSE/RTLayer events
+        via self.streamer, and returns the same complete response dict as chats()."""
+        try:
+            if count == 0:
+                await self.streamer.emit_start(
+                    model=self.model or "",
+                    service=service,
+                    bridge_id=str(self.bridge_id or ""),
+                    message_id=str(self.message_id or ""),
+                )
+
+            if service == service_name["openai"]:
+                generator = openai_response_stream(configuration, apikey)
+            elif service == service_name["anthropic"]:
+                generator = anthropic_stream(configuration, apikey)
+            elif service == service_name["groq"]:
+                generator = groq_stream(configuration, apikey)
+            elif service == service_name["grok"]:
+                generator = grok_stream(configuration, apikey)
+            elif service == service_name["open_router"]:
+                generator = openrouter_stream(configuration, apikey)
+            elif service == service_name["mistral"]:
+                generator = mistral_stream(configuration, apikey)
+            elif service == service_name["gemini"]:
+                generator = gemini_modelrun_stream(configuration, apikey)
+            elif service == service_name["ai_ml"]:
+                generator = ai_ml_stream(configuration, apikey)
+            else:
+                raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
+
+            stream_state = await run_stream_and_collect(generator, self.streamer)
+            accumulated_content = stream_state["accumulated_content"]
+            final_tool_calls = stream_state["final_tool_calls"]
+            final_usage = stream_state["final_usage"]
+            final_finish_reason = stream_state["final_finish_reason"]
+            error_in_stream = stream_state["error_in_stream"]
+            last_delta = stream_state["last_delta"]
+
+            if error_in_stream:
+                raise ApiCallError(error_in_stream, service=service)
+
+            accumulated_response = build_accumulated_response(
+                service=service,
+                configuration=configuration,
+                message_id=self.message_id,
+                accumulated_content=accumulated_content,
+                final_tool_calls=final_tool_calls,
+                final_usage=final_usage,
+                final_finish_reason=final_finish_reason,
+                last_delta=last_delta,
+            )
+
+            if self.token_calculator:
+                self.token_calculator.calculate_usage(accumulated_response)
+
+            has_tool_calls = bool(final_tool_calls)
+
+            return {"success": True, "modelResponse": accumulated_response, "has_tool_calls": has_tool_calls}
+
+        except ApiCallError:
+            raise
+        except Exception as e:
+            logger.error(f"stream error=>, {str(e)}, {traceback.format_exc()}")
+            raise ApiCallError(
+                f"error occurs from {self.service} api: {e}",
+                status_code=getattr(e, "status_code", None),
+                service=self.service,
+            ) from e
 
 
     async def replace_variables_in_args(self, codes_mapping):

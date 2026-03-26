@@ -46,7 +46,7 @@ class Anthropic(BaseService):
                 if images_input or self.user
                 else conversation
             )
-        self.customConfig["tools"] = self.tool_call if self.tool_call and len(self.tool_call) != 0 else []
+        # self.customConfig["tools"] = self.tool_call if self.tool_call and len(self.tool_call) != 0 else []
 
         # Add web search support for Anthropic
         self.customConfig = self.service_formatter(self.customConfig, service_name["anthropic"])
@@ -67,7 +67,10 @@ class Anthropic(BaseService):
 
                 self.customConfig["tools"].append(web_search_tool)
 
-        antrophic_response = await self.chats(self.customConfig, self.apikey, service_name["anthropic"])
+        if self.stream_mode:
+            antrophic_response = await self.stream(self.customConfig, self.apikey, service_name["anthropic"])
+        else:
+            antrophic_response = await self.chats(self.customConfig, self.apikey, service_name["anthropic"])
         modelResponse = antrophic_response.get("modelResponse", {})
 
         if not antrophic_response.get("success"):

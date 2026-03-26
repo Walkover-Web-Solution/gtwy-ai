@@ -46,9 +46,8 @@ class TokenCalculator:
                 usage["inputTokens"] = model_response["usage"]["prompt_tokens"]
                 usage["outputTokens"] = model_response["usage"]["completion_tokens"]
                 usage["totalTokens"] = model_response["usage"]["total_tokens"]
-                # Groq doesn't have token details, set to 0
                 usage["cachedTokens"] = 0
-                usage["reasoningTokens"] = 0
+                usage["reasoningTokens"] = (model_response["usage"].get("completion_tokens_details") or {}).get("reasoning_tokens", 0)
 
             case "grok":
                 # Support both dicts (HTTP response) and SDK objects

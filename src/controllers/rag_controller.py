@@ -7,10 +7,12 @@ from bson import ObjectId
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pinecone import Pinecone
+from pydantic import ValidationError
 
 from config import Config
 from models.mongo_connection import db
 
+from ..schemas.rag_schemas import RAGCreateFormRequest, RAGDeleteRequest, RAGQueryRequest
 from ..services.rag_services.chunking_methords import manual_chunking, recursive_chunking, semantic_chunking
 from ..services.utils.apiservice import fetch
 from ..services.utils.rag_utils import extract_csv_text, extract_pdf_text
@@ -47,6 +49,7 @@ async def create_vectors(request):
         body = await request.form()
         file = body.get("file")
         file_extension = "url"
+        text = None
         if file:
             file_extension = file.filename.split(".")[-1].lower()
 
@@ -62,28 +65,32 @@ async def create_vectors(request):
         org_id = request.state.profile.get("org", {}).get("id", "")
         user = request.state.profile.get("user", {})
         embed = request.state.embed
-        url = body.get("doc_url")
-        chunking_type = body.get("chunking_type") or "recursive"
-        chunk_size = int(body.get("chunk_size", 512))
-        chunk_overlap = int(body.get("chunk_overlap", chunk_size * 0.15))
-        name = body.get("name")
-        description = body.get("description")
+        try:
+            form_req = RAGCreateFormRequest.model_validate(dict(body))
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail={"success": False, "error": e.errors()[0]["msg"]})
+        url = form_req.doc_url
+        chunking_type = form_req.chunking_type
+        chunk_size = form_req.chunk_size
+        chunk_overlap = form_req.chunk_overlap
+        name = form_req.name
+        description = form_req.description
         doc_id = None
-        if name is None or description is None:
-            raise HTTPException(status_code=400, detail="Name and description are required.")
         if url is not None:
             data = await get_google_docs_data(url)
             text = data.get("data")
             doc_id = data.get("doc_id")
+        elif not file:
+            raise HTTPException(status_code=422, detail={"success": False, "error": "Either a file or doc_url must be provided."})
+        if text is None:
+            raise HTTPException(status_code=422, detail={"success": False, "error": "Unable to extract text from the provided source."})
         text = str(text)
         if chunking_type == "semantic":
             chunks, embeddings = await semantic_chunking(text=text)
         elif chunking_type == "manual":
             chunks, embeddings = await manual_chunking(text=text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        elif chunking_type == "recursive":
+        else: # Recursive
             chunks, embeddings = await recursive_chunking(text=text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid chunking type or method not supported.")
         return JSONResponse(
             status_code=200,
             content={
@@ -177,31 +184,14 @@ async def store_in_pinecone_and_mongo(embeddings, chunks, org_id, user_id, name,
         raise HTTPException(status_code=500, detail=error) from error
 
 
-async def get_vectors_and_text(request):
+async def get_vectors_and_text(body: RAGQueryRequest):
     try:
-        body = await request.json()
-        query = body.get("query")
-        top_k = body.get("top_k", 2)
-        score = body.get("score") or 0.1
-
-        if query is None:
-            raise HTTPException(status_code=400, detail="Query is required.")
-
-        # Validate minScore range (0.1 to 1)
-        if score < 0.1 or score > 1:
-            raise HTTPException(status_code=400, detail="minScore must be between 0.1 and 1.")
-
-        # Extract parameters from body
-        collection_id = body.get("collection_id")
-        owner_id = body.get("owner_id")
-        resource_id = body.get("doc_id") or body.get("resource_id")
-
-        # Validation: Either (collection_id AND owner_id) OR resource_id must be provided
-        if not ((collection_id and owner_id) or resource_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Either (collection_id and owner_id) or (doc_id/resource_id) must be provided.",
-            )
+        query = body.query
+        top_k = body.top_k
+        score = body.score
+        collection_id = body.collection_id
+        owner_id = body.owner_id
+        resource_id = body.doc_id or body.resource_id
 
         # Case 1: collection_id and owner_id are provided directly
         if collection_id and owner_id:
@@ -280,12 +270,11 @@ async def get_all_docs(request):
         raise HTTPException(status_code=500, detail=error) from error
 
 
-async def delete_doc(request):
+async def delete_doc(request, body: RAGDeleteRequest):
     try:
-        body = await request.json()
         index = pc.Index(pinecone_index)
         org_id = request.state.profile.get("org", {}).get("id", "")
-        id = body.get("id")
+        id = body.id
         result = await rag_parent_model.find_one({"_id": ObjectId(id), "org_id": org_id})
         chunks_array = [] if result is None else result.get("chunks_id_array", [])
 

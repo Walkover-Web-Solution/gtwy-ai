@@ -37,7 +37,10 @@ class OpenRouter(BaseService):
             self.customConfig = self.service_formatter(self.customConfig, service_name["open_router"])
             if "tools" not in self.customConfig and "parallel_tool_calls" in self.customConfig:
                 del self.customConfig["parallel_tool_calls"]
-        openRouterResponse = await self.chats(self.customConfig, self.apikey, service_name["open_router"])
+        if self.stream_mode:
+            openRouterResponse = await self.stream(self.customConfig, self.apikey, service_name["open_router"])
+        else:
+            openRouterResponse = await self.chats(self.customConfig, self.apikey, service_name["open_router"])
         modelResponse = openRouterResponse.get("modelResponse", {})
         if not openRouterResponse.get("success"):
             if not self.playground:

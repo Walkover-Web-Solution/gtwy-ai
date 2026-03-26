@@ -158,6 +158,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
 
     conversation_log_data = {
         "llm_message": history_params.get("message", ""),
+        "reasoning": history_params.get("reasoning", ""),
         "user": history_params.get("user", ""),
         "chatbot_message": history_params.get("chatbot_message", ""),
         "updated_llm_message": None,
@@ -249,6 +250,7 @@ def build_orchestrator_log_data(transfer_chain, thread_info=None):
 
     aggregated_data = {
         "llm_message": {},
+        "reasoning": {},
         "user": {},
         "chatbot_message": {},
         "updated_llm_message": {},
@@ -306,6 +308,7 @@ def build_orchestrator_log_data(transfer_chain, thread_info=None):
         response = history_params.get("response", {})
 
         aggregated_data["llm_message"][bridge_id] = history_params.get("message", "")
+        aggregated_data["reasoning"][bridge_id] = history_params.get("reasoning", "")
         aggregated_data["user"][bridge_id] = history_params.get("user", "")
         aggregated_data["chatbot_message"][bridge_id] = history_params.get("chatbot_message", "")
         aggregated_data["updated_llm_message"][bridge_id] = None
@@ -356,6 +359,7 @@ def build_orchestrator_log_data(transfer_chain, thread_info=None):
 
     return {
         "llm_message": aggregated_data["llm_message"],
+        "reasoning": aggregated_data["reasoning"],
         "user": aggregated_data["user"],
         "chatbot_message": aggregated_data["chatbot_message"],
         "updated_llm_message": aggregated_data["updated_llm_message"],
