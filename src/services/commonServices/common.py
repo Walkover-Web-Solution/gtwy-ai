@@ -104,6 +104,10 @@ async def chat_multiple_agents(request_body):
         # bridge-config merge (primary_config["configuration"] is the raw DB config
         # and will fully overwrite primary_body["configuration"] via .update()).
         original_response_format = (body.get("configuration") or {}).get("response_format")
+        
+        # Preserve thread_id and sub_thread_id before merging bridge config
+        original_thread_id = primary_body.get("thread_id")
+        original_sub_thread_id = primary_body.get("sub_thread_id")
 
         primary_body.update(primary_config)
         primary_body["wrapper_id"] = wrapper_id
@@ -116,6 +120,15 @@ async def chat_multiple_agents(request_body):
         if original_response_format is not None:
             primary_body.setdefault("configuration", {})["response_format"] = original_response_format
             print(f"[chat_multiple_agents] response_format restored: type={original_response_format.get('type')}, channel={original_response_format.get('cred', {}).get('channel')}")
+        
+        # Restore thread_id and sub_thread_id after merge (bridge config should not override these)
+        if original_thread_id:
+            primary_body["thread_id"] = original_thread_id
+        if original_sub_thread_id:
+            primary_body["sub_thread_id"] = original_sub_thread_id
+        elif original_thread_id:
+            # Ensure sub_thread_id is set to thread_id if it was missing
+            primary_body["sub_thread_id"] = original_thread_id
 
         # Create a complete request_body structure for the primary agent
         primary_request_body = {

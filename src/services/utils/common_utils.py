@@ -110,9 +110,25 @@ async def handle_agent_transfer(
 
     # Create a new request body for the transfer agent
     transfer_body = request_body.get("body", {}).copy()
+    
+    # Preserve thread_id and sub_thread_id from original request before merging target config
+    # This ensures A2A transfers maintain the parent's thread context
+    original_thread_id = transfer_body.get("thread_id")
+    original_sub_thread_id = transfer_body.get("sub_thread_id")
+    
     transfer_body.update(target_agent_config)
     transfer_body["bridge_id"] = target_agent_id
     transfer_body["user"] = user_query
+    
+    # Restore thread_id and sub_thread_id after merge (target_agent_config should not override these)
+    # Also ensure sub_thread_id falls back to thread_id if not set
+    if original_thread_id:
+        transfer_body["thread_id"] = original_thread_id
+    if original_sub_thread_id:
+        transfer_body["sub_thread_id"] = original_sub_thread_id
+    elif original_thread_id:
+        # Ensure sub_thread_id is set to thread_id if it was missing
+        transfer_body["sub_thread_id"] = original_thread_id
 
     # Pass the parent_id (current bridge_id) and transfer_request_id to the next agent
     if current_bridge_id:
@@ -1404,12 +1420,27 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             if target_agent_id and target_agent_id in bridge_configurations:
                 target_agent_cfg = bridge_configurations[target_agent_id]
                 transfer_body = request_body.get("body", {}).copy()
+                
+                # Preserve thread_id and sub_thread_id from original request before merging target config
+                original_thread_id = transfer_body.get("thread_id")
+                original_sub_thread_id = transfer_body.get("sub_thread_id")
+                
                 transfer_body.update(target_agent_cfg)
                 transfer_body["bridge_id"] = target_agent_id
                 transfer_body["user"] = user_query
                 transfer_body["parent_bridge_id"] = parsed_data["bridge_id"]
                 transfer_body["transfer_request_id"] = transfer_request_id
                 transfer_body["bridge_configurations"] = bridge_configurations
+                
+                # Restore thread_id and sub_thread_id after merge (target config should not override these)
+                if original_thread_id:
+                    transfer_body["thread_id"] = original_thread_id
+                if original_sub_thread_id:
+                    transfer_body["sub_thread_id"] = original_sub_thread_id
+                elif original_thread_id:
+                    # Ensure sub_thread_id is set to thread_id if it was missing
+                    transfer_body["sub_thread_id"] = original_thread_id
+                
                 # Inject the live streamer so agent B writes to the same SSE connection
                 transfer_body["_injected_streamer"] = class_obj.streamer
 
