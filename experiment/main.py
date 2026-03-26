@@ -14,9 +14,13 @@ from fastapi.responses import FileResponse
 sys.path.insert(0, os.path.dirname(__file__))
 
 from db.connection import close_db, init_db
+from db.memory_db_service import save_session_summary
+from db.session_db_service import append_message, create_session, update_session
 from graph.builder import build_graph
 from routes.a2a_routes import router as a2a_router
 from routes.agent_routes import router as agent_router
+from routes.memory_routes import router as memory_router
+from routes.session_routes import router as session_router
 from routes.tool_routes import router as tool_router
 from services.agent_service import get_compiled_graph_for_agent
 
@@ -46,6 +50,8 @@ app.add_middleware(
 app.include_router(agent_router, prefix="/api")
 app.include_router(tool_router, prefix="/api")
 app.include_router(a2a_router, prefix="/api")
+app.include_router(memory_router, prefix="/api")
+app.include_router(session_router, prefix="/api")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -78,7 +84,7 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
             current_node = name
 
             if name == "planner":
-                await ws_send(ws, "status", {"message": "Creating plan..."})
+                await ws_send(ws, "planner_start", {})
             elif name == "direct":
                 await ws_send(ws, "status", {"message": "Thinking..."})
             elif name == "executor":
@@ -127,7 +133,9 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
 
             if content:
                 streamed_text += content
-                if current_node == "executor" and current_task_id:
+                if current_node == "planner":
+                    await ws_send(ws, "planner_chunk", {"chunk": content})
+                elif current_node == "executor" and current_task_id:
                     await ws_send(ws, "task_chunk", {"task_id": current_task_id, "chunk": content})
                 elif current_node == "synthesizer":
                     await ws_send(ws, "final_chunk", {"chunk": content})
@@ -315,17 +323,46 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
 
             current_node = None
 
-    # Graph finished — send final answer
+    # Graph finished — send final answer and persist session + memories
+    final_answer = ""
     try:
         snap = graph.get_state(config)
         if snap and snap.values:
-            final = snap.values.get("final_answer")
-            if final:
-                await ws_send(ws, "done", {"final_answer": final})
-            else:
-                await ws_send(ws, "done", {"final_answer": ""})
+            final_answer = snap.values.get("final_answer") or ""
     except Exception:
-        await ws_send(ws, "done", {"final_answer": ""})
+        pass
+
+    await ws_send(ws, "done", {"final_answer": final_answer})
+
+    # Persist session and extract memories (best-effort, don't fail the response)
+    try:
+        agent_id = state.get("agent_id")
+        session_id = getattr(ws, "session_id", None)
+        if session_id:
+            await update_session(session_id, {
+                "status": "completed",
+                "state": {"final_answer": final_answer, "goal": state.get("goal", "")},
+            })
+            await append_message(session_id, {"role": "assistant", "content": final_answer})
+
+        # Extract and save memories for agent (only if agent_id is set)
+        if agent_id and final_answer:
+            tasks = state.get("tasks", [])
+            completed_summaries = [
+                f"Task '{t['title']}': {(t.get('result') or '')[:200]}"
+                for t in tasks if t.get("status") == "completed"
+            ]
+            summary = final_answer[:500]
+            key_facts = completed_summaries[:5]  # top 5 task results as learnings
+            await save_session_summary(
+                agent_id=agent_id,
+                session_id=session_id or "unknown",
+                goal=state.get("goal", ""),
+                summary=summary,
+                key_facts=key_facts,
+            )
+    except Exception:
+        pass  # don't fail the response for memory persistence errors
 
     return "completed"
 
@@ -415,6 +452,7 @@ async def websocket_endpoint(ws: WebSocket):
                     "worker_question": None,
                     "worker_question_task_id": None,
                     "planner_response": None,
+                    "worker_messages": None,
                     "runtime_variables": variables,
                 }
 
@@ -422,6 +460,18 @@ async def websocket_endpoint(ws: WebSocket):
                 ws.state_thread_id = thread_id
                 ws.state_config = config
                 ws.agent_graph = agent_graph  # Store for reuse in answer/approve
+
+                # Create persistent session
+                try:
+                    session = await create_session({
+                        "agent_id": agent_id or "default",
+                        "thread_id": thread_id,
+                        "goal": goal,
+                    })
+                    ws.session_id = session["session_id"]
+                    await append_message(ws.session_id, {"role": "user", "content": goal})
+                except Exception:
+                    ws.session_id = None
 
                 await ws_send(ws, "thread_created", {"thread_id": thread_id, "agent_id": agent_id})
 

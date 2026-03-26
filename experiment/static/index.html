@@ -679,6 +679,47 @@
             word-break: break-word;
         }
 
+        /* Planner Streaming Panel */
+        .planner-stream-panel {
+            display: none;
+            background: var(--bg-secondary);
+            border: 1px solid rgba(108,92,231,0.3);
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+            animation: fadeIn 0.3s ease;
+            overflow: hidden;
+        }
+        .planner-stream-panel.visible { display: block; }
+        .planner-stream-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            border-bottom: 1px solid rgba(108,92,231,0.15);
+        }
+        .planner-stream-header .spinner {
+            width: 14px; height: 14px;
+            border-width: 2px;
+        }
+        .planner-stream-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--accent-light);
+        }
+        .planner-stream-content {
+            padding: 12px 16px;
+            font-size: 12px;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+        }
+
         /* Planner Thinking Panel */
         .thinking-panel {
             display: none;
@@ -1106,6 +1147,15 @@
         </div>
 
         <div class="direct-response" id="directResponse"></div>
+
+        <!-- Planner Streaming Panel -->
+        <div class="planner-stream-panel" id="plannerStreamPanel">
+            <div class="planner-stream-header">
+                <div class="spinner"></div>
+                <span class="planner-stream-label">Planner Working</span>
+            </div>
+            <div class="planner-stream-content" id="plannerStreamContent"></div>
+        </div>
 
         <!-- Planner Thinking Panel -->
         <div class="thinking-panel" id="thinkingPanel">
@@ -1769,6 +1819,9 @@
             $('stepProposalCard').classList.remove('visible');
             $('stepRejectBox').style.display = 'none';
             stepCounter.classList.remove('visible');
+            // Reset planner streaming panel
+            $('plannerStreamPanel').classList.remove('visible');
+            $('plannerStreamContent').textContent = '';
             // Reset planner thinking panel
             $('thinkingPanel').classList.remove('visible', 'expanded');
             $('thinkingSteps').innerHTML = '';
@@ -1912,18 +1965,44 @@
                     showStatus(data.message);
                     break;
 
+                case 'planner_start': {
+                    // Show streaming panel immediately instead of a loader
+                    hideStatus();
+                    const sp = $('plannerStreamPanel');
+                    $('plannerStreamContent').textContent = '';
+                    sp.classList.add('visible');
+                    sp.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    break;
+                }
+
                 case 'question':
                     showQuestion(data.text, data.options);
                     runBtn.disabled = false;
                     runBtn.textContent = 'Run';
                     break;
 
+                case 'planner_chunk': {
+                    const streamPanel = $('plannerStreamPanel');
+                    const streamContent = $('plannerStreamContent');
+                    if (!streamPanel.classList.contains('visible')) {
+                        streamPanel.classList.add('visible');
+                        streamContent.textContent = '';
+                    }
+                    streamContent.textContent += data.chunk;
+                    streamContent.scrollTop = streamContent.scrollHeight;
+                    break;
+                }
+
                 case 'planner_thinking':
+                    // Hide streaming panel once thinking summary arrives
+                    $('plannerStreamPanel').classList.remove('visible');
                     renderThinking(data.steps);
                     break;
 
                 case 'plan_ready':
                     hideStatus();
+                    // Hide planner streaming panel
+                    $('plannerStreamPanel').classList.remove('visible');
                     // Clear any previous plan
                     timeline.innerHTML = '';
                     totalTasks = data.tasks.length;

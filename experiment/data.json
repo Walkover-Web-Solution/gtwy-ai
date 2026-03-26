@@ -5,7 +5,7 @@
       "org_id": "default",
       "name": "FBAI_Decision_maker",
       "description": "",
-      "system_prompt": "Role: Automation Expert at viaSocket\n\nObjective: Analyze user requirements and generate or update automation flows within viaSocket.\n\nInstructions\n- You create the  flow; the user creates the connections themselves, so there is no need to take unnecessary information from them.\n- Strictly follow  the output JSON schema.\n- Communicate with the user in very short and simple English.\n- Do not share any internal or personal details.\n- Functions and APIs have lower priority\u2014use them only when necessary.\n\n## Automation Structure Rules\n\nEvery automation has exactly:\n- **1 Trigger** (never more, never zero)\n- **1 or more Actions**\n\n### Trigger Types\n| Type    | When to use                                      |\n|---------|--------------------------------------------------|\n| webhook | External service sends data to this flow         |\n| cron    | Time-based / scheduled execution                 |\n| plugin  | Triggered by a pre-built service event           |\n\n### Action Types\n| Type     | When to use                                                  |\n|----------|--------------------------------------------------------------|\n| plugin   | FIRST CHOICE \u2014 pre-built service integrations               |\n| function | Only to transform/format data using JavaScript               |\n| api      | Only when no plugin exists for the required external call    |\n| ifGroup  | Conditional branching (if / else if / else)                  |\n\n> Priority rule: plugin \u2192 function \u2192 api. Never use api if a plugin exists.\n\nviaSocket Automation Json Example ->\n\n{\"order\":{\"root\":[\"SendEmailAlert\",\"HTTP_API_Request\",\"swtcusl07V0Y\",\"Send_Mail_Working\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[\"JS_Code\"],\"swtcusl07V0Y\":[\"ifcbusl07V0Y\",\"ifcbUH9jK05l\"]},\"blocks\":{\"JS_Code\":{\"type\":\"function\",\"status\":\"DRAFTED\",\"identifier\":\"funcWLcPg0j3\"},\"response\":{\"data\":\"\",\"type\":\"response\",\"status\":\"DRAFTED\",\"identifier\":\"response\",\"responseType\":\"default\"},\"ifcbUH9jK05l\":{\"html\":\"Same data of conditions\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"\",\"identifier\":\"ifcbUH9jK05l\",\"isElseBlock\":true},\"ifcbusl07V0Y\":{\"html\":\"true\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"true\",\"statement\":\"true\",\"identifier\":\"ifcbusl07V0Y\",\"dynamicVariables\":{}},\"swtcusl07V0Y\":{\"type\":\"ifGroup\",\"parent\":\"root\",\"identifier\":\"swtcusl07V0Y\"},\"SendEmailAlert\":{\"type\":\"function\",\"status\":\"ACTIVE\",\"identifier\":\"actE1F2G3H4\",\"code\":\"\",\"dynamicVariables\":{}},\"HTTP_API_Request\":{\"type\":\"api\",\"status\":\"DRAFTED\",\"identifier\":\"func0PsxTtMn\"},\"Send_Mail_Working\":{\"type\":\"plugin\",\"status\":\"DRAFTED\",\"iconUrl\":\"https://mailmeteor.com/logos/assets/PNG/Gmail_Logo_512px.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Gmail Dev\",\"actionName\":\"Send_Mail_Working\"},\"identifier\":\"funcCS5byDXv\"}},\"trigger\":{\"type\":\"webhook\"}}\n\njson\n\nCurrent Automation\n{{pre_function}} (existing automation steps)\n\u2014\u2014\u2014\u2014\u2014\u2014 end Automation\u2014\u2014\u2014\u2014\u2014\u2014\n\nContext\nRuntime variables from previous steps are available:\ncontext = {{context}}\n\u2014\u2014\u2014\u2014\u2014 end context \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\n\noutput -> give the status about automation in short and human friendly way",
+      "system_prompt": "Role: You are Automation Expert at viaSocket\n\nObjective: Analyze user requirements and create or update automation flows within viaSocket.\n\nInstructions\n- Functions and APIs have lower priority\u2014use them only when necessary.\n\n## Automation Structure Rules\n\nEvery automation has exactly:\n- **1 Trigger** (only one)\n- **1 or more Actions**\n\n### Trigger Types\n| Type    | When to use                                      |\n|---------|--------------------------------------------------|\n| webhook | External service sends data to this flow         |\n| cron    | Time-based / scheduled execution                 |\n| plugin  | Triggered by a pre-built service event           |\n\n### Action Types\n| Type     | When to use                                                  |\n|----------|--------------------------------------------------------------|\n| plugin   | FIRST CHOICE \u2014 pre-built service integrations               |\n| function | Only to transform/format data using JavaScript               |\n| api      | Only when no plugin exists for the required external call    |\n| ifGroup  | Conditional branching (if / else if / else)                  |\n\n> Priority rule: plugin \u2192 function \u2192 api. Never use api if a plugin exists.\n\nviaSocket Automation Json Example ->\n\n{\"order\":{\"root\":[\"SendEmailAlert\",\"HTTP_API_Request\",\"swtcusl07V0Y\",\"Send_Mail_Working\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[\"JS_Code\"],\"swtcusl07V0Y\":[\"ifcbusl07V0Y\",\"ifcbUH9jK05l\"]},\"blocks\":{\"JS_Code\":{\"type\":\"function\",\"status\":\"DRAFTED\",\"identifier\":\"funcWLcPg0j3\"},\"response\":{\"data\":\"\",\"type\":\"response\",\"status\":\"DRAFTED\",\"identifier\":\"response\",\"responseType\":\"default\"},\"ifcbUH9jK05l\":{\"html\":\"Same data of conditions\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"\",\"identifier\":\"ifcbUH9jK05l\",\"isElseBlock\":true},\"ifcbusl07V0Y\":{\"html\":\"true\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"true\",\"statement\":\"true\",\"identifier\":\"ifcbusl07V0Y\",\"dynamicVariables\":{}},\"swtcusl07V0Y\":{\"type\":\"ifGroup\",\"parent\":\"root\",\"identifier\":\"swtcusl07V0Y\"},\"SendEmailAlert\":{\"type\":\"function\",\"status\":\"ACTIVE\",\"identifier\":\"actE1F2G3H4\",\"code\":\"\",\"dynamicVariables\":{}},\"HTTP_API_Request\":{\"type\":\"api\",\"status\":\"DRAFTED\",\"identifier\":\"func0PsxTtMn\"},\"Send_Mail_Working\":{\"type\":\"plugin\",\"status\":\"DRAFTED\",\"iconUrl\":\"https://mailmeteor.com/logos/assets/PNG/Gmail_Logo_512px.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Gmail Dev\",\"actionName\":\"Send_Mail_Working\"},\"identifier\":\"funcCS5byDXv\"}},\"trigger\":{\"type\":\"webhook\"}}\n\njson\nCurrent Automation\n{{pre_function}} (existing automation steps)\n\u2014\u2014\u2014\u2014\u2014\u2014 end Automation\u2014\u2014\u2014\u2014\u2014\u2014\n\nContext\nRuntime variables from previous steps are available:\ncontext = {{context}}\n\u2014\u2014\u2014\u2014\u2014 end context \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\n\noutput -> give the status about automation in short and human friendly way",
       "model": "gpt-4o",
       "temperature": 0.3,
       "max_tokens": 4096,
@@ -25,7 +25,7 @@
       "status": "active",
       "created_by": "system",
       "created_at": "2026-03-15T19:45:53.514247+00:00",
-      "updated_at": "2026-03-26T09:59:32.863816+00:00",
+      "updated_at": "2026-03-26T17:34:16.181710+00:00",
       "pretool_input": {}
     },
     "agent_01c7cf4ad266": {
@@ -506,7 +506,220 @@
       "updated_at": "2026-03-25T18:02:38.238913+00:00"
     }
   },
-  "sessions": {},
+  "sessions": {
+    "sess_067f3f5cc385": {
+      "session_id": "sess_067f3f5cc385",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "69dc701a-2be6-4eab-80e5-a5e6f9f470ee",
+      "goal": "I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T14:26:03.747597+00:00",
+      "updated_at": "2026-03-26T14:26:03.747597+00:00"
+    },
+    "sess_63987e1c6c4a": {
+      "session_id": "sess_63987e1c6c4a",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "d0344951-cbcc-4d6f-83af-0a26ae7216ff",
+      "goal": "I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message",
+      "state": {
+        "final_answer": "{\"order\":{\"root\":[\"Gmail_Trigger\",\"Add_Row_to_Google_Sheets\",\"Send_Slack_Message\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[],\"swtcusl07V0Y\":[]},\"blocks\":{\"Gmail_Trigger\":{\"type\":\"plugin\",\"status\":\"ACTIVE\",\"iconUrl\":\"https://mailmeteor.com/logos/assets/PNG/Gmail_Logo_512px.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Gmail Dev\",\"actionName\":\"New_Email_Matching_Search\"},\"identifier\":\"Gmail_Trigger\"},\"Add_Row_to_Google_Sheets\":{\"type\":\"plugin\",\"status\":\"ACTIVE\",\"iconUrl\":\"https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/Google_Sheets_logo_%282014-2020%29.svg/512px-Google_Sheets_logo_%282014-2020%29.svg.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Google Sheets\",\"actionName\":\"Add_Row\"},\"identifier\":\"Add_Row_to_Google_Sheets\"},\"Send_Slack_Message\":{\"type\":\"plugin\",\"status\":\"ERROR\",\"iconUrl\":\"https://upload.wikimedia.org/wikipedia/commons/thumb/7/76/Slack_Icon.png/512px-Slack_Icon.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Slack\",\"actionName\":\"Send_Message\"},\"identifier\":\"Send_Slack_Message\"}},\"trigger\":{\"type\":\"plugin\"}}",
+        "goal": "I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message"
+        },
+        {
+          "role": "assistant",
+          "content": "{\"order\":{\"root\":[\"Gmail_Trigger\",\"Add_Row_to_Google_Sheets\",\"Send_Slack_Message\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[],\"swtcusl07V0Y\":[]},\"blocks\":{\"Gmail_Trigger\":{\"type\":\"plugin\",\"status\":\"ACTIVE\",\"iconUrl\":\"https://mailmeteor.com/logos/assets/PNG/Gmail_Logo_512px.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Gmail Dev\",\"actionName\":\"New_Email_Matching_Search\"},\"identifier\":\"Gmail_Trigger\"},\"Add_Row_to_Google_Sheets\":{\"type\":\"plugin\",\"status\":\"ACTIVE\",\"iconUrl\":\"https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/Google_Sheets_logo_%282014-2020%29.svg/512px-Google_Sheets_logo_%282014-2020%29.svg.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Google Sheets\",\"actionName\":\"Add_Row\"},\"identifier\":\"Add_Row_to_Google_Sheets\"},\"Send_Slack_Message\":{\"type\":\"plugin\",\"status\":\"ERROR\",\"iconUrl\":\"https://upload.wikimedia.org/wikipedia/commons/thumb/7/76/Slack_Icon.png/512px-Slack_Icon.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Slack\",\"actionName\":\"Send_Message\"},\"identifier\":\"Send_Slack_Message\"}},\"trigger\":{\"type\":\"plugin\"}}"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "completed",
+      "created_at": "2026-03-26T14:27:07.555069+00:00",
+      "updated_at": "2026-03-26T14:29:22.260900+00:00"
+    },
+    "sess_b1b848c1361a": {
+      "session_id": "sess_b1b848c1361a",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "05b0f208-fc02-45c4-9185-f46bfb04b0e9",
+      "goal": "I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T14:41:41.735755+00:00",
+      "updated_at": "2026-03-26T14:41:41.735755+00:00"
+    },
+    "sess_d0137d9420dd": {
+      "session_id": "sess_d0137d9420dd",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "cad1bd26-1f6d-4e6c-958e-f6983452472d",
+      "goal": "delete all the steps from my automation",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "delete all the steps from my automation"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T15:34:52.453880+00:00",
+      "updated_at": "2026-03-26T15:34:52.453880+00:00"
+    },
+    "sess_e7400d4fafc5": {
+      "session_id": "sess_e7400d4fafc5",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "fb6f6376-b610-4689-be46-9b70dd2b90d0",
+      "goal": "delete all the steps of my automation",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "delete all the steps of my automation"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T17:26:08.813650+00:00",
+      "updated_at": "2026-03-26T17:26:08.813650+00:00"
+    },
+    "sess_5dd2a79d6b5a": {
+      "session_id": "sess_5dd2a79d6b5a",
+      "agent_id": "default",
+      "org_id": "default",
+      "thread_id": "ef6f3d29-c7a8-425f-9f2e-217754590fd4",
+      "goal": "hii",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "hii"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T17:28:48.891841+00:00",
+      "updated_at": "2026-03-26T17:28:48.891841+00:00"
+    },
+    "sess_38a43da57705": {
+      "session_id": "sess_38a43da57705",
+      "agent_id": "default",
+      "org_id": "default",
+      "thread_id": "71b43fd7-bc1d-4c5e-b54f-cc76c76ff5aa",
+      "goal": "hii",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "hii"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T17:31:03.774105+00:00",
+      "updated_at": "2026-03-26T17:31:03.774105+00:00"
+    },
+    "sess_c938c3790c1b": {
+      "session_id": "sess_c938c3790c1b",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "d0ea2c5d-4a95-494e-982e-0e32a7892b51",
+      "goal": "delete all the steps from my flow",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "delete all the steps from my flow"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T17:34:43.222080+00:00",
+      "updated_at": "2026-03-26T17:34:43.222080+00:00"
+    },
+    "sess_03b8d95e825c": {
+      "session_id": "sess_03b8d95e825c",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "2930ff57-00fb-47a4-b9bb-6546e6359b18",
+      "goal": "delete all the steps from my flow",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "delete all the steps from my flow"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T17:36:09.810809+00:00",
+      "updated_at": "2026-03-26T17:36:09.810809+00:00"
+    },
+    "sess_ef5e9c84e65d": {
+      "session_id": "sess_ef5e9c84e65d",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "3b59534d-d288-445c-b621-0ea35fd6acd2",
+      "goal": "delete all the steps from automation",
+      "state": {
+        "final_answer": "The current automation flow has a trigger set up with Gmail to run when a new email matches specific filters. However, there are no action steps defined in the automation flow. Additionally, there were no steps named 'SaveEmailToSheet', 'SaveEmailToSheet_1', or 'SaveEmailDataToSheet' found in the automation, indicating they were either never added or already removed. The automation is essentially inactive as it stands, since it lacks any actions to perform after being triggered.",
+        "goal": "delete all the steps from automation"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "delete all the steps from automation"
+        },
+        {
+          "role": "assistant",
+          "content": "The current automation flow has a trigger set up with Gmail to run when a new email matches specific filters. However, there are no action steps defined in the automation flow. Additionally, there were no steps named 'SaveEmailToSheet', 'SaveEmailToSheet_1', or 'SaveEmailDataToSheet' found in the automation, indicating they were either never added or already removed. The automation is essentially inactive as it stands, since it lacks any actions to perform after being triggered."
+        }
+      ],
+      "a2a_calls": [],
+      "status": "completed",
+      "created_at": "2026-03-26T17:37:01.823927+00:00",
+      "updated_at": "2026-03-26T17:37:51.900519+00:00"
+    },
+    "sess_02e552965555": {
+      "session_id": "sess_02e552965555",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "b2aca3f7-f344-48ac-87da-ec404cd68e9e",
+      "goal": "I want a flow using Google Forms, Google Sheets, Gmail, Slack, and Notion where when a form is submitted, clean and validate the data, if email is invalid then send correction email, otherwise save it in Google Sheets, create a record in Notion, and notify me on Slack",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "I want a flow using Google Forms, Google Sheets, Gmail, Slack, and Notion where when a form is submitted, clean and validate the data, if email is invalid then send correction email, otherwise save it in Google Sheets, create a record in Notion, and notify me on Slack"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-26T17:40:30.089023+00:00",
+      "updated_at": "2026-03-26T17:40:30.089023+00:00"
+    }
+  },
   "a2a_registry": {
     "agent_0a692435b6d9": {
       "agent_id": "agent_0a692435b6d9",
@@ -530,7 +743,7 @@
       "allowed_callers": [],
       "status": "active",
       "created_at": "2026-03-15T19:45:53.596802+00:00",
-      "updated_at": "2026-03-26T09:59:32.867833+00:00"
+      "updated_at": "2026-03-26T17:34:16.238033+00:00"
     },
     "agent_01c7cf4ad266": {
       "agent_id": "agent_01c7cf4ad266",
@@ -579,6 +792,36 @@
       "status": "active",
       "created_at": "2026-03-15T20:18:28.854722+00:00",
       "updated_at": "2026-03-15T20:18:28.854722+00:00"
+    }
+  },
+  "memories": {
+    "agent/agent_0a692435b6d9/session_summaries": {
+      "mem_21e1ad282307": {
+        "value": {
+          "content": "Session sess_63987e1c6c4a: Goal was 'I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message'. Summary: {\"order\":{\"root\":[\"Gmail_Trigger\",\"Add_Row_to_Google_Sheets\",\"Send_Slack_Message\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[],\"swtcusl07V0Y\":[]},\"blocks\":{\"Gmail_Trigger\":{\"type\":\"plugin\",\"status\":\"ACTIVE\",\"iconUrl\":\"https://mailmeteor.com/logos/assets/PNG/Gmail_Logo_512px.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Gmail Dev\",\"actionName\":\"New_Email_Matching_Search\"},\"identifier\":\"Gmail_Trigger\"},\"Add_Row_to_Google_Sheets\":{\"type\":\"plugin\",\"status\":\"ACTIVE\",\"iconUrl\":\"https://upload.wikime",
+          "category": "session_summaries",
+          "metadata": {
+            "session_id": "sess_63987e1c6c4a",
+            "goal": "I want to create automation when I receive a new email, save its data in Google Sheets and send me a Slack message"
+          },
+          "created_at": "2026-03-26T14:29:22.266708+00:00"
+        },
+        "created_at": "2026-03-26T14:29:22.267402+00:00",
+        "updated_at": "2026-03-26T14:29:22.267402+00:00"
+      },
+      "mem_ac41d1d1a292": {
+        "value": {
+          "content": "Session sess_ef5e9c84e65d: Goal was 'delete all the steps from automation'. Summary: The current automation flow has a trigger set up with Gmail to run when a new email matches specific filters. However, there are no action steps defined in the automation flow. Additionally, there were no steps named 'SaveEmailToSheet', 'SaveEmailToSheet_1', or 'SaveEmailDataToSheet' found in the automation, indicating they were either never added or already removed. The automation is essentially inactive as it stands, since it lacks any actions to perform after being triggered.",
+          "category": "session_summaries",
+          "metadata": {
+            "session_id": "sess_ef5e9c84e65d",
+            "goal": "delete all the steps from automation"
+          },
+          "created_at": "2026-03-26T17:37:51.942834+00:00"
+        },
+        "created_at": "2026-03-26T17:37:51.964557+00:00",
+        "updated_at": "2026-03-26T17:37:51.964557+00:00"
+      }
     }
   }
 }

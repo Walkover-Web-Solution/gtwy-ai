@@ -4,6 +4,7 @@ import uuid
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
+from db.memory_db_service import get_agent_memories_for_prompt
 from graph.state import AgentState
 from services.tool_registry import runtime_variables_ctx
 
@@ -156,6 +157,7 @@ def _parse_tasks(parsed: dict) -> list[dict]:
             "acceptance_criteria": task.get("acceptance_criteria", "Task completed successfully"),
             "estimated_complexity": task.get("estimated_complexity", "moderate"),
             "reflection": None,
+            "worker_thread_id": str(uuid.uuid4()),
         })
 
     return tasks
@@ -365,6 +367,16 @@ async def _run_planner(state: AgentState, model: str = None, temperature: float 
         # Append tool schemas so planner knows what's executable
         if tool_block:
             base_prompt = f"{base_prompt}\n\n{tool_block}"
+
+    # Inject agent memories from past sessions (cross-session context)
+    agent_id = state.get("agent_id")
+    if agent_id:
+        try:
+            memory_block = await get_agent_memories_for_prompt(agent_id, goal=state.get("goal"), limit=10)
+            if memory_block:
+                base_prompt = f"{base_prompt}\n\n{memory_block}"
+        except Exception:
+            pass  # don't fail planning for memory retrieval errors
 
     user_message = _build_user_message(state)
 

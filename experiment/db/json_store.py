@@ -17,6 +17,7 @@ _DEFAULT = {
     "tools": {},
     "sessions": {},
     "a2a_registry": {},
+    "memories": {},
 }
 
 

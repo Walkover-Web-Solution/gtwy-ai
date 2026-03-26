@@ -77,6 +77,7 @@ async def invoke_agent(agent_id: str, goal: str, api_key: str = None, org_id: st
         "worker_question": None,
         "worker_question_task_id": None,
         "planner_response": None,
+        "worker_messages": None,
     }
 
     # Run the graph to completion

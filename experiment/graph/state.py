@@ -13,6 +13,7 @@ class TaskItem(TypedDict):
     acceptance_criteria: str  # what "done" looks like for this task
     estimated_complexity: str  # "simple" | "moderate" | "complex"
     reflection: Optional[str]  # self-reflection result after execution
+    worker_thread_id: Optional[str]  # stable thread ID for sub-agent calls on this task
 
 
 class UserConfig(TypedDict, total=False):
@@ -60,4 +61,5 @@ class AgentState(TypedDict):
     worker_question: Optional[str]  # the question from worker to planner
     worker_question_task_id: Optional[str]  # which task the worker was executing when it asked
     planner_response: Optional[str]  # planner's answer back to the worker
+    worker_messages: Optional[list]  # saved worker conversation history when ask_planner is called
     runtime_variables: Optional[dict]  # variables passed by caller at run time (available to tools via {{path}} templates)

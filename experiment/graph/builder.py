@@ -1,6 +1,8 @@
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
+from db.memory_db_service import set_store
+from db.memory_store import JsonMemoryStore
 from graph.edges import route_after_executor, route_after_planner, route_after_router
 from graph.nodes.direct import direct_node, make_direct_node
 from graph.nodes.executor import executor_node, make_executor_node
@@ -8,6 +10,10 @@ from graph.nodes.planner import make_planner_node, planner_node
 from graph.nodes.router import router_node
 from graph.nodes.synthesizer import make_synthesizer_node, synthesizer_node
 from graph.state import AgentState
+
+# Shared persistent memory store (singleton across all graphs)
+_memory_store = JsonMemoryStore()
+set_store(_memory_store)
 
 
 def _build_graph_skeleton(planner_fn, executor_fn, synthesizer_fn, direct_fn=None):
@@ -52,9 +58,9 @@ def _build_graph_skeleton(planner_fn, executor_fn, synthesizer_fn, direct_fn=Non
     # Synthesizer → END
     graph.add_edge("synthesizer", END)
 
-    # Compile with in-memory checkpointer
+    # Compile with in-memory checkpointer and persistent memory store
     checkpointer = MemorySaver()
-    compiled = graph.compile(checkpointer=checkpointer)
+    compiled = graph.compile(checkpointer=checkpointer, store=_memory_store)
 
     return compiled, checkpointer
 

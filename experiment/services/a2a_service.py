@@ -1,11 +1,16 @@
 import os
 
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 
 from db.a2a_db_service import check_caller_permission, discover_agents, get_agent_card, register_agent_card
 from db.agent_db_service import get_agent
 from services.tool_registry import load_tools_for_agent
+
+# In-memory conversation history store keyed by thread_id
+# Allows sub-agents to maintain context across multiple calls for the same task
+_thread_conversations: dict[str, list] = {}
 
 
 async def build_agent_card(agent_id: str) -> dict:
@@ -43,8 +48,12 @@ async def discover_available_agents(org_id: str = None) -> list[dict]:
     return await discover_agents(org_id)
 
 
-async def invoke_agent_a2a(target_agent_id: str, input_text: str, caller_agent_id: str = None, api_key: str = None) -> str:
-    """Invoke an agent via A2A protocol. Returns the agent's final answer as a string."""
+async def invoke_agent_a2a(target_agent_id: str, input_text: str, caller_agent_id: str = None, api_key: str = None, thread_id: str = None) -> str:
+    """Invoke an agent via A2A protocol. Returns the agent's final answer as a string.
+    
+    If thread_id is provided, conversation history is preserved across calls so the
+    sub-agent retains context from previous interactions on the same task.
+    """
 
     # Check permission if caller is specified
     if caller_agent_id:
@@ -78,10 +87,16 @@ async def invoke_agent_a2a(target_agent_id: str, input_text: str, caller_agent_i
     if tools:
         llm = llm.bind_tools(tools)
 
-    messages = [
-        {"role": "system", "content": target_agent.get("system_prompt", "You are a helpful AI assistant.")},
-        {"role": "user", "content": input_text},
-    ]
+    # Restore or initialise conversation history for this thread
+    conv_key = f"{target_agent_id}:{thread_id}" if thread_id else None
+    if conv_key and conv_key in _thread_conversations:
+        messages = _thread_conversations[conv_key]
+        messages.append(HumanMessage(content=input_text))
+    else:
+        messages = [
+            SystemMessage(content=target_agent.get("system_prompt", "You are a helpful AI assistant.")),
+            HumanMessage(content=input_text),
+        ]
 
     # ReAct loop: handle tool calls
     tools_by_name = {t.name: t for t in tools} if tools else {}
@@ -94,7 +109,6 @@ async def invoke_agent_a2a(target_agent_id: str, input_text: str, caller_agent_i
 
         if response.tool_calls:
             messages.append(response)
-            from langchain_core.messages import ToolMessage
 
             for tool_call in response.tool_calls:
                 tool_fn = tools_by_name.get(tool_call["name"])
@@ -111,23 +125,30 @@ async def invoke_agent_a2a(target_agent_id: str, input_text: str, caller_agent_i
                     tool_call_id=tool_call["id"],
                 ))
         else:
+            messages.append(response)
+            # Persist conversation history if thread_id was provided
+            if conv_key:
+                _thread_conversations[conv_key] = messages
             return response.content
 
     return "A2A Error: Max iterations reached without a final answer."
 
 
-def create_a2a_tool(sub_agent_id: str, sub_agent_config: dict) -> StructuredTool:
+def create_a2a_tool(sub_agent_id: str, sub_agent_config: dict, thread_id: str = None) -> StructuredTool:
     """Create a LangChain tool that wraps A2A invocation of a sub-agent.
 
     When the parent agent's LLM decides to delegate, it calls this tool,
     which internally invokes the sub-agent and returns its response.
+    
+    If thread_id is provided, the sub-agent retains conversation context across
+    multiple calls for the same task (same thread_id = same context).
     """
     agent_name = sub_agent_config.get("name", sub_agent_id)
     agent_desc = sub_agent_config.get("description", f"Sub-agent: {agent_name}")
 
     async def invoke_sub_agent(task: str) -> str:
         """Delegate a task to the sub-agent and return its response."""
-        result = await invoke_agent_a2a(sub_agent_id, task)
+        result = await invoke_agent_a2a(sub_agent_id, task, thread_id=thread_id)
         return result
 
     return StructuredTool.from_function(

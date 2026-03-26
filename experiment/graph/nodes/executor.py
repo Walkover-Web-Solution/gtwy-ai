@@ -6,6 +6,8 @@ from langchain_openai import ChatOpenAI
 
 from langchain_core.tools import tool as langchain_tool
 
+from db.agent_db_service import get_agent
+from db.memory_db_service import get_agent_memories_for_prompt
 from graph.nodes.tools import TOOLS, TOOLS_BY_NAME
 from graph.state import AgentState
 from services.tool_registry import runtime_variables_ctx
@@ -96,9 +98,31 @@ async def _execute_single_task(
     system_prompt_override: str | None,
     completed: list[dict],
     scratchpad: list[dict],
+    saved_messages: list | None = None,
 ) -> dict:
     """Execute a single task with ReAct loop + self-reflection."""
     runtime_variables_ctx.set(state.get("runtime_variables") or {})
+
+    # Rebind A2A tools with this task's stable worker_thread_id so the sub-agent
+    # preserves conversation context across multiple calls for the same task
+    worker_thread_id = task.get("worker_thread_id")
+    if worker_thread_id:
+        from services.a2a_service import create_a2a_tool
+        agent_id = state.get("agent_id")
+        if agent_id:
+            agent_config = await get_agent(agent_id)
+            sub_agent_ids = (agent_config or {}).get("sub_agents", [])
+            if sub_agent_ids:
+                rebuilt_tools = [t for t in tools if not t.name.startswith("ask_")]
+                rebuilt_tools_by_name = {t.name: t for t in rebuilt_tools}
+                for sub_agent_id in sub_agent_ids:
+                    sub_agent = await get_agent(sub_agent_id)
+                    if sub_agent and sub_agent.get("status") == "active":
+                        a2a_tool = create_a2a_tool(sub_agent_id, sub_agent, thread_id=worker_thread_id)
+                        rebuilt_tools.append(a2a_tool)
+                        rebuilt_tools_by_name[a2a_tool.name] = a2a_tool
+                tools = rebuilt_tools
+                tools_by_name = rebuilt_tools_by_name
 
     tool_names = ", ".join(tools_by_name.keys())
     prompt = system_prompt_override or EXECUTOR_SYSTEM_PROMPT.format(
@@ -112,35 +136,53 @@ async def _execute_single_task(
         streaming=True,
     ).bind_tools(tools)
 
-    messages = [SystemMessage(content=prompt)]
-
-    # Inject scratchpad context
-    if scratchpad:
-        notes = "\n".join([f"- [{s.get('source_task_id', '?')}] {s['note']}" for s in scratchpad])
-        messages.append(AIMessage(content=f"Context from previous work (scratchpad):\n{notes}"))
-
-    # Inject completed task results
-    if completed:
-        context_summary = "\n".join(
-            [f"Step '{c['title']}':\n{c['result'][:500]}" for c in completed]
-        )
-        messages.append(AIMessage(content=f"Previously completed steps:\n{context_summary}"))
-
-    # Inject planner's response if resuming after a clarification
+    # Restore conversation history if resuming after planner clarification
     planner_response = state.get("planner_response")
-    if planner_response and state.get("worker_question_task_id") == task["id"]:
-        messages.append(AIMessage(content=f"Planner's answer to your question:\n{planner_response}"))
+    if saved_messages and planner_response and state.get("worker_question_task_id") == task["id"]:
+        messages = list(saved_messages)
+        # Replace the placeholder ToolMessage with the actual planner answer
+        if messages and isinstance(messages[-1], ToolMessage):
+            messages[-1] = ToolMessage(
+                content=f"Planner's answer: {planner_response}",
+                tool_call_id=messages[-1].tool_call_id,
+            )
+        else:
+            messages.append(HumanMessage(content=f"Planner's answer to your question:\n{planner_response}"))
+    else:
+        # Inject agent memories into the system prompt (cross-session context)
+        agent_id = state.get("agent_id")
+        if agent_id:
+            try:
+                memory_block = await get_agent_memories_for_prompt(agent_id, goal=state.get("goal"), limit=5)
+                if memory_block:
+                    prompt = f"{prompt}\n\n{memory_block}"
+            except Exception:
+                pass
 
-    acceptance = task.get("acceptance_criteria", "Task completed successfully")
-    messages.append(HumanMessage(
-        content=(
-            f"Execute this subtask:\n\n"
-            f"Title: {task['title']}\n"
-            f"Description: {task['description']}\n"
-            f"Acceptance Criteria: {acceptance}\n"
-            f"Complexity: {task.get('estimated_complexity', 'moderate')}"
-        ),
-    ))
+        messages = [SystemMessage(content=prompt)]
+
+        # Inject scratchpad context
+        if scratchpad:
+            notes = "\n".join([f"- [{s.get('source_task_id', '?')}] {s['note']}" for s in scratchpad])
+            messages.append(AIMessage(content=f"Context from previous work (scratchpad):\n{notes}"))
+
+        # Inject completed task results
+        if completed:
+            context_summary = "\n".join(
+                [f"Step '{c['title']}':\n{c['result'][:500]}" for c in completed]
+            )
+            messages.append(AIMessage(content=f"Previously completed steps:\n{context_summary}"))
+
+        acceptance = task.get("acceptance_criteria", "Task completed successfully")
+        messages.append(HumanMessage(
+            content=(
+                f"Execute this subtask:\n\n"
+                f"Title: {task['title']}\n"
+                f"Description: {task['description']}\n"
+                f"Acceptance Criteria: {acceptance}\n"
+                f"Complexity: {task.get('estimated_complexity', 'moderate')}"
+            ),
+        ))
 
     result_text = ""
     asked_planner_question = None
@@ -193,6 +235,7 @@ async def _execute_single_task(
         "title": task["title"],
         "result_text": result_text,
         "asked_planner": asked_planner_question,
+        "messages": messages if asked_planner_question else None,
     }
 
 
@@ -270,11 +313,17 @@ async def _run_executor(
             "scratchpad": scratchpad,
         }
 
+    # Retrieve saved worker messages for resuming after planner clarification
+    saved_worker_messages = state.get("worker_messages")
+    resuming_task_id = state.get("worker_question_task_id") if state.get("planner_response") else None
+
     # Execute runnable tasks in parallel
     execute_coros = []
     for idx in runnable_indices:
         task = tasks[idx]
         tasks[idx] = {**task, "status": "in_progress"}
+        # Pass saved messages only to the task that asked the planner
+        task_saved_msgs = saved_worker_messages if (resuming_task_id and task["id"] == resuming_task_id) else None
         execute_coros.append(
             _execute_single_task(
                 task=task,
@@ -287,6 +336,7 @@ async def _run_executor(
                 system_prompt_override=system_prompt_override,
                 completed=completed,
                 scratchpad=scratchpad,
+                saved_messages=task_saved_msgs,
             )
         )
 
@@ -297,6 +347,7 @@ async def _run_executor(
     needs_worker_clarification = False
     worker_question = None
     worker_question_task_id = None
+    worker_saved_messages = None
 
     for res in results:
         if isinstance(res, Exception):
@@ -319,6 +370,7 @@ async def _run_executor(
             needs_worker_clarification = True
             worker_question = res["asked_planner"]
             worker_question_task_id = task["id"]
+            worker_saved_messages = res.get("messages")
             continue
 
         # Self-reflection
@@ -405,6 +457,7 @@ async def _run_executor(
         "worker_question": worker_question,
         "worker_question_task_id": worker_question_task_id,
         "planner_response": None,  # clear previous answer
+        "worker_messages": worker_saved_messages if needs_worker_clarification else None,
     }
 
 

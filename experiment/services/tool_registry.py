@@ -82,67 +82,6 @@ async def _axios_work(args: dict, url: str, headers: dict = None) -> dict:
     except Exception as err:
         return {"response": str(err), "status": 0}
 
-
-# ──────────────────────────────────────────────
-# Built-in tools
-# ──────────────────────────────────────────────
-
-@tool
-def read_file(path: str) -> str:
-    """Read the contents of a file at the given path."""
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file: {e}"
-
-
-@tool
-def write_file(path: str, content: str) -> str:
-    """Write content to a file at the given path."""
-    try:
-        with open(path, "w") as f:
-            f.write(content)
-        return f"Successfully wrote to {path}"
-    except Exception as e:
-        return f"Error writing file: {e}"
-
-
-@tool
-def run_shell(command: str) -> str:
-    """Run a shell command and return its output."""
-    try:
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=30
-        )
-        output = result.stdout or result.stderr
-        return output.strip() or "Command ran with no output."
-    except subprocess.TimeoutExpired:
-        return "Command timed out after 30 seconds."
-    except Exception as e:
-        return f"Error running command: {e}"
-
-
-@tool
-def list_files(directory: str = ".") -> str:
-    """List files and directories at the given path."""
-    try:
-        result = subprocess.run(
-            f"ls -la {directory}", shell=True, capture_output=True, text=True
-        )
-        return result.stdout.strip()
-    except Exception as e:
-        return f"Error listing files: {e}"
-
-
-BUILTIN_TOOLS = {
-    "read_file": read_file,
-    "write_file": write_file,
-    "run_shell": run_shell,
-    "list_files": list_files,
-}
-
-
 # ──────────────────────────────────────────────
 # api_call tool builder  (mirrors process_api_call_tool + axios_work)
 # ──────────────────────────────────────────────
@@ -243,9 +182,6 @@ def _build_function_tool(tool_config: dict) -> Any:
     """Return a built-in tool by function_name, or a no-op placeholder."""
     function_name = tool_config.get("function_name") or tool_config["name"]
 
-    if function_name in BUILTIN_TOOLS:
-        return BUILTIN_TOOLS[function_name]
-
     async def noop_fn(input: str) -> str:
         return f"Function '{function_name}' is not available."
 
@@ -336,12 +272,7 @@ async def execute_pretool(tool_id: str, pretool_input: dict = None) -> str:
 async def load_tools_for_agent(agent_id: str) -> list:
     """Load all active tools for an agent from the DB and convert to LangChain tools."""
     agent = await get_agent(agent_id)
-    if not agent:
-        return list(BUILTIN_TOOLS.values())
-
     tool_ids = agent.get("tools", [])
-    if not tool_ids:
-        return list(BUILTIN_TOOLS.values())
 
     db_tools = await get_tools_by_ids(tool_ids)
     langchain_tools = []
