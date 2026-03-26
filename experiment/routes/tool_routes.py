@@ -150,14 +150,17 @@ async def test_tool_endpoint(tool_id: str, request: TestToolRequest):
     url = f"https://flow.sokt.io/func/{script_id}"
     headers = tool.get("headers") or {}
 
-    result = await _axios_work(request.args, url, headers)
+    static_values = tool.get("static_values") or {}
+    merged_args = {**static_values, **request.args}
+
+    result = await _axios_work(merged_args, url, headers)
     return {
         "success": result.get("status") == 1,
         "tool_id": tool_id,
         "tool_name": tool.get("name"),
         "script_id": script_id,
         "url": url,
-        "args_sent": request.args,
+        "args_sent": merged_args,
         "response": result.get("response"),
         "status": result.get("status"),
     }

@@ -139,9 +139,9 @@ def _build_api_call_tool(tool_config: dict) -> StructuredTool:
     # Build the dynamic async function — merges AI kwargs + user static values
     async def _call(**kwargs) -> str:
         merged = dict(kwargs)
-        for field_name in user_field_names:
-            if field_name in static_values:
-                merged[field_name] = static_values[field_name]
+        for k, v in static_values.items():
+            if k not in merged:
+                merged[k] = v
         result = await _axios_work(merged, url, headers)
         if result["status"] == 1:
             resp = result["response"]

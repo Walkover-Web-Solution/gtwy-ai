@@ -20,7 +20,7 @@ from routes.agent_routes import router as agent_router
 from routes.tool_routes import router as tool_router
 from services.agent_service import get_compiled_graph_for_agent
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 
 @asynccontextmanager
