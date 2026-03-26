@@ -232,7 +232,8 @@ async def chat(request_body):
         # If template rendering is requested, streaming is not supported — force it off
         response_type = parsed_data.get("response_type") or {}
         if isinstance(response_type, dict) and response_type.get("is_template", False):
-            parsed_data["stream"] = False
+            if custom_config.get("stream", False):
+                custom_config["stream"] = False
 
         # Step 9: Execute Service Handler
         params = build_service_params(

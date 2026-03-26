@@ -95,7 +95,7 @@ class BaseService:
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
 
-        self.stream_mode = params.get("configuration", {}).get("stream", False)
+        self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
             self.streamer = StreamingService(mode="sse")
         else:
