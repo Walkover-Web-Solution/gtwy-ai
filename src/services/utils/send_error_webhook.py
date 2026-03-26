@@ -81,7 +81,7 @@ async def send_error_to_webhook(
                     continue
                 
                 # Use user_url if present, otherwise use url from webhookConfiguration
-                webhook_url = entry.get("user_url") or webhook_config["url"]
+                webhook_url = webhook_config["url"]
                 headers = webhook_config.get("headers", {})
 
                 # Prepare details for the webhook
