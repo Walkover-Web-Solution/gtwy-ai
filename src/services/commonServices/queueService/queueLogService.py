@@ -3,6 +3,14 @@ from src.services.commonServices.queueService.baseQueue import BaseQueue
 
 
 class Queue2(BaseQueue):
+    """
+    Queue service for log data processing.
+    
+    NOTE: Events API tracking (api_hit events for billing/usage) is handled
+    by Node's logQueueConsumer, NOT by Python. The validateResponse payload
+    already contains message_id and org_id which Node uses to call the events API.
+    Do NOT add direct events API calls here - see sendApiHitEvent.service.js in gtwy.
+    """
     _instance = None
 
     def __new__(cls):

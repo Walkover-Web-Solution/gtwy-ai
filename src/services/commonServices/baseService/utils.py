@@ -566,6 +566,9 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "save_history": result.get("historyParams", {}),
             "version_id": parsed_data.get("version_id"),
         },
+        # validateResponse contains message_id and org_id which Node's logQueueConsumer
+        # uses to call the events API for billing/usage tracking. Do NOT add direct
+        # events API calls in Python - see sendApiHitEvent.service.js in gtwy.
         "validateResponse": {
             "alert_flag": parsed_data.get("alert_flag"),
             "configration": parsed_data.get("configuration"),
