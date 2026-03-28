@@ -346,7 +346,48 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     }
                 }
             },
-            # Stage 9.5: Extract template_ids from configuration.response_type if is_template is true
+            # Stage 9.1: Lookup agent names for connected_agents
+            {
+                "$lookup": {
+                    "from": "configurations",
+                    "let": {
+                        "bridge_ids": {
+                            "$filter": {
+                                "input": "$connected_agents_bridge_ids",
+                                "as": "id",
+                                "cond": {"$ne": ["$$id", None]},
+                            }
+                        }
+                    },
+                    "pipeline": [
+                        {"$match": {"$expr": {"$in": ["$_id", "$$bridge_ids"]}}},
+                        {"$project": {"_id": 1, "name": 1}},
+                        {"$addFields": {"_id": {"$toString": "$_id"}}},
+                    ],
+                    "as": "agent_names_docs",
+                }
+            },
+            # Stage 9.2: Create agent_name_info object with agent ID as key and name as value
+            {
+                "$addFields": {
+                    "agent_name_info": {
+                        "$cond": [
+                            {"$gt": [{"$size": "$agent_names_docs"}, 0]},
+                            {
+                                "$arrayToObject": {
+                                    "$map": {
+                                        "input": "$agent_names_docs",
+                                        "as": "doc",
+                                        "in": ["$$doc._id", {"$ifNull": ["$$doc.name", ""]}]
+                                    }
+                                }
+                            },
+                            {}
+                        ]
+                    }
+                }
+            },
+             # Stage 9.5: Extract template_ids from configuration.response_type if is_template is true
             {
                 "$addFields": {
                     "template_ids_to_fetch": {
@@ -429,6 +470,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "agent_details_docs": 0,
                     "template_ids_to_fetch": 0,
                     "templates_docs": 0,
+                    "agent_names_docs": 0
                     # Exclude additional temporary fields as needed
                 }
             },
