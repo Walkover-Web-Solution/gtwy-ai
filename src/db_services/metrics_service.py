@@ -116,7 +116,7 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
                 "status": False,
                 "variables": variables,
                 "message_id": message_id,
-                "prompt": {"system": processed_prompts[idx]} if idx < len(processed_prompts) else None,
+                "prompt": processed_prompts[idx] if idx < len(processed_prompts) else None,
                 "batch_data": {
                     "status": "queued",
                     "batch_id": batch_id,
