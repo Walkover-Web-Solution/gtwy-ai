@@ -148,7 +148,7 @@
         },
         "stepId": {
           "type": "string",
-          "description": "Step ID must be 12 characters long, start with 'func', and the last 8 characters must be random alphanumeric (a\u2013z, A\u2013Z, 0\u20139)",
+          "description": "Unique step identifier. Must be exactly 12 characters. Format: 'func' + 8 random alphanumeric characters. The last 8 characters MUST be randomly generated and MUST NOT contain readable words, semantic meaning, or deterministic values. Invalid example: funcAddEmail. Valid example: funcA7kP9xQ2.",
           "source": "ai"
         },
         "scriptId": {
@@ -168,7 +168,7 @@
         },
         "orderGroup": {
           "type": "string",
-          "description": "orderGroup of step",
+          "description": "Defines where the step is placed in execution order. Use parent condition group ID if inside a condition, otherwise use 'root'.",
           "source": "ai"
         },
         "proxy_auth_token": {
@@ -228,7 +228,7 @@
         },
         "stepId": {
           "type": "string",
-          "description": "Rule: The step ID must be exactly 12 characters long and must start with func. The remaining 8 characters must be random alphanumeric values.  Alphanumeric characters include:  Lowercase letters: a-z Uppercase letters: A-Z Numbers: 0-9  Example valid step IDs:  funcA1b2C3d4 func9Xy7Pq2L func0aB8kLmN",
+          "description": "Unique step identifier. Must be exactly 12 characters. Format: 'func' + 8 random alphanumeric characters. The last 8 characters MUST be randomly generated and MUST NOT contain readable words, semantic meaning, or deterministic values. Invalid example: funcAddEmail. Valid example: funcA7kP9xQ2.",
           "source": "ai"
         },
         "auth_id": {
@@ -263,7 +263,7 @@
         },
         "orderGroup": {
           "type": "string",
-          "description": "The order group of step",
+          "description": "Defines where the step is placed in execution order. Use parent condition group ID if inside a condition, otherwise use 'root'.",
           "source": "ai"
         },
         "proxy_auth_token": {
@@ -311,7 +311,7 @@
         },
         "stepId": {
           "type": "string",
-          "description": "Rule: The step ID must be exactly 12 characters long and must start with func. The remaining 8 characters must be random alphanumeric values.  Alphanumeric characters include:  Lowercase letters: a-z Uppercase letters: A-Z Numbers: 0-9  Example valid step IDs:  funcA1b2C3d4 func9Xy7Pq2L func0aB8kLmN",
+          "description": "Unique step identifier. Must be exactly 12 characters. Format: 'func' + 8 random alphanumeric characters. The last 8 characters MUST be randomly generated and MUST NOT contain readable words, semantic meaning, or deterministic values. Invalid example: funcAddEmail. Valid example: funcA7kP9xQ2.",
           "source": "ai"
         },
         "scriptId": {
@@ -331,7 +331,7 @@
         },
         "orderGroup": {
           "type": "string",
-          "description": "The order group identifier.",
+          "description": "Defines where the step is placed in execution order. Use parent condition group ID if inside a condition, otherwise use 'root'.",
           "source": "ai"
         },
         "ifpathstepId": {
@@ -1332,6 +1332,99 @@
       "status": "completed",
       "created_at": "2026-03-28T09:00:37.640034+00:00",
       "updated_at": "2026-03-28T09:01:22.366327+00:00"
+    },
+    "sess_b6fa0f4a4e7c": {
+      "session_id": "sess_b6fa0f4a4e7c",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scriXbZ55DoY",
+      "goal": "delete all the steps from my flow",
+      "state": {
+        "final_answer": "The automation flow has been successfully cleared of all specified steps, including the 'TestJSFunction' and the conditional group 'swtcZ4zbyVN4'. The flow is now devoid of these elements and is ready for new configurations or actions.",
+        "goal": "delete all the steps from my flow"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "delete all the steps from my flow"
+        },
+        {
+          "role": "assistant",
+          "content": "The automation flow has been successfully cleared of all specified steps, including the 'TestJSFunction' and the conditional group 'swtcZ4zbyVN4'. The flow is now devoid of these elements and is ready for new configurations or actions."
+        }
+      ],
+      "a2a_calls": [],
+      "status": "completed",
+      "created_at": "2026-03-28T11:37:37.445039+00:00",
+      "updated_at": "2026-03-28T11:38:10.105257+00:00"
+    },
+    "sess_79fb1f71fe77": {
+      "session_id": "sess_79fb1f71fe77",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scriXbZ55DoY",
+      "goal": "When someone fills my form, check if the email already exists, if not then add it to CRM, send welcome email, and notify me",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "When someone fills my form, check if the email already exists, if not then add it to CRM, send welcome email, and notify me"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-28T11:38:28.718661+00:00",
+      "updated_at": "2026-03-28T11:38:28.718661+00:00"
+    },
+    "sess_abdae0d69009": {
+      "session_id": "sess_abdae0d69009",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scriXbZ55DoY",
+      "goal": "add slack action for send message on channel",
+      "state": {
+        "final_answer": "{\"order\":{\"root\":[\"SendEmailAlert\",\"HTTP_API_Request\",\"swtcusl07V0Y\",\"Send_Mail_Working\",\"Slack_SendMessage\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[\"JS_Code\"],\"swtcusl07V0Y\":[\"ifcbusl07V0Y\",\"ifcbUH9jK05l\"]},\"blocks\":{\"JS_Code\":{\"type\":\"function\",\"status\":\"DRAFTED\",\"identifier\":\"funcWLcPg0j3\"},\"response\":{\"data\":\"\",\"type\":\"response\",\"status\":\"DRAFTED\",\"identifier\":\"response\",\"responseType\":\"default\"},\"ifcbUH9jK05l\":{\"html\":\"Same data of conditions\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"\",\"identifier\":\"ifcbUH9jK05l\",\"isElseBlock\":true},\"ifcbusl07V0Y\":{\"html\":\"true\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"true\",\"statement\":\"true\",\"identifier\":\"ifcbusl07V0Y\",\"dynamicVariables\":{}},\"swtcusl07V0Y\":{\"type\":\"ifGroup\",\"parent\":\"root\",\"identifier\":\"swtcusl07V0Y\"},\"SendEmailAlert\":{\"type\":\"function\",\"status\":\"ACTIVE\",\"identifier\":\"actE1F2G3H4\",\"code\":\"\",\"dynamicVariables\":{}},\"HTTP_API_Request\":{\"type\":\"api\",\"status\":\"DRAFTED\",\"identifier\":\"func0PsxTtMn\"},\"Send_Mail_Working\":{\"type\":\"plugin\",\"status\":\"DRAFTED\",\"iconUrl\":\"https://mailmeteor.com/logos/assets/PNG/Gmail_Logo_512px.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Gmail Dev\",\"actionName\":\"Send_Mail_Working\"},\"identifier\":\"funcCS5byDXv\"},\"Slack_SendMessage\":{\"type\":\"plugin\",\"status\":\"ACTIVE\",\"iconUrl\":\"https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png\",\"service\":{\"eventId\":\"slackSendMessage\",\"serviceName\":\"Slack\",\"actionName\":\"Send_Message\"},\"identifier\":\"funcSlack123\"}},\"trigger\":{\"type\":\"webhook\"}}",
+        "goal": "add slack action for send message on channel"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "add slack action for send message on channel"
+        },
+        {
+          "role": "assistant",
+          "content": "{\"order\":{\"root\":[\"SendEmailAlert\",\"HTTP_API_Request\",\"swtcusl07V0Y\",\"Send_Mail_Working\",\"Slack_SendMessage\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[\"JS_Code\"],\"swtcusl07V0Y\":[\"ifcbusl07V0Y\",\"ifcbUH9jK05l\"]},\"blocks\":{\"JS_Code\":{\"type\":\"function\",\"status\":\"DRAFTED\",\"identifier\":\"funcWLcPg0j3\"},\"response\":{\"data\":\"\",\"type\":\"response\",\"status\":\"DRAFTED\",\"identifier\":\"response\",\"responseType\":\"default\"},\"ifcbUH9jK05l\":{\"html\":\"Same data of conditions\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"\",\"identifier\":\"ifcbUH9jK05l\",\"isElseBlock\":true},\"ifcbusl07V0Y\":{\"html\":\"true\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"ACTIVE\",\"condition\":\"true\",\"statement\":\"true\",\"identifier\":\"ifcbusl07V0Y\",\"dynamicVariables\":{}},\"swtcusl07V0Y\":{\"type\":\"ifGroup\",\"parent\":\"root\",\"identifier\":\"swtcusl07V0Y\"},\"SendEmailAlert\":{\"type\":\"function\",\"status\":\"ACTIVE\",\"identifier\":\"actE1F2G3H4\",\"code\":\"\",\"dynamicVariables\":{}},\"HTTP_API_Request\":{\"type\":\"api\",\"status\":\"DRAFTED\",\"identifier\":\"func0PsxTtMn\"},\"Send_Mail_Working\":{\"type\":\"plugin\",\"status\":\"DRAFTED\",\"iconUrl\":\"https://mailmeteor.com/logos/assets/PNG/Gmail_Logo_512px.png\",\"service\":{\"eventId\":\"rowk9qhdwsuy\",\"serviceName\":\"Gmail Dev\",\"actionName\":\"Send_Mail_Working\"},\"identifier\":\"funcCS5byDXv\"},\"Slack_SendMessage\":{\"type\":\"plugin\",\"status\":\"ACTIVE\",\"iconUrl\":\"https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png\",\"service\":{\"eventId\":\"slackSendMessage\",\"serviceName\":\"Slack\",\"actionName\":\"Send_Message\"},\"identifier\":\"funcSlack123\"}},\"trigger\":{\"type\":\"webhook\"}}"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "completed",
+      "created_at": "2026-03-28T11:43:16.839828+00:00",
+      "updated_at": "2026-03-28T11:43:35.625521+00:00"
+    },
+    "sess_7b146aab8133": {
+      "session_id": "sess_7b146aab8133",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scriXbZ55DoY",
+      "goal": "When someone fills my form, check if the email already exists, if not then add it to CRM, send welcome email, and notify me",
+      "state": {
+        "final_answer": "The automation has been successfully set up to achieve your goal. When someone fills out your form, the system will check if the email already exists in your CRM using Method CRM. If the email does not exist, it will be added to the CRM. A welcome email will then be sent to the new contact using Gmail, and you will receive a notification via Slack when a new contact is added.",
+        "goal": "When someone fills my form, check if the email already exists, if not then add it to CRM, send welcome email, and notify me"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "When someone fills my form, check if the email already exists, if not then add it to CRM, send welcome email, and notify me"
+        },
+        {
+          "role": "assistant",
+          "content": "The automation has been successfully set up to achieve your goal. When someone fills out your form, the system will check if the email already exists in your CRM using Method CRM. If the email does not exist, it will be added to the CRM. A welcome email will then be sent to the new contact using Gmail, and you will receive a notification via Slack when a new contact is added."
+        }
+      ],
+      "a2a_calls": [],
+      "status": "completed",
+      "created_at": "2026-03-28T11:44:46.515673+00:00",
+      "updated_at": "2026-03-28T11:46:14.955001+00:00"
     }
   },
   "a2a_registry": {
@@ -1671,6 +1764,45 @@
         },
         "created_at": "2026-03-28T09:01:22.372642+00:00",
         "updated_at": "2026-03-28T09:01:22.372642+00:00"
+      },
+      "mem_5a1eb7049541": {
+        "value": {
+          "content": "Session sess_b6fa0f4a4e7c: Goal was 'delete all the steps from my flow'. Summary: The automation flow has been successfully cleared of all specified steps, including the 'TestJSFunction' and the conditional group 'swtcZ4zbyVN4'. The flow is now devoid of these elements and is ready for new configurations or actions.",
+          "category": "session_summaries",
+          "metadata": {
+            "session_id": "sess_b6fa0f4a4e7c",
+            "goal": "delete all the steps from my flow"
+          },
+          "created_at": "2026-03-28T11:38:10.111747+00:00"
+        },
+        "created_at": "2026-03-28T11:38:10.112404+00:00",
+        "updated_at": "2026-03-28T11:38:10.112404+00:00"
+      },
+      "mem_d71653b4d2ef": {
+        "value": {
+          "content": "Session sess_abdae0d69009: Goal was 'add slack action for send message on channel'. Summary: {\"order\":{\"root\":[\"SendEmailAlert\",\"HTTP_API_Request\",\"swtcusl07V0Y\",\"Send_Mail_Working\",\"Slack_SendMessage\"],\"ifcbUH9jK05l\":[],\"ifcbusl07V0Y\":[\"JS_Code\"],\"swtcusl07V0Y\":[\"ifcbusl07V0Y\",\"ifcbUH9jK05l\"]},\"blocks\":{\"JS_Code\":{\"type\":\"function\",\"status\":\"DRAFTED\",\"identifier\":\"funcWLcPg0j3\"},\"response\":{\"data\":\"\",\"type\":\"response\",\"status\":\"DRAFTED\",\"identifier\":\"response\",\"responseType\":\"default\"},\"ifcbUH9jK05l\":{\"html\":\"Same data of conditions\",\"type\":\"ifBlock\",\"parent\":\"swtcusl07V0Y\",\"status\":\"A",
+          "category": "session_summaries",
+          "metadata": {
+            "session_id": "sess_abdae0d69009",
+            "goal": "add slack action for send message on channel"
+          },
+          "created_at": "2026-03-28T11:43:35.629632+00:00"
+        },
+        "created_at": "2026-03-28T11:43:35.630027+00:00",
+        "updated_at": "2026-03-28T11:43:35.630027+00:00"
+      },
+      "mem_07a9e00c127c": {
+        "value": {
+          "content": "Session sess_7b146aab8133: Goal was 'When someone fills my form, check if the email already exists, if not then add it to CRM, send welcome email, and notify me'. Summary: The automation has been successfully set up to achieve your goal. When someone fills out your form, the system will check if the email already exists in your CRM using Method CRM. If the email does not exist, it will be added to the CRM. A welcome email will then be sent to the new contact using Gmail, and you will receive a notification via Slack when a new contact is added.",
+          "category": "session_summaries",
+          "metadata": {
+            "session_id": "sess_7b146aab8133",
+            "goal": "When someone fills my form, check if the email already exists, if not then add it to CRM, send welcome email, and notify me"
+          },
+          "created_at": "2026-03-28T11:46:14.959327+00:00"
+        },
+        "created_at": "2026-03-28T11:46:14.959700+00:00",
+        "updated_at": "2026-03-28T11:46:14.959700+00:00"
       }
     }
   }
