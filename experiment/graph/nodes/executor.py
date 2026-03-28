@@ -44,6 +44,8 @@ RULES:
 - Be specific and produce real output, not just descriptions.
 - If you encounter an error, try an alternative approach before giving up.
 - If you are unsure or confused about the task, use the `ask_planner` tool to ask for clarification.
+- Before every tool call, read that tool's description and parameter schema, then craft a complete, properly typed payload that satisfies required fields and mirrors the expected structure.
+- Populate tool inputs with concrete values sourced from context or reasonable assumptions; never leave placeholders like "TBD" or omit required keys.
 - Your output should satisfy the acceptance criteria for this task."""
 
 REFLECTION_PROMPT = """You are a quality reviewer. Evaluate whether the executor's output satisfies the task requirements.
@@ -153,7 +155,12 @@ async def _execute_single_task(
         agent_id = state.get("agent_id")
         if agent_id:
             try:
-                memory_block = await get_agent_memories_for_prompt(agent_id, goal=state.get("goal"), limit=5)
+                memory_block = await get_agent_memories_for_prompt(
+                    agent_id,
+                    goal=state.get("goal"),
+                    limit=5,
+                    thread_id=state.get("thread_id"),
+                )
                 if memory_block:
                     prompt = f"{prompt}\n\n{memory_block}"
             except Exception:

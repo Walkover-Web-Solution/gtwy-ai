@@ -24,7 +24,7 @@ from routes.session_routes import router as session_router
 from routes.tool_routes import router as tool_router
 from services.agent_service import get_compiled_graph_for_agent
 
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv(os.path.join(os.path.dirname(__file__),".env"))
 
 
 @asynccontextmanager
@@ -63,6 +63,44 @@ default_compiled_graph, default_checkpointer = build_graph()
 async def ws_send(ws: WebSocket, event: str, data: dict):
     """Send a JSON event over WebSocket."""
     await ws.send_text(json.dumps({"event": event, "data": data}))
+
+
+def _extract_script_thread_id(runtime_vars: dict | None) -> str | None:
+    """Pull scriptId/script_id from runtime variables payloads."""
+    if not isinstance(runtime_vars, dict):
+        return None
+
+    def _get_from_dict(payload: dict | None) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+        for key in ("scriptId", "script_id"):
+            value = payload.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return None
+
+    direct = _get_from_dict(runtime_vars)
+    if direct:
+        return direct
+
+    for nested_key in ("variables", "variable"):
+        nested = _get_from_dict(runtime_vars.get(nested_key))
+        if nested:
+            return nested
+
+    return None
+
+
+def _resolve_thread_id(runtime_vars: dict | None = None, state: dict | None = None) -> str | None:
+    """Return script-based thread_id if available, else fall back to state's thread_id."""
+    script_thread = _extract_script_thread_id(runtime_vars)
+    if script_thread:
+        return script_thread
+    if state:
+        existing = state.get("thread_id")
+        if existing:
+            return str(existing)
+    return None
 
 
 async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compiled_graph=None, pending_state_out: list | None = None):
@@ -360,6 +398,7 @@ async def run_graph_and_stream(ws: WebSocket, state: dict, config: dict, compile
                 goal=state.get("goal", ""),
                 summary=summary,
                 key_facts=key_facts,
+                thread_id=state.get("thread_id"),
             )
     except Exception:
         pass  # don't fail the response for memory persistence errors
@@ -404,7 +443,7 @@ async def websocket_endpoint(ws: WebSocket):
                     agent_graph = default_compiled_graph
                     agent_checkpointer = default_checkpointer
 
-                thread_id = str(uuid.uuid4())
+                thread_id = _resolve_thread_id(runtime_vars=variables) or str(uuid.uuid4())
                 config = {"configurable": {"thread_id": thread_id}}
 
                 mode = msg.get("mode", "plan")
@@ -512,7 +551,10 @@ async def websocket_endpoint(ws: WebSocket):
                         "current_task_index": base_state.get("current_task_index", 0),
                     }
 
-                    new_thread_id = str(uuid.uuid4())
+                    new_thread_id = _resolve_thread_id(
+                        runtime_vars=resume_state.get("runtime_variables"),
+                        state=resume_state,
+                    ) or str(uuid.uuid4())
                     new_config = {"configurable": {"thread_id": new_thread_id}}
 
                     await ws_send(ws, "status", {"message": "Updating plan with your answer..."})
@@ -551,7 +593,10 @@ async def websocket_endpoint(ws: WebSocket):
                         "step_feedback": None,
                     }
 
-                    new_thread_id = str(uuid.uuid4())
+                    new_thread_id = _resolve_thread_id(
+                        runtime_vars=resume_state.get("runtime_variables"),
+                        state=resume_state,
+                    ) or str(uuid.uuid4())
                     new_config = {"configurable": {"thread_id": new_thread_id}}
 
                     ws.pending_state = None
@@ -592,7 +637,10 @@ async def websocket_endpoint(ws: WebSocket):
                         "mode": "direct",
                     }
 
-                    new_thread_id = str(uuid.uuid4())
+                    new_thread_id = _resolve_thread_id(
+                        runtime_vars=resume_state.get("runtime_variables"),
+                        state=resume_state,
+                    ) or str(uuid.uuid4())
                     new_config = {"configurable": {"thread_id": new_thread_id}}
                     ws.pending_state = None
 
@@ -625,7 +673,10 @@ async def websocket_endpoint(ws: WebSocket):
                         "step_feedback": None,
                     }
 
-                    new_thread_id = str(uuid.uuid4())
+                    new_thread_id = _resolve_thread_id(
+                        runtime_vars=resume_state.get("runtime_variables"),
+                        state=resume_state,
+                    ) or str(uuid.uuid4())
                     new_config = {"configurable": {"thread_id": new_thread_id}}
                     ws.pending_state = None
 
@@ -752,7 +803,10 @@ async def websocket_endpoint(ws: WebSocket):
                         "feedback": feedback,
                     })
 
-                    new_thread_id = str(uuid.uuid4())
+                    new_thread_id = _resolve_thread_id(
+                        runtime_vars=resume_state.get("runtime_variables"),
+                        state=resume_state,
+                    ) or str(uuid.uuid4())
                     new_config = {"configurable": {"thread_id": new_thread_id}}
                     ws.pending_state = None
 

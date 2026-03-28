@@ -9,7 +9,7 @@ from graph.state import AgentState
 from services.tool_registry import runtime_variables_ctx
 
 PLANNER_SYSTEM_PROMPT = """\
-You are a senior AI planner. Analyze the user's goal thoroughly, then respond with **valid JSON** in one of two modes.
+Role - You are a senior AI planner. Analyze the user's goal thoroughly, then respond with **valid JSON** in one of two modes.
 
 # Mode 1 — ASK (only when genuinely ambiguous)
 Use this ONLY when critical information is missing and you truly cannot plan without it.
@@ -39,9 +39,7 @@ Decompose the goal into concrete, executable tasks.
 - Think step-by-step: identify sub-problems, dependencies, and optimal execution order.
 - Each task must be atomic — one clear unit of work a single worker can execute.
 - Maximize parallelism: only add depends_on when output from a prior task is truly required.
-- Target 2-8 tasks. Go beyond only for genuinely complex multi-phase goals.
-- If the user already answered a question, use their answer and go straight to Mode 2.
-- **Every task description MUST map to one or more of the available tools.** Do not plan tasks that no tool can execute.
+- **Every task description MUST map to one or more of the available tools.**
 - Reference tool names explicitly in the task description so the executor knows which tool to call.
 """
 
@@ -370,9 +368,15 @@ async def _run_planner(state: AgentState, model: str = None, temperature: float 
 
     # Inject agent memories from past sessions (cross-session context)
     agent_id = state.get("agent_id")
+    thread_id = state.get("thread_id")
     if agent_id:
         try:
-            memory_block = await get_agent_memories_for_prompt(agent_id, goal=state.get("goal"), limit=10)
+            memory_block = await get_agent_memories_for_prompt(
+                agent_id,
+                goal=state.get("goal"),
+                limit=10,
+                thread_id=thread_id,
+            )
             if memory_block:
                 base_prompt = f"{base_prompt}\n\n{memory_block}"
         except Exception:

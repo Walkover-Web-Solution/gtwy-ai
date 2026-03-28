@@ -1557,8 +1557,9 @@
 
         // --- WebSocket Connection ---
         function connectWebSocket() {
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+            const wsProtocol = 'ws:';
+            const wsHost = location.host || '127.0.0.1:8888';
+            ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
 
             ws.onopen = () => {
                 wsDot.classList.add('connected');

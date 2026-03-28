@@ -2,7 +2,7 @@
 Memory DB service — high-level helpers for managing agent memories.
 
 Uses the JsonMemoryStore (LangGraph Store) under the hood.
-Namespace convention: ("agent", agent_id, category)
+Namespace convention: ("agent", agent_id, [thread_id], category)
   - category: "facts", "preferences", "learnings", "session_summaries"
 """
 
@@ -34,10 +34,14 @@ async def save_memory(
     content: str,
     category: str = "learnings",
     metadata: dict = None,
+    thread_id: str | None = None,
 ) -> dict:
-    """Save a memory for an agent."""
+    """Save a memory for an agent (scoped by optional thread_id)."""
     store = get_store()
-    namespace = ("agent", agent_id, category)
+    namespace = ("agent", agent_id)
+    if thread_id:
+        namespace += (thread_id,)
+    namespace += (category,)
     key = f"mem_{uuid.uuid4().hex[:12]}"
     value = {
         "content": content,
@@ -49,10 +53,18 @@ async def save_memory(
     return {"key": key, "namespace": namespace, "value": value}
 
 
-async def get_memory(agent_id: str, key: str, category: str = "learnings") -> dict | None:
+async def get_memory(
+    agent_id: str,
+    key: str,
+    category: str = "learnings",
+    thread_id: str | None = None,
+) -> dict | None:
     """Get a specific memory by key."""
     store = get_store()
-    namespace = ("agent", agent_id, category)
+    namespace = ("agent", agent_id)
+    if thread_id:
+        namespace += (thread_id,)
+    namespace += (category,)
     item = await store.aget(namespace, key)
     if item is None:
         return None
@@ -63,12 +75,18 @@ async def search_memories(
     agent_id: str,
     query: str = None,
     category: str = None,
+    thread_id: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
     """Search memories for an agent, optionally filtered by category and query."""
     store = get_store()
     # Search across all categories if none specified
-    namespace_prefix = ("agent", agent_id, category) if category else ("agent", agent_id)
+    namespace_parts = ["agent", agent_id]
+    if thread_id:
+        namespace_parts.append(thread_id)
+    if category:
+        namespace_parts.append(category)
+    namespace_prefix = tuple(namespace_parts)
     items = await store.asearch(
         namespace_prefix,
         query=query,
@@ -85,21 +103,34 @@ async def search_memories(
     ]
 
 
-async def delete_memory(agent_id: str, key: str, category: str = "learnings") -> bool:
+async def delete_memory(
+    agent_id: str,
+    key: str,
+    category: str = "learnings",
+    thread_id: str | None = None,
+) -> bool:
     """Delete a specific memory."""
     store = get_store()
-    namespace = ("agent", agent_id, category)
+    namespace = ("agent", agent_id)
+    if thread_id:
+        namespace += (thread_id,)
+    namespace += (category,)
     await store.aput(namespace, key, None)  # PutOp with value=None deletes
     return True
 
 
-async def get_agent_memories_for_prompt(agent_id: str, goal: str = None, limit: int = 10) -> str:
+async def get_agent_memories_for_prompt(
+    agent_id: str,
+    goal: str = None,
+    limit: int = 10,
+    thread_id: str | None = None,
+) -> str:
     """Get formatted memories for injection into agent prompts.
 
     Returns a string block suitable for system prompt injection.
     Searches across all categories, optionally using goal as query for relevance.
     """
-    memories = await search_memories(agent_id, query=goal, limit=limit)
+    memories = await search_memories(agent_id, query=goal, limit=limit, thread_id=thread_id)
     if not memories:
         return ""
 
@@ -118,6 +149,7 @@ async def save_session_summary(
     goal: str,
     summary: str,
     key_facts: list[str] = None,
+    thread_id: str | None = None,
 ) -> list[dict]:
     """Save session summary and extracted facts as memories.
 
@@ -131,6 +163,7 @@ async def save_session_summary(
         content=f"Session {session_id}: Goal was '{goal}'. Summary: {summary}",
         category="session_summaries",
         metadata={"session_id": session_id, "goal": goal},
+        thread_id=thread_id,
     )
     saved.append(result)
 
@@ -142,6 +175,7 @@ async def save_session_summary(
                 content=fact,
                 category="learnings",
                 metadata={"source_session": session_id},
+                thread_id=thread_id,
             )
             saved.append(result)
 

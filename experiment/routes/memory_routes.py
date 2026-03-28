@@ -10,6 +10,7 @@ class SaveMemoryRequest(BaseModel):
     content: str
     category: str = "learnings"
     metadata: dict = {}
+    thread_id: str | None = None
 
 
 class SearchMemoriesRequest(BaseModel):
@@ -27,6 +28,7 @@ async def save_memory_endpoint(agent_id: str, request: SaveMemoryRequest):
             content=request.content,
             category=request.category,
             metadata=request.metadata,
+            thread_id=request.thread_id,
         )
         return {"success": True, "data": result}
     except Exception as e:
@@ -38,6 +40,7 @@ async def list_memories_endpoint(
     agent_id: str,
     query: str = None,
     category: str = None,
+    thread_id: str | None = None,
     limit: int = 20,
 ):
     """Search/list memories for an agent."""
@@ -46,6 +49,7 @@ async def list_memories_endpoint(
             agent_id=agent_id,
             query=query,
             category=category,
+            thread_id=thread_id,
             limit=limit,
         )
         return {"success": True, "data": memories, "count": len(memories)}
@@ -54,10 +58,15 @@ async def list_memories_endpoint(
 
 
 @router.delete("/{agent_id}/{category}/{key}")
-async def delete_memory_endpoint(agent_id: str, category: str, key: str):
+async def delete_memory_endpoint(
+    agent_id: str,
+    category: str,
+    key: str,
+    thread_id: str | None = None,
+):
     """Delete a specific memory."""
     try:
-        await delete_memory(agent_id=agent_id, key=key, category=category)
+        await delete_memory(agent_id=agent_id, key=key, category=category, thread_id=thread_id)
         return {"success": True, "message": f"Memory '{key}' deleted."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

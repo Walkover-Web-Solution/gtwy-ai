@@ -718,6 +718,157 @@
       "status": "active",
       "created_at": "2026-03-26T17:40:30.089023+00:00",
       "updated_at": "2026-03-26T17:40:30.089023+00:00"
+    },
+    "sess_344f472c51f4": {
+      "session_id": "sess_344f472c51f4",
+      "agent_id": "default",
+      "org_id": "default",
+      "thread_id": "b203e7d4-e52b-4d07-b373-a2cb103241e4",
+      "goal": "hii",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "hii"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-27T18:11:13.573478+00:00",
+      "updated_at": "2026-03-27T18:11:13.573478+00:00"
+    },
+    "sess_39c5142a864b": {
+      "session_id": "sess_39c5142a864b",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scrioFy1twfh",
+      "goal": "hi",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-27T18:12:21.426031+00:00",
+      "updated_at": "2026-03-27T18:12:21.426031+00:00"
+    },
+    "sess_e3f2ca9220b9": {
+      "session_id": "sess_e3f2ca9220b9",
+      "agent_id": "default",
+      "org_id": "default",
+      "thread_id": "2d681c7d-330f-4ab6-b93b-17b83e15eeac",
+      "goal": "joo",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "joo"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-27T18:14:24.742879+00:00",
+      "updated_at": "2026-03-27T18:14:24.742879+00:00"
+    },
+    "sess_e9efd8be5402": {
+      "session_id": "sess_e9efd8be5402",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scrieL2mMofZ",
+      "goal": "hii",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "hii"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-27T18:18:03.703850+00:00",
+      "updated_at": "2026-03-27T18:18:03.703850+00:00"
+    },
+    "sess_61f0e0a2d6a5": {
+      "session_id": "sess_61f0e0a2d6a5",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scrieL2mMofZ",
+      "goal": "hii",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "hii"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-27T18:26:42.329040+00:00",
+      "updated_at": "2026-03-27T18:26:42.329040+00:00"
+    },
+    "sess_f2c8c3d47e9a": {
+      "session_id": "sess_f2c8c3d47e9a",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scrieL2mMofZ",
+      "goal": "hii",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "hii"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-27T18:28:18.035583+00:00",
+      "updated_at": "2026-03-27T18:28:18.035583+00:00"
+    },
+    "sess_4a5e7bc24ee6": {
+      "session_id": "sess_4a5e7bc24ee6",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scriXbZ55DoY",
+      "goal": "When a new order is placed, if the amount is greater than 1000 then notify my manager on Slack, otherwise just store the order details in Google Sheets",
+      "state": {
+        "final_answer": "The automation setup is partially complete:\n\n1. **Trigger Setup**: Successfully set up to activate on new order events using the 'New Order' event from OrderDesk.\n\n2. **Condition Check**: Successfully implemented a condition to check if the order amount is greater than 1000.\n\n3. **Slack Notification**: There is an issue with the Slack notification plugin. Further investigation is needed to resolve the configuration or parameter issues to ensure the manager receives notifications for orders over 1000.\n\n4. **Google Sheets Storage**: The Google Sheets plugin step is not complete due to missing authentication. You need to authenticate your Google Sheets account in viaSocket to allow access to your spreadsheets. Once authenticated, you can retry creating the plugin step to store order details.\n\nPlease authenticate your Google Sheets account and let me know if you need further assistance with the Slack notification setup.",
+        "goal": "When a new order is placed, if the amount is greater than 1000 then notify my manager on Slack, otherwise just store the order details in Google Sheets"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "When a new order is placed, if the amount is greater than 1000 then notify my manager on Slack, otherwise just store the order details in Google Sheets"
+        },
+        {
+          "role": "assistant",
+          "content": "The automation setup is partially complete:\n\n1. **Trigger Setup**: Successfully set up to activate on new order events using the 'New Order' event from OrderDesk.\n\n2. **Condition Check**: Successfully implemented a condition to check if the order amount is greater than 1000.\n\n3. **Slack Notification**: There is an issue with the Slack notification plugin. Further investigation is needed to resolve the configuration or parameter issues to ensure the manager receives notifications for orders over 1000.\n\n4. **Google Sheets Storage**: The Google Sheets plugin step is not complete due to missing authentication. You need to authenticate your Google Sheets account in viaSocket to allow access to your spreadsheets. Once authenticated, you can retry creating the plugin step to store order details.\n\nPlease authenticate your Google Sheets account and let me know if you need further assistance with the Slack notification setup."
+        }
+      ],
+      "a2a_calls": [],
+      "status": "completed",
+      "created_at": "2026-03-28T03:56:37.728102+00:00",
+      "updated_at": "2026-03-28T03:58:02.980706+00:00"
+    },
+    "sess_e5919ac23f3c": {
+      "session_id": "sess_e5919ac23f3c",
+      "agent_id": "agent_0a692435b6d9",
+      "org_id": "default",
+      "thread_id": "scriXbZ55DoY",
+      "goal": "check my flow are complete build it",
+      "state": {},
+      "messages": [
+        {
+          "role": "user",
+          "content": "check my flow are complete build it"
+        }
+      ],
+      "a2a_calls": [],
+      "status": "active",
+      "created_at": "2026-03-28T04:05:14.345156+00:00",
+      "updated_at": "2026-03-28T04:05:14.345156+00:00"
     }
   },
   "a2a_registry": {
@@ -821,6 +972,21 @@
         },
         "created_at": "2026-03-26T17:37:51.964557+00:00",
         "updated_at": "2026-03-26T17:37:51.964557+00:00"
+      }
+    },
+    "agent/agent_0a692435b6d9/scriXbZ55DoY/session_summaries": {
+      "mem_b8889cd8b61d": {
+        "value": {
+          "content": "Session sess_4a5e7bc24ee6: Goal was 'When a new order is placed, if the amount is greater than 1000 then notify my manager on Slack, otherwise just store the order details in Google Sheets'. Summary: The automation setup is partially complete:\n\n1. **Trigger Setup**: Successfully set up to activate on new order events using the 'New Order' event from OrderDesk.\n\n2. **Condition Check**: Successfully implemented a condition to check if the order amount is greater than 1000.\n\n3. **Slack Notification**: There is an issue with the Slack notification plugin. Further investigation is needed to resolve the configuration or parameter issues to ensure the manager receives notifications for orders over ",
+          "category": "session_summaries",
+          "metadata": {
+            "session_id": "sess_4a5e7bc24ee6",
+            "goal": "When a new order is placed, if the amount is greater than 1000 then notify my manager on Slack, otherwise just store the order details in Google Sheets"
+          },
+          "created_at": "2026-03-28T03:58:03.020680+00:00"
+        },
+        "created_at": "2026-03-28T03:58:03.041822+00:00",
+        "updated_at": "2026-03-28T03:58:03.041822+00:00"
       }
     }
   }
