@@ -10,7 +10,7 @@ from db.agent_db_service import get_agent
 from db.memory_db_service import get_agent_memories_for_prompt
 from graph.nodes.tools import TOOLS, TOOLS_BY_NAME
 from graph.state import AgentState
-from services.tool_registry import runtime_variables_ctx
+from services.tool_registry import build_tool_payload_hint, normalize_tool_payload, runtime_variables_ctx
 
 # Sentinel value returned by the ask_planner tool so executor can detect it
 ASK_PLANNER_MARKER = "__ASK_PLANNER__"
@@ -39,14 +39,22 @@ Overall goal: {goal}
 
 You have access to tools: {tool_names}.
 
-RULES:
-- Use tools when needed to complete the task (read files, write files, run commands, call APIs, delegate to sub-agents).
-- Be specific and produce real output, not just descriptions.
-- If you encounter an error, try an alternative approach before giving up.
-- If you are unsure or confused about the task, use the `ask_planner` tool to ask for clarification.
-- Before every tool call, read that tool's description and parameter schema, then craft a complete, properly typed payload that satisfies required fields and mirrors the expected structure.
-- Populate tool inputs with concrete values sourced from context or reasonable assumptions; never leave placeholders like "TBD" or omit required keys.
-- Your output should satisfy the acceptance criteria for this task."""
+Planner already created the plan. Do NOT re-plan; execute only this task.
+
+Execution rules:
+- Use the task's assigned `tool_name` first when provided.
+- Call one tool at a time and wait for its response before the next action.
+- Build payloads from tool schema using exact parameter keys and correct types.
+- Use concrete values only; never use placeholders (for example: TBD).
+- If a tool call fails, analyze the error and decide the next best step.
+- If task details are ambiguous or critical input is missing, use `ask_planner`.
+
+Output rules:
+- Produce concrete task output that satisfies acceptance criteria.
+- If partially blocked, clearly state what succeeded, what failed, and why.
+- After each tool call, check the tool response quality before proceeding.
+- Never finalize the task while the latest required tool response is an error/invalid/empty result.
+"""
 
 REFLECTION_PROMPT = """You are a quality reviewer. Evaluate whether the executor's output satisfies the task requirements.
 
@@ -64,6 +72,21 @@ Respond with valid JSON:
   "reasoning": "Why you think it passed or failed",
   "improvement_hint": "If failed, what should be done differently"
 }}"""
+
+
+def _is_tool_error_response(tool_result: str) -> bool:
+    """Heuristic check for tool responses that should block task completion."""
+    if not isinstance(tool_result, str):
+        return False
+    lowered = tool_result.strip().lower()
+    if not lowered:
+        return True
+    return (
+        lowered.startswith("tool error:")
+        or lowered.startswith("unknown tool:")
+        or lowered.startswith("tool guard:")
+        or "validation error" in lowered
+    )
 
 
 def _find_next_runnable_task(tasks: list[dict], completed_ids: set) -> int | None:
@@ -194,12 +217,16 @@ async def _execute_single_task(
     result_text = ""
     asked_planner_question = None
     max_iterations = 15
+    saw_any_tool_call = False
+    unresolved_tool_error = False
+    last_tool_error = None
 
     # ReAct loop: LLM → tool call → result → LLM → ... → final text answer
     for _ in range(max_iterations):
         response = await llm.ainvoke(messages)
 
         if response.tool_calls:
+            saw_any_tool_call = True
             messages.append(response)
 
             # Check if any tool call is ask_planner
@@ -218,15 +245,24 @@ async def _execute_single_task(
 
                 tool_fn = tools_by_name.get(tool_call["name"])
                 if tool_fn:
+                    call_args = normalize_tool_payload(tool_fn, tool_call.get("args", {}) or {})
                     try:
-                        tool_result = await tool_fn.ainvoke(tool_call["args"])
+                        tool_result = await tool_fn.ainvoke(call_args)
                     except Exception as e:
-                        tool_result = f"Tool error: {e}"
+                        hint = build_tool_payload_hint(tool_fn)
+                        tool_result = f"Tool error: {e}. {hint}"
                 else:
                     tool_result = f"Unknown tool: {tool_call['name']}"
 
+                tool_result_str = str(tool_result)
+                if _is_tool_error_response(tool_result_str):
+                    unresolved_tool_error = True
+                    last_tool_error = tool_result_str
+                else:
+                    unresolved_tool_error = False
+
                 messages.append(ToolMessage(
-                    content=str(tool_result),
+                    content=tool_result_str,
                     tool_call_id=tool_call["id"],
                 ))
 
@@ -243,6 +279,9 @@ async def _execute_single_task(
         "result_text": result_text,
         "asked_planner": asked_planner_question,
         "messages": messages if asked_planner_question else None,
+        "saw_any_tool_call": saw_any_tool_call,
+        "unresolved_tool_error": unresolved_tool_error,
+        "last_tool_error": last_tool_error,
     }
 
 
@@ -378,6 +417,18 @@ async def _run_executor(
             worker_question = res["asked_planner"]
             worker_question_task_id = task["id"]
             worker_saved_messages = res.get("messages")
+            continue
+
+        # Do not mark completed if worker ended with unresolved tool error.
+        if res.get("saw_any_tool_call") and res.get("unresolved_tool_error"):
+            err = res.get("last_tool_error") or "Tool response validation failed."
+            tasks[task_idx] = {
+                **task,
+                "status": "failed",
+                "result": f"{result_text}\n\nUnresolved tool error: {err}",
+            }
+            needs_replan = True
+            replan_reason = f"Task '{task['title']}' ended with unresolved tool error: {err}"
             continue
 
         # Self-reflection

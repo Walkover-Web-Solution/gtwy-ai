@@ -64,6 +64,73 @@ def _make_function_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "", name)
 
 
+def _get_tool_schema_dict(tool_fn: Any) -> dict:
+    """Return JSON-like args schema for a tool."""
+    args_schema = getattr(tool_fn, "args_schema", None)
+    if not args_schema:
+        return {}
+    try:
+        if hasattr(args_schema, "model_json_schema"):  # pydantic v2
+            return args_schema.model_json_schema() or {}
+        if hasattr(args_schema, "schema"):  # pydantic v1
+            return args_schema.schema() or {}
+    except Exception:
+        return {}
+    return {}
+
+
+def build_tool_payload_hint(tool_fn: Any) -> str:
+    """Return readable guidance of exact accepted payload keys."""
+    schema = _get_tool_schema_dict(tool_fn)
+    properties = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+    if not properties:
+        return "No explicit args schema."
+    keys = []
+    for k, meta in properties.items():
+        keys.append(f"{k} ({meta.get('type', 'string')}, {'required' if k in required else 'optional'})")
+    return "Use exact keys: " + ", ".join(keys)
+
+
+def normalize_tool_payload(tool_fn: Any, raw_args: Any) -> dict:
+    """Normalize model-produced args to exact tool schema keys."""
+    payload = raw_args if isinstance(raw_args, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+
+    schema = _get_tool_schema_dict(tool_fn)
+    properties = schema.get("properties") or {}
+    required = list(schema.get("required") or [])
+    if not properties:
+        return payload
+
+    # Unwrap common nesting wrappers.
+    for wrapper in ("args", "payload", "data"):
+        nested = payload.get(wrapper)
+        if isinstance(nested, dict):
+            payload = nested
+            break
+
+    # Exact keys first.
+    normalized = {k: v for k, v in payload.items() if k in properties}
+
+    # If nothing matched, and schema has single key, map known aliases to it.
+    if not normalized and len(properties) == 1:
+        only = next(iter(properties.keys()))
+        for alias in ("input", "task", "query", "text", "message", "prompt"):
+            if alias in payload:
+                normalized[only] = payload.get(alias)
+                break
+
+    # If one required key missing and there is one unknown value, map it.
+    missing_required = [k for k in required if k not in normalized]
+    unknown_items = [(k, v) for k, v in payload.items() if k not in properties]
+    if len(missing_required) == 1 and len(unknown_items) == 1:
+        normalized[missing_required[0]] = unknown_items[0][1]
+
+    return normalized
+
+
 async def _axios_work(args: dict, url: str, headers: dict = None) -> dict:
     """POST args as JSON body to url. Mirrors axios_work() from the real project."""
     try:
@@ -139,7 +206,7 @@ def _build_api_call_tool(tool_config: dict) -> StructuredTool:
     properties = {
         k: {
             "type": v.get("type", "string"),
-            "description": v.get("description", k),
+            "description": f"{v.get('description', k)} (Exact payload key: '{k}')",
         }
         for k, v in ai_fields.items()
     }
