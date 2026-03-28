@@ -9,6 +9,7 @@ from ...cache_service import store_in_cache
 from ..baseService.baseService import BaseService
 from .anthropic_run_batch import create_batch_requests
 from globals import logger
+from src.configs.constant import service_name
 
 
 
@@ -84,22 +85,10 @@ class AnthropicBatch(BaseService):
             # Add current user message
             messages.append({"role": "user", "content": message})
             
-            # Construct Anthropic message format
-            request_params = {
-                "model": self.model,
-                "max_tokens": self.customConfig.get("max_tokens", 1024),
-                "messages": messages,
-            }
+            request_params = self.service_formatter(self.customConfig or {}, service_name["anthropic"])
 
-            # Add processed system prompt
+            request_params["messages"] = messages
             request_params["system"] = self.processed_prompts[idx]
-
-            # Add other config from customConfig
-            if self.customConfig:
-                # Add temperature, top_p, etc.
-                for key in ["temperature", "top_p", "top_k", "stop_sequences"]:
-                    if key in self.customConfig:
-                        request_params[key] = self.customConfig[key]
 
             # Create batch request entry with message_id sent as custom_id (required by Anthropic API)
             batch_entry = {

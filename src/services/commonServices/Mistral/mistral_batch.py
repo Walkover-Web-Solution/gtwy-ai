@@ -10,9 +10,7 @@ from src.services.commonServices.createConversations import ConversationService
 from ...cache_service import store_in_cache
 from ..baseService.baseService import BaseService
 from globals import logger
-
-from ...cache_service import store_in_cache
-from ..baseService.baseService import BaseService
+from src.configs.constant import service_name
 
 
 class MistralBatch(BaseService):
@@ -77,24 +75,18 @@ class MistralBatch(BaseService):
             # This will be sent as custom_id to Mistral API (required by their format)
             message_id = str(uuid.uuid4())
 
-            # Construct Mistral batch request body
-            request_body = {"messages": [], "max_tokens": self.customConfig.get("max_tokens", 1024)}
+            request_body = self.service_formatter(self.customConfig, service_name["mistral"])
 
             # Add processed system message first
-            request_body["messages"].append({"role": "system", "content": self.processed_prompts[idx]})
+            messages = [{"role": "system", "content": self.processed_prompts[idx]}]
 
             # Add thread history after system prompt (if available)
             if thread_history:
-                request_body["messages"].extend(thread_history)
+                messages.extend(thread_history)
 
             # Add user message
-            request_body["messages"].append({"role": "user", "content": message})
-
-            # Add other config from customConfig
-            if self.customConfig:
-                for key in ["temperature", "top_p", "random_seed", "safe_prompt"]:
-                    if key in self.customConfig:
-                        request_body[key] = self.customConfig[key]
+            messages.append({"role": "user", "content": message})
+            request_body["messages"] = messages
 
             # Create JSONL entry with message_id sent as custom_id (required by Mistral API)
             batch_entry = {

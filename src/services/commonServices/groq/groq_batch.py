@@ -5,6 +5,7 @@ from src.configs.constant import redis_keys
 from src.db_services.conversationDbService import find_completed_batch_conversations
 from src.controllers.conversationController import add_tool_call_data_in_history
 from src.services.commonServices.createConversations import ConversationService
+from src.configs.constant import service_name
 
 from ...cache_service import store_in_cache
 from ..baseService.baseService import BaseService
@@ -74,16 +75,18 @@ class GroqBatch(BaseService):
             # This will be sent as custom_id to Groq API (required by their format)
             message_id = str(uuid.uuid4())
 
+            body_data = self.service_formatter(self.customConfig, service_name["groq"])
+
             # Construct OpenAI-compatible request with message_id as custom_id
             request_obj = {
                 "custom_id": message_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {"model": self.model, "messages": []},
+                "body": body_data,
             }
 
             # Add processed system message first
-            request_obj["body"]["messages"].append({"role": "system", "content": self.processed_prompts[idx]})
+            request_obj["body"]["messages"] = [{"role": "system", "content": self.processed_prompts[idx]}]
 
             # Add thread history after system prompt (if available)
             if thread_history:
@@ -91,12 +94,6 @@ class GroqBatch(BaseService):
 
             # Add user message
             request_obj["body"]["messages"].append({"role": "user", "content": message})
-
-            # Add other config from customConfig (like temperature, max_tokens, etc.)
-            if self.customConfig:
-                for key, value in self.customConfig.items():
-                    if key not in ["messages", "prompt", "model"]:
-                        request_obj["body"][key] = value
 
             # Serialize to JSON string (one line per request for JSONL)
             results.append(json.dumps(request_obj))

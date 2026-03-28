@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from src.configs.constant import redis_keys
+from src.configs.constant import redis_keys, service_name
 from src.services.commonServices.Google.gemini_run_batch import create_batch_file, process_batch_file
 from src.db_services.conversationDbService import find_completed_batch_conversations
 from src.controllers.conversationController import add_tool_call_data_in_history
@@ -10,9 +10,6 @@ from src.services.commonServices.createConversations import ConversationService
 from ...cache_service import store_in_cache
 from ..baseService.baseService import BaseService
 from globals import logger
-
-from ...cache_service import store_in_cache
-from ..baseService.baseService import BaseService
 
 
 class GeminiBatch(BaseService):
@@ -93,28 +90,19 @@ class GeminiBatch(BaseService):
             message_id = str(uuid.uuid4())
 
             # Construct Gemini native format request with history
-            contents = []
+            contents = [{"role": "system", "parts": [{"text": self.processed_prompts[idx]}]}]
             
             # Add thread history first (if available)
             if thread_history:
                 contents.extend(thread_history)
             
             # Add current user message
-            contents.append({"parts": [{"text": message}]})
+            contents.append({"role": "user", "parts": [{"text": message}]})
             
-            request_content = {"contents": contents}
+            formatted_config = self.service_formatter(self.customConfig or {}, service_name["gemini"])
 
-            # Add processed system instruction
-            request_content["config"] = {"system_instruction": {"parts": [{"text": self.processed_prompts[idx]}]}}
-
-            # Add other config from customConfig (like temperature, max_tokens, etc.)
-            if self.customConfig:
-                if "config" not in request_content:
-                    request_content["config"] = {}
-                # Merge customConfig into config, excluding any messages/prompt fields
-                for key, value in self.customConfig.items():
-                    if key not in ["messages", "prompt", "model"]:
-                        request_content["config"][key] = value
+            request_content = {"contents": contents}            
+            request_content["generation_config"] = formatted_config["config"].model_dump(exclude_none=True)
 
             # Create JSONL entry with message_id sent as key (required by Gemini API)
             batch_entry = {

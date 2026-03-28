@@ -150,7 +150,7 @@ async def handle_batch_results(batch_id, apikey):
     state = batch.state
 
     # In-progress states - continue polling
-    if state in [types.BatchState.STATE_PENDING, types.BatchState.STATE_RUNNING]:
+    if state.name in {"JOB_STATE_PENDING", "JOB_STATE_RUNNING"}:
         return None, False
 
     # Terminal states - download results
@@ -165,7 +165,7 @@ async def handle_batch_results(batch_id, apikey):
         return output_results, True
 
     # No results available - return error based on state
-    if state == types.BatchState.STATE_SUCCEEDED:
+    if state.name == "JOB_STATE_SUCCEEDED":
         # Succeeded but no output - unusual case
         error_info = [
             {
@@ -177,7 +177,7 @@ async def handle_batch_results(batch_id, apikey):
                 "status_code": 400,
             }
         ]
-    elif state == types.BatchState.STATE_FAILED:
+    elif state.name == "JOB_STATE_FAILED":
         error_info = [
             {
                 "error": {
@@ -188,7 +188,7 @@ async def handle_batch_results(batch_id, apikey):
                 "status_code": 400,
             }
         ]
-    elif state == types.BatchState.STATE_EXPIRED:
+    elif state.name == "JOB_STATE_EXPIRED":
         error_info = [
             {
                 "error": {
@@ -199,7 +199,7 @@ async def handle_batch_results(batch_id, apikey):
                 "status_code": 400,
             }
         ]
-    elif state == types.BatchState.STATE_CANCELLED:
+    elif state.name == "JOB_STATE_CANCELLED":
         error_info = [
             {
                 "error": {
