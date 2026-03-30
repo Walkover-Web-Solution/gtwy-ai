@@ -69,15 +69,15 @@ async def _prepare_configuration_response(
     if not chatbot:
         chatbot = True if bridge_data.get("bridgeType") == "chatbot" else False
 
+    # Validate bridge existence and status before any limit checks
+    validation_result = await validate_bridge(bridge_data, result)
+    if validation_result:
+        return validation_result, None, None, resolved_bridge_id
+
     # Limit checks
     limit_error = await check_bridge_api_folder_limits(result.get("bridges"), bridge_data, version_id)
     if limit_error:
         return limit_error, None, None, resolved_bridge_id
-
-    # Validate bridge
-    validation_result = await validate_bridge(bridge_data, result)
-    if validation_result:
-        return validation_result, None, None, resolved_bridge_id
 
     # Setup configuration and service
     configuration, service = setup_configuration(configuration, result, service)

@@ -12,12 +12,13 @@ apiCallModel = db["apicalls"]
 
 async def validate_bridge(bridge_data, result):
     """Validate bridge status and existence"""
+    if not result.get("success"):
+        return {"success": False, "error": "Agent does not exist in this organization"}
+
     bridge_status = bridge_data.get("bridges", {}).get("bridge_status") or bridge_data.get("bridge_status", 0)
     if bridge_status == 0:
         raise Exception("Bridge is Currently Paused")
 
-    if not result.get("success"):
-        return {"success": False, "error": "bridge_id does not exist"}
     return None
 
 
