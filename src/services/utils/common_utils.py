@@ -169,7 +169,7 @@ def parse_request_body(request_body):
         "pre_tools": body.get("pre_tools"),
         "version": state.get("version"),
         "fine_tune_model": body.get("configuration", {}).get("fine_tune_model", {}).get("current_model", {}),
-        "is_rich_text": body.get("configuration", {}).get("is_rich_text", True),
+        "is_rich_text": body.get("configuration", {}).get("is_rich_text", False),
         "actions": body.get("actions", {}),
         "user_reference": body.get("user_reference", ""),
         "variables_path": body.get("variables_path") or {},
