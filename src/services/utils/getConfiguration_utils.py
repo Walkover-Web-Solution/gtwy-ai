@@ -77,7 +77,7 @@ def setup_tool_choice(configuration, result, service):
             break
     if not toolchoice:
         connected_agents_name = result.get("bridges", {}).get("agent_name_info", {})
-        agent_name = connected_agents_name[tool_choice_ids]
+        agent_name = connected_agents_name.get(tool_choice_ids, None)
         
         if agent_name:
             toolchoice = makeFunctionName(agent_name)
