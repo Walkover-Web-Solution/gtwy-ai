@@ -65,7 +65,7 @@ def setup_configuration(configuration, result, service):
 
 def setup_tool_choice(configuration, result, service):
     """Setup tool choice configuration"""
-    tool_choice_ids = configuration.get("tool_choice", [])
+    tool_choice_ids = configuration.get("tool_choice", "")
     toolchoice = None
 
     # Find tool choice from API calls
@@ -78,7 +78,6 @@ def setup_tool_choice(configuration, result, service):
     if not toolchoice:
         connected_agents_name = result.get("bridges", {}).get("agent_name_info", {})
         agent_name = connected_agents_name.get(tool_choice_ids)
-        
         if agent_name:
             toolchoice = makeFunctionName(agent_name)
 
