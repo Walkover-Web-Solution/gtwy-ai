@@ -190,6 +190,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
         "child_id": history_params.get("child_id"),
         "bridge_id": history_params.get("bridge_id"),
         "prompt": history_params.get("prompt"),
+        "tool_call_limit_exceeded": history_params.get("tool_call_limit_exceeded", False),
     }
 
     latency = latency_data.get("over_all_time", 0) if latency_data else 0

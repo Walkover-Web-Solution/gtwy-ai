@@ -101,6 +101,7 @@ class BaseService:
             self.streamer = StreamingService(mode="sse")
         else:
             self.streamer = None
+        self.tool_call_limit_exceeded = False
 
     def aiconfig(self):
         return self.customConfig
@@ -221,9 +222,14 @@ class BaseService:
                 configuration["tool_choice"] = {"type": "auto"}
             else:
                 configuration["tool_choice"] = "auto"
-        if validate_tool_call(service, model_response) and loop_count <= int(self.tool_call_count or 0):
+        tool_call_active = validate_tool_call(service, model_response)
+        within_limit = loop_count <= int(self.tool_call_count or 0)
+        if tool_call_active and within_limit:
             loop_count += 1
         else:
+            if tool_call_active and not within_limit:
+                self.tool_call_limit_exceeded = True
+                response["tool_call_limit_exceeded"] = True
             if self.stream_mode and self.streamer and response.get("has_tool_calls"):
                 response["stream_finish_reason"] = "tool_call_limit_reached"
             return response
@@ -343,6 +349,10 @@ class BaseService:
         if not original_message and transfer_agent_config:
             agent_name = transfer_agent_config.get("tool_name", "the agent")
             original_message = f"Query is successfully transferred to agent {agent_name}"
+
+        if self.tool_call_limit_exceeded:
+            response.setdefault("data", {})["tool_call_limit_exceeded"] = True
+
         return {
             "thread_id": self.thread_id,
             "sub_thread_id": self.sub_thread_id,
@@ -391,7 +401,8 @@ class BaseService:
             "response": response,
             "folder_id": self.folder_id,
             "prompt": self.configuration.get("prompt"),
-            "is_cached": is_cached
+            "is_cached": is_cached,
+            "tool_call_limit_exceeded": self.tool_call_limit_exceeded,
         }
 
     def service_formatter(self, configuration: object, service: str):  # changes
