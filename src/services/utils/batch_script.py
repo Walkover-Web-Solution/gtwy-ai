@@ -81,6 +81,23 @@ async def check_batch_status():
                                 for item in formatted_results
                             )
                             
+                            # Calculate and attach cost to each formatted result's usage before sending webhook
+                            for item in formatted_results:
+                                item_usage = item.get('usage', {})
+                                if item_usage and model:
+                                    item_input_tokens = item_usage.get('input_tokens') or 0
+                                    item_output_tokens = item_usage.get('output_tokens') or 0
+                                    item_cost = 0
+                                    if item_input_tokens > 0 or item_output_tokens > 0:
+                                        try:
+                                            cost_calc = TokenCalculator(service, {})
+                                            cost_calc.calculate_usage({'usage': item_usage})
+                                            cost_breakdown = cost_calc.calculate_total_cost(model, service)
+                                            item_cost = cost_breakdown.get('total_cost', 0) * 0.5
+                                        except Exception as cost_err:
+                                            logger.error(f"Error calculating cost for batch item: {str(cost_err)}")
+                                    item_usage['cost'] = item_cost
+
                             webhook_response = None
                             webhook_error = None
                             if webhook.get('url') is not None:
