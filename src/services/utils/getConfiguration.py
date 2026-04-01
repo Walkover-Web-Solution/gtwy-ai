@@ -174,8 +174,8 @@ async def _prepare_configuration_response(
     gpt_memory_context = bridge.get("gpt_memory_context")
     gpt_memory = result.get("bridges", {}).get("gpt_memory")
 
-    tone = configuration.get("tone", {})
-    responseStyle = configuration.get("responseStyle", {})
+    tone = bridge.get("settings", {}).get("tone", {})
+    responseStyle = bridge.get("settings", {}).get("responseStyle", {})
     configuration["prompt"] = Helper.append_tone_and_response_style_prompts(
         configuration["prompt"], tone, responseStyle
     )
@@ -196,7 +196,7 @@ async def _prepare_configuration_response(
 
     add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_flag)
 
-    guardrails_value = guardrails if guardrails is not None else (result.get("bridges", {}).get("guardrails") or {})
+    guardrails_value = guardrails if guardrails is not None else (result.get("bridges", {}).get("settings", {}).get("guardrails") or {})
     web_search_filters_value = web_search_filters or result.get("bridges", {}).get("web_search_filters") or {}
 
     base_config = {
@@ -225,7 +225,7 @@ async def _prepare_configuration_response(
         "bridge_id": result["bridges"].get("parent_id", result["bridges"].get("_id")),
         "variables_state": result.get("bridges", {}).get("variables_state", {}),
         "built_in_tools": built_in_tools or result.get("bridges", {}).get("built_in_tools"),
-        "fall_back": result.get("bridges", {}).get("fall_back") or {},
+        "fall_back": result.get("bridges", {}).get("settings", {}).get("fall_back") or {},
         "guardrails": guardrails_value,
         "is_embed": result.get("bridges", {}).get("folder_type") == "embed",
         "user_id": result.get("bridges", {}).get("user_id"),

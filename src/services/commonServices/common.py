@@ -168,7 +168,7 @@ async def chat(request_body):
         # Initialize transfer history for this request if not exists
         if transfer_request_id not in TRANSFER_HISTORY:
             TRANSFER_HISTORY[transfer_request_id] = []
-        if parsed_data.get("guardrails", {}).get("is_enabled", False):
+        if parsed_data.get("settings", {}).get("guardrails", {}).get("is_enabled", False):
             guardrails_result = await guardrails_check(parsed_data)
             if guardrails_result is not None:
                 # Content was blocked by guardrails, return the blocked response
@@ -352,10 +352,10 @@ async def chat(request_body):
             result = {"success": False, "error": original_error, "response": {"usage": {}}, "modelResponse": {}}
 
         # Retry mechanism with fallback configuration
-        if execution_failed and parsed_data.get("fall_back") and parsed_data["fall_back"].get("is_enable", False):
+        if execution_failed and parsed_data.get("settings", {}).get("fall_back") and parsed_data["settings"]["fall_back"].get("is_enable", False):
             try:
                 # Store original configuration
-                fallback_config = parsed_data["fall_back"]
+                fallback_config = parsed_data["settings"]["fall_back"]
                 original_model = parsed_data["model"]
 
                 # Update parsed_data with fallback configuration
@@ -673,7 +673,7 @@ async def embedding(request_body):
             "customConfig": custom_config,
             "model_output_config": model_output_config,
             "text": text,
-            "response_format": configuration.get("response_format") or {},
+            "response_format": body.get("settings", {}).get("response_format") or {},
             "service": service,
             "version_id": body.get("version_id"),
             "bridge_id": body.get("bridge_id"),
