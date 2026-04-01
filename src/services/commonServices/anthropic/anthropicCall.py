@@ -86,12 +86,13 @@ class Anthropic(BaseService):
 
         self.update_model_response(modelResponse, functionCallRes)
         tools = functionCallRes.get("tools", {})
-        response = await Response_formatter(modelResponse, service_name["anthropic"], tools, self.type, self.image_data)
+        final_model_response = functionCallRes.get("modelResponse") or modelResponse
+        response = await Response_formatter(final_model_response, service_name["anthropic"], tools, self.type, self.image_data)
         if not self.playground:
             transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
-            historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
+            historyParams = self.prepare_history_params(response, final_model_response, tools, transfer_config)
         # Add transfer_agent_config to return if transfer was detected
-        result = {"success": True, "modelResponse": modelResponse, "historyParams": historyParams, "response": response}
+        result = {"success": True, "modelResponse": final_model_response, "historyParams": historyParams, "response": response}
         if functionCallRes.get("transfer_agent_config"):
             result["transfer_agent_config"] = functionCallRes["transfer_agent_config"]
         return result
