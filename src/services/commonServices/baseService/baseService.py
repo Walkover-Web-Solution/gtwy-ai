@@ -175,36 +175,22 @@ class BaseService:
                 case 'gemini':
                     from google.genai import types
 
-                    function_call_part = None
-                    for part in response.get('candidates', [{}])[0].get('content', {}).get('parts', []):
-                        if isinstance(part, dict) and part.get('function_call'):
-                            if part['function_call'].get('name') == function_response['name']:
-                                function_call_part = part['function_call']
-                                break
-                    
-                    configuration['contents'].append({
-                        'role': 'model',
-                        'parts': [{'function_call': function_call_part}]
-                    })
+                    if index == 0:
+                        configuration['contents'].append(response.get('candidates', [{}])[0].get('content', {}))
 
-                    if isinstance(function_response['content'], str):
+                    function_response_content = function_response['content']
+                    if isinstance(function_response_content, str):
                         try:
-                            function_response['content'] = json.loads(function_response['content'])
+                            function_response_content = json.loads(function_response_content)
                         except:
                             pass
-                    
-                    if isinstance(function_response['content'], list):
-                        function_response['content'] = {"result": function_response['content']}
 
-                    configuration['contents'].append({
-                        'role': 'user',
-                        'parts': [{
-                            'function_response': {
-                                'name': function_response['name'],
-                                'response':  function_response['content']
-                            }
-                        }]
-                    })
+                    function_response_content = {"result": function_response_content}
+                    function_response_part = types.Part.from_function_response(
+                        name=function_response['name'],
+                        response=function_response_content
+                    )
+                    configuration['contents'].append(types.Content(role='user', parts=[function_response_part]))
                 case  _:
                     pass
         return configuration, tools
