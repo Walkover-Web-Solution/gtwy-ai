@@ -15,6 +15,8 @@ class TokenCalculator:
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
             "reasoning_tokens": 0,
+            "audio_duration_seconds": 0,
+            "audio_duration_minutes": 0,
         }
         # Image-specific token tracking
         self.image_usage = {
@@ -93,6 +95,13 @@ class TokenCalculator:
                 usage["cachingReadTokens"] = model_response["usage"].get("cache_read_input_tokens", 0)
                 usage["cachingCreationInputTokens"] = model_response["usage"].get("cache_creation_input_tokens", 0)
 
+            case "deepgram":
+                metadata = model_response.get("metadata", {}) or {}
+                usage_payload = model_response.get("usage", {}) or {}
+                audio_duration_seconds = float(metadata.get("duration") or usage_payload.get("audio_duration") or 0)
+
+                usage["audioDurationSeconds"] = audio_duration_seconds
+
             case _:
                 pass
 
@@ -107,6 +116,8 @@ class TokenCalculator:
         self.total_usage["cache_read_input_tokens"] += usage.get("cachingReadTokens") or 0
         self.total_usage["cache_creation_input_tokens"] += usage.get("cachingCreationInputTokens") or 0
         self.total_usage["reasoning_tokens"] += usage.get("reasoningTokens") or 0
+        self.total_usage["audio_duration_seconds"] += usage.get("audioDurationSeconds") or 0
+        self.total_usage["audio_duration_minutes"] += (usage.get("audioDurationSeconds") or 0) / 60
 
     def calculate_image_usage(self, model_response):
         """
@@ -160,6 +171,7 @@ class TokenCalculator:
             "reasoning_cost": 0,
             "cache_read_cost": 0,
             "cache_creation_cost": 0,
+            "audio_cost": 0,
             "total_cost": 0,
         }
 
@@ -186,6 +198,9 @@ class TokenCalculator:
                 "caching_write_cost"
             ]
 
+        if self.total_usage["audio_duration_minutes"] and pricing.get("audio_cost_per_minute"):
+            cost["audio_cost"] = self.total_usage["audio_duration_minutes"] * pricing["audio_cost_per_minute"]
+
         # Calculate total cost
         cost["total_cost"] = (
             cost["input_cost"]
@@ -194,6 +209,7 @@ class TokenCalculator:
             + cost["reasoning_cost"]
             + cost["cache_read_cost"]
             + cost["cache_creation_cost"]
+            + cost["audio_cost"]
         )
 
         return cost

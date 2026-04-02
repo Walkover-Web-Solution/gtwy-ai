@@ -148,6 +148,20 @@ ServiceKeys = {
             "max_tokens": "max_completion_tokens",
         },
     },
+    service_name["deepgram"]: {
+        "default": {
+            "model": "model",
+            "language": "language",
+            "smart_format": "smart_format",
+            "detect_language": "detect_language",
+            "diarize": "diarize",
+            "filler_words": "filler_words",
+            "punctuate": "punctuate",
+            "numerals": "numerals",
+            "detect_entities": "detect_entities",
+            "model_option": "model_option" 
+        }
+    },
 }
 
 

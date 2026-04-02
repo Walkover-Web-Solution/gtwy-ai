@@ -22,6 +22,7 @@ from ..commonServices.AiMl.ai_ml_call import Ai_Ml
 from ..commonServices.anthropic.anthropic_batch import AnthropicBatch
 from ..commonServices.anthropic.anthropicCall import Anthropic
 from ..commonServices.baseService.utils import sendResponse
+from ..commonServices.deepgram.deepgramCall import Deepgram
 from ..commonServices.Google.geminiCall import GeminiHandler
 from ..commonServices.Google.gemini_batch import GeminiBatch
 from ..commonServices.grok.grokCall import Grok
@@ -274,6 +275,8 @@ class Helper:
             class_obj = Mistral(params)
         elif service == service_name["ai_ml"]:
             class_obj = Ai_Ml(params)
+        elif service == service_name["deepgram"]:
+            class_obj = Deepgram(params)
         elif service == service_name["openai_completion"]:
             class_obj = OpenaiCompletion(params)
         else:

@@ -88,8 +88,13 @@ async def add_configuration_data_to_body(request: Request):
         model = body.get("configuration").get("model")
         user = body.get("user")
         images = body.get("images") or []
+        audios = [
+            url.get("url")
+            for url in body.get("user_urls", [])
+            if isinstance(url, dict) and url.get("type") == "audio" and url.get("url")
+        ]
         batch = body.get("batch") or []
-        if user is None and len(images) == 0 and len(batch) == 0:
+        if user is None and len(images) == 0 and len(audios) == 0 and len(batch) == 0:
             raise HTTPException(status_code=400, detail={"success": False, "error": "User message is compulsory"})
         if not (service in model_config_document and model in model_config_document[service]):
             raise HTTPException(status_code=400, detail={"success": False, "error": "model or service does not exist!"})

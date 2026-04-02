@@ -17,6 +17,7 @@ service_name = {
     "open_router": "open_router",
     "mistral": "mistral",
     "ai_ml": "ai_ml",
+    "deepgram": "deepgram",
     "openai_completion": "openai_completion",
 }
 
@@ -82,6 +83,7 @@ new_agent_service = {
     "gemini": "gemini-2.5-flash",
     "ai_ml": "gpt-oss-20b",
     "grok": "grok-4-fast",
+    "deepgram": "nova-3",
 }
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
