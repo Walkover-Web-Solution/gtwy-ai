@@ -430,6 +430,10 @@ async def chat(request_body):
             raise ValueError(result)
         # Add message_id to response
         result["response"]["data"]["message_id"] = parsed_data["message_id"]
+        if getattr(class_obj, 'tool_call_limit_error', None):
+            result["error"] = class_obj.tool_call_limit_error
+        if result.get("error"):
+            result["response"]["error"] = result["error"]
 
         if original_error:
             send_error(

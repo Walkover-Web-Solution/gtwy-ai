@@ -162,7 +162,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
         "user": history_params.get("user", ""),
         "chatbot_message": history_params.get("chatbot_message", ""),
         "updated_llm_message": None,
-        "error": str(data_object.get("error", "")) if not data_object.get("success", False) else None,
+        "error": str(data_object.get("error", "")) if not data_object.get("success", False) else (history_params.get("error") or None),
         "user_feedback": 0,
         "tools_call_data": history_params.get("tools_call_data", []),
         "message_id": str(history_params.get("message_id")),
