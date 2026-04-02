@@ -53,6 +53,7 @@ from ..utils.helper import Helper
 from ..utils.send_error_webhook import send_error_to_webhook
 from .baseService.utils import sendResponse
 from .response_caching_service import handle_response_caching
+from workflow import execute_advanced_workflow
 
 app = FastAPI()
 configurationModel = db["configurations"]
@@ -255,6 +256,15 @@ async def chat(request_body):
         if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
             custom_config["response_type"] = restructure_json_schema(
                 custom_config["response_type"], parsed_data["service"]
+            )
+        if parsed_data.get("mode") == "todo":
+            return await execute_advanced_workflow(
+                parsed_data=parsed_data,
+                bridge_configurations=bridge_configurations,
+                params=params,
+                timer=timer,
+                thread_info=thread_info,
+                transfer_request_id=transfer_request_id,
             )
 
         # Execute with retry mechanism

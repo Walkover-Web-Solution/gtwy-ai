@@ -162,6 +162,7 @@ def parse_request_body(request_body):
         "template": body.get("template"),
         "response_format": body.get("configuration", {}).get("response_format"),
         "response_type": body.get("configuration", {}).get("response_type"),
+        "mode": body.get("mode"),
         "model": body.get("configuration", {}).get("model"),
         "auto_model_select": body.get("auto_model_select", False),
         "is_playground": state.get("is_playground") or body.get("is_playground") or False,

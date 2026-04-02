@@ -1,6 +1,7 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 from config import Config
 from globals import logger
@@ -35,7 +36,8 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
     data_to_send["body"]["message_id"] = message_id
     
     response_format = data_to_send.get("body", {}).get("configuration", {}).get("response_format", {})
-    if response_format and response_format.get("type") != "default":
+    mode = data_to_send.get("body", {}).get("mode")
+    if (response_format and response_format.get("type") != "default") or mode == "todo":
         try:
             # Publish the message to the queue
             await queue_obj.publish_message(data_to_send)
@@ -97,6 +99,36 @@ async def playground_chat_completion_bridge(
             return result
         result = await chat_multiple_agents(data_to_send)
         return result
+
+
+@router.websocket("/workflow/ws/{run_id}")
+async def workflow_ws(websocket: WebSocket, run_id: str):
+    from workflow.runner import HUMAN_INPUT_QUEUES, WORKFLOW_SESSIONS, WS_CONNECTIONS
+    await websocket.accept()
+    if run_id not in WORKFLOW_SESSIONS:
+        await websocket.close(code=4004, reason="run_id not found")
+        return
+
+    WS_CONNECTIONS[run_id] = websocket
+    try:
+        while True:
+            data = await websocket.receive_json()
+            if data.get("action") != "answer":
+                continue
+            # Poll up to 5s for the queue to be ready (interrupt may arrive slightly after frontend sends)
+            for _ in range(50):
+                if run_id in HUMAN_INPUT_QUEUES:
+                    break
+                await asyncio.sleep(0.1)
+            queue = HUMAN_INPUT_QUEUES.get(run_id)
+            if queue:
+                await queue.put(data.get("answer"))
+            else:
+                await websocket.send_json({"status": "error", "message": "workflow not waiting for input"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        WS_CONNECTIONS.pop(run_id, None)
 
 
 @router.post("/batch/chat/completion", dependencies=[Depends(auth_and_rate_limit)])
