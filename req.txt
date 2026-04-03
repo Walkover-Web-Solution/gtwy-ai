@@ -25,7 +25,7 @@ gunicorn
 # AI providers
 anthropic>=0.86.0
 openai==1.108.0
-groq==1.1.1
+groq>=0.4.1,<1.0.0
 mistralai==1.8.2
 mistral-common>=1.0.0
 google-genai>=1.56.0,<2.0.0

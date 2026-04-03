@@ -458,7 +458,7 @@ class BaseService:
             
             if service == service_name["deepgram"]:
                 if new_config.get("model_option"):
-                    new_config["model"] = f"{new_config["model"]}-{new_config.pop("model_option")}"
+                    new_config["model"] = f"{new_config['model']}-{new_config.pop('model_option')}"
 
             return new_config
         except Exception as e:
