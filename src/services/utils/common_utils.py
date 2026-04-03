@@ -1233,6 +1233,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
         "tools_call_data": error.args[1] if error and len(error.args) > 1 else None,
         "message_id": parsed_data["message_id"],
         "AiConfig": class_obj.aiconfig() if class_obj else None,
+        "firstAttemptError": parsed_data.get("firstAttemptError") or "",
         "folder_id": parsed_data.get("folder_id"),
         "folder_limit": parsed_data.get("folder_limit", 0),
         "parent_id": parsed_data.get("parent_bridge_id", ""),
