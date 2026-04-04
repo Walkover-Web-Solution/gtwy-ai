@@ -211,9 +211,8 @@ def _build_history_params(session: WorkflowSession, content: str, message_id: st
 # ---------------------------------------------------------------------------
 
 async def _emit_to_ws(run_id: str, event: str, node: str, data: dict) -> None:
-    # from src.services.session_manager import publish_workflow_event
-    # Temporarily disabled: Redis publish during streaming interferes with LangGraph context
-    # await publish_workflow_event(run_id, event, node, data)
+    # Publish to Redis for cross-worker WS event relay
+    await publish_workflow_event(run_id, event, node, data)
 
     ws = registry.get_ws(run_id)
     if not ws:
@@ -226,7 +225,6 @@ async def _emit_to_ws(run_id: str, event: str, node: str, data: dict) -> None:
 
 async def _wait_for_human_input(run_id: str) -> None:
     """Wait for a human answer from the WS endpoint and resume the workflow."""
-    from src.services.session_manager import subscribe_to_human_input
     queue = registry.create_input_queue(run_id)
     sub_task = None
     try:
@@ -236,6 +234,10 @@ async def _wait_for_human_input(run_id: str) -> None:
         sub_task = asyncio.create_task(subscribe_to_human_input(run_id, queue))
         resume_value = await asyncio.wait_for(queue.get(), timeout=605)
         sub_task.cancel()
+        try:
+            await sub_task
+        except asyncio.CancelledError:
+            pass
         logger.info(f"[Workflow] human input received for run_id={run_id}: {resume_value!r}")
         asyncio.create_task(resume_advanced_workflow(run_id, resume_value))
     except asyncio.TimeoutError:
@@ -389,7 +391,6 @@ async def create_advanced_workflow_session(parsed_data: dict, bridge_configurati
         tool_schemas=tool_schemas,
     )
     registry.register(session)
-    from src.services.session_manager import register_session_in_redis
     await register_session_in_redis(run_id)
     return session
 
@@ -476,7 +477,6 @@ async def stream_and_emit_workflow(
 
     # Cleanup session when workflow completes (not interrupted)
     if not interrupt_payload:
-        from src.services.session_manager import unregister_session_from_redis
         await unregister_session_from_redis(session.run_id)
         registry.remove(session.run_id)
 
