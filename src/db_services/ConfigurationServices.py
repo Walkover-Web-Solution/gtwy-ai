@@ -73,7 +73,7 @@ async def get_bridges_without_tools(bridge_id=None, org_id=None, version_id=None
 
 async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None):
     try:
-        cache_key = f"{redis_keys['bridge_data_with_tools_']}{version_id or bridge_id}"
+        cache_key = f"{redis_keys['bridge_data_with_tools_']}{org_id}_{version_id or bridge_id}"
 
         # Attempt to retrieve data from Redis cache
         cached_data = await find_in_cache(cache_key)
@@ -882,10 +882,10 @@ async def get_bridge_by_slugname(org_id, slug_name):
         raise BadRequestException("Failed to fetch bridge by slugName") from error
 
 
-async def update_bridge(bridge_id=None, update_fields=None, version_id=None):
+async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org_id=""):
     model = version_model if version_id else configurationModel
     id_to_use = ObjectId(version_id) if version_id else ObjectId(bridge_id)
-    cache_key = f"{version_id if version_id else bridge_id}"
+    cache_key = f"{org_id}_{version_id if version_id else bridge_id}"
 
     updated_bridge = await model.find_one_and_update(
         {"_id": ObjectId(id_to_use)}, {"$set": update_fields}, return_document=True, upsert=True

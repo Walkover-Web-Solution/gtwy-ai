@@ -190,7 +190,7 @@ async def check_bridge_api_folder_limits(result, bridge_data, version_id):
 
 
 # Utility to create related Redis keys to purge based on usage document
-def create_redis_keys(data):
+def create_redis_keys(data, org_id=""):
     keys_to_delete = []
     try:
         if not isinstance(data, dict):
@@ -199,7 +199,7 @@ def create_redis_keys(data):
         versions = data.get("versions") or []
 
         for version in versions:
-            keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{version}")
+            keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_{version}")
             keys_to_delete.append(f"{redis_keys['get_bridge_data_']}{version}")
 
     except Exception as e:
@@ -208,7 +208,7 @@ def create_redis_keys(data):
     return keys_to_delete
 
 
-async def purge_related_bridge_caches(bridge_id: str, bridge_usage: int = -1):
+async def purge_related_bridge_caches(bridge_id: str, bridge_usage: int = -1, org_id: str = ""):
     try:
         if not bridge_id:
             return
@@ -220,12 +220,12 @@ async def purge_related_bridge_caches(bridge_id: str, bridge_usage: int = -1):
         if usage_cache_value:
             try:
                 usage_data = json.loads(usage_cache_value) or {}
-                keys_to_delete.extend(create_redis_keys(usage_data))
+                keys_to_delete.extend(create_redis_keys(usage_data, org_id))
             except Exception:
                 pass
 
         # Ensure current bridge's own keys are covered
-        keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{bridge_id}")
+        keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_{bridge_id}")
         keys_to_delete.append(f"{redis_keys['get_bridge_data_']}{bridge_id}")
 
         if keys_to_delete:
