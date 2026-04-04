@@ -350,7 +350,7 @@ async def create_advanced_workflow_session(parsed_data: dict, bridge_configurati
 
     # Use thread_id + sub_thread_id as LangGraph thread key for persistent history
     thread_key = f"{parsed_data.get('thread_id')}:{parsed_data.get('sub_thread_id')}"
-    run_id = parsed_data["message_id"]
+    run_id = f"{parsed_data.get('thread_id')}_{parsed_data.get('sub_thread_id')}"
     session = WorkflowSession(
         run_id=run_id,
         graph=compiled_graph,

@@ -101,9 +101,10 @@ async def playground_chat_completion_bridge(
         return result
 
 
-@router.websocket("/workflow/ws/{run_id}")
-async def workflow_ws(websocket: WebSocket, run_id: str):
+@router.websocket("/workflow/ws/{thread_id}/{sub_thread_id}")
+async def workflow_ws(websocket: WebSocket, thread_id: str, sub_thread_id: str):
     from workflow.runner import HUMAN_INPUT_QUEUES, WORKFLOW_SESSIONS, WS_CONNECTIONS
+    run_id = f"{thread_id}_{sub_thread_id}"
     await websocket.accept()
     if run_id not in WORKFLOW_SESSIONS:
         await websocket.close(code=4004, reason="run_id not found")
