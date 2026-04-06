@@ -145,6 +145,17 @@ async def check_batch_status():
                                 output_tokens = usage.get('output_tokens') or 0 if usage else 0
                                 total_tokens = usage.get('total_tokens') or 0 if usage else 0
 
+                                individual_cost = 0
+                                if org_id and model and (input_tokens > 0 or output_tokens > 0):
+                                    try:
+                                        temp_calculator = TokenCalculator(service, {})
+                                        temp_calculator.calculate_usage({'usage': usage}) if usage else None
+                                        cost_breakdown = temp_calculator.calculate_total_cost(model, service)
+                                        individual_cost = cost_breakdown.get('total_cost', 0) * 0.5
+                                    except Exception as cost_error:
+                                        logger.error(f"Error calculating cost for message {message_id}: {str(cost_error)}")
+                                        individual_cost = 0
+
                                 if usage and is_success:
                                     token_calculator.calculate_usage({'usage': usage})
 
@@ -157,7 +168,8 @@ async def check_batch_status():
                                     'tokens': {
                                         'input_tokens': input_tokens,
                                         'output_tokens': output_tokens,
-                                        'total_tokens': total_tokens
+                                        'total_tokens': total_tokens,
+                                        'expected_cost': individual_cost
                                     } if usage else None,
                                     'batch_data': {
                                         'status': 'completed',
@@ -176,17 +188,6 @@ async def check_batch_status():
                                 })
 
                                 if org_id and model:
-                                    individual_cost = 0
-                                    if input_tokens > 0 or output_tokens > 0:
-                                        try:
-                                            temp_calculator = TokenCalculator(service, {})
-                                            temp_calculator.calculate_usage({'usage': usage}) if usage else None
-                                            cost_breakdown = temp_calculator.calculate_total_cost(model, service)
-                                            individual_cost = cost_breakdown.get('total_cost', 0) * 0.5
-                                        except Exception as cost_error:
-                                            logger.error(f"Error calculating cost for message {message_id}: {str(cost_error)}")
-                                            individual_cost = 0
-
                                     metrics_data.append({
                                         'org_id': org_id,
                                         'bridge_id': bridge_id or '',
