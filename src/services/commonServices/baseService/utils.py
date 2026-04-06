@@ -670,7 +670,7 @@ def serialize_config(config) -> dict:
 
 
 def build_accumulated_response(service, configuration, message_id, accumulated_content,
-                                final_tool_calls, final_usage, final_finish_reason, last_delta):
+                                final_tool_calls, final_usage, final_finish_reason, last_delta, service_tier=None):
     """Build a complete response dict from streamed data, matching the shape of each service's non-stream response."""
     full_text = "".join(accumulated_content)
     if service in [service_name["groq"], service_name["grok"],
@@ -719,7 +719,10 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
                     "name": tc.get("function", {}).get("name", ""),
                     "arguments": tc.get("function", {}).get("arguments", ""),
                 })
-        return {"output": output, "model": configuration.get("model", ""), "usage": final_usage, "status": final_finish_reason}
+        resp = {"output": output, "model": configuration.get("model", ""), "usage": final_usage, "status": final_finish_reason}
+        if service_tier:
+            resp["service_tier"] = service_tier
+        return resp
     return {"content": full_text, "usage": final_usage, "finish_reason": final_finish_reason}
 
 
@@ -730,6 +733,7 @@ async def run_stream_and_collect(generator, streamer):
     final_finish_reason = None
     error_in_stream = None
     last_delta = {}
+    service_tier = None
 
     async for delta in generator:
         last_delta = delta
@@ -768,6 +772,8 @@ async def run_stream_and_collect(generator, streamer):
             final_usage = delta["usage"]
         if delta.get("finish_reason"):
             final_finish_reason = delta["finish_reason"]
+        if delta.get("service_tier"):
+            service_tier = delta["service_tier"]
 
     return {
         "accumulated_content": accumulated_content,
@@ -776,4 +782,5 @@ async def run_stream_and_collect(generator, streamer):
         "final_finish_reason": final_finish_reason,
         "error_in_stream": error_in_stream,
         "last_delta": last_delta,
+        "service_tier": service_tier,
     }

@@ -67,6 +67,7 @@ async def openai_response_stream(configuration, apiKey):
     accumulated_tool_calls = {}
     usage = {}
     finish_reason = None
+    service_tier = None
     try:
         async for line in fetch_stream(url=OPENAI_RESPONSES_URL, headers=headers, json_body=payload):
             if line.startswith("event:"):
@@ -134,12 +135,13 @@ async def openai_response_stream(configuration, apiKey):
                 resp_data = event.get("response", {})
                 usage = resp_data.get("usage", {})
                 finish_reason = resp_data.get("status")
+                service_tier = resp_data.get("service_tier")
 
         tool_calls_list = [
             {"id": k, "call_id": v["call_id"], "type": "function", "function": {"name": v["name"], "arguments": v["arguments"]}}
             for k, v in accumulated_tool_calls.items()
         ] if accumulated_tool_calls else None
-        yield {"content": None, "tool_calls": tool_calls_list, "usage": usage, "finish_reason": finish_reason, "reasoning": None, "output": accumulated_output}
+        yield {"content": None, "tool_calls": tool_calls_list, "usage": usage, "finish_reason": finish_reason, "reasoning": None, "output": accumulated_output, "service_tier": service_tier}
     except Exception as error:
         yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
 
