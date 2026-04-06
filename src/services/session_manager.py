@@ -13,9 +13,6 @@ import asyncio
 import json
 from typing import Any
 
-from redis.asyncio import Redis
-
-from config import Config
 from globals import logger
 from src.services.cache_service import client as _redis_cmd  # Reuse existing Redis client
 
@@ -90,10 +87,8 @@ async def subscribe_to_human_input(run_id: str, local_queue: asyncio.Queue) -> N
     """
     Blocks until an answer arrives on the Redis input channel, then puts it
     into local_queue so the existing asyncio.wait_for(queue.get()) path works.
-    Uses a dedicated Redis connection (required by redis-py pubsub).
     """
-    pubsub_client: Redis = Redis.from_url(Config.REDIS_URI, decode_responses=True)
-    pubsub = pubsub_client.pubsub(ignore_subscribe_messages=True)
+    pubsub = _redis_cmd.pubsub(ignore_subscribe_messages=True)
     try:
         await pubsub.subscribe(_input_channel(run_id))
         deadline = asyncio.get_event_loop().time() + 600
@@ -109,7 +104,6 @@ async def subscribe_to_human_input(run_id: str, local_queue: asyncio.Queue) -> N
     finally:
         await pubsub.unsubscribe(_input_channel(run_id))
         await pubsub.aclose()
-        await pubsub_client.aclose()
 
 
 async def publish_workflow_event(run_id: str, event: str, node: str, data: dict) -> None:
@@ -125,8 +119,7 @@ async def subscribe_to_workflow_events(run_id: str, websocket: Any, stop_event: 
     Relay events published by the session worker to the frontend WebSocket.
     Runs until stop_event is set (disconnect or "done"/"error" event received).
     """
-    pubsub_client: Redis = Redis.from_url(Config.REDIS_URI, decode_responses=True)
-    pubsub = pubsub_client.pubsub(ignore_subscribe_messages=True)
+    pubsub = _redis_cmd.pubsub(ignore_subscribe_messages=True)
     try:
         await pubsub.subscribe(_event_channel(run_id))
         while not stop_event.is_set():
@@ -151,7 +144,6 @@ async def subscribe_to_workflow_events(run_id: str, websocket: Any, stop_event: 
     finally:
         await pubsub.unsubscribe(_event_channel(run_id))
         await pubsub.aclose()
-        await pubsub_client.aclose()
 
 
 __all__ = [
