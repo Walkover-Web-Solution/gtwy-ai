@@ -683,6 +683,8 @@ class BaseService:
             if error_in_stream:
                 raise ApiCallError(error_in_stream, service=service)
 
+            stream_service_tier = stream_state.get("service_tier")
+
             accumulated_response = build_accumulated_response(
                 service=service,
                 configuration=configuration,
@@ -692,6 +694,7 @@ class BaseService:
                 final_usage=final_usage,
                 final_finish_reason=final_finish_reason,
                 last_delta=last_delta,
+                service_tier=stream_service_tier,
             )
 
             if self.token_calculator:
