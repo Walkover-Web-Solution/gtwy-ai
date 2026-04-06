@@ -135,8 +135,14 @@ async def subscribe_to_workflow_events(run_id: str, websocket: Any, stop_event: 
                 try:
                     payload = json.loads(message["data"])
                     await websocket.send_json(payload)
-                    if payload.get("event") in ("done", "error"):
+                    if payload.get("event") == "error":
                         stop_event.set()
+                    elif payload.get("event") == "done":
+                        # Keep relay alive when workflow is paused waiting for
+                        # human input (workflow_status == "waiting"). Only stop
+                        # when the workflow truly completes.
+                        if payload.get("data", {}).get("workflow_status") != "waiting":
+                            stop_event.set()
                 except Exception as ws_exc:
                     logger.error(f"[SessionManager] WS send error for run_id={run_id}: {ws_exc}")
                     stop_event.set()
