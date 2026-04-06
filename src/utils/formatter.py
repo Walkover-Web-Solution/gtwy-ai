@@ -314,7 +314,7 @@ def _repair_common_text_issues(s: str) -> str:
     s = re.sub(r'(?<!["\w])None(?!["\w])', 'null', s)
     s = re.sub(r"(?<!\\)'([A-Za-z0-9_\- ]+)'\s*:", r'"\1":', s)
     s = re.sub(r":\s*'([^'\\]*(?:\\.[^'\\]*)*)'", r':"\1"', s)
-    s = re.sub(r"(?<=[\[,])\s*'([^'\\]*(?:\\.[^'\\]*)*)'", r'"\1"', s)
+    s = re.sub(r"(\[|,)\s*'([^'\\]*(?:\\.[^'\\]*)*)'" , r'\1"\2"', s)
     s = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
     return s
 
