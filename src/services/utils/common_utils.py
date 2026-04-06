@@ -228,6 +228,7 @@ def parse_request_body(request_body):
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
         "limit": body.get("limit"),
+        "service_tier": body.get("service_tier"),
     }
 
 
@@ -623,6 +624,7 @@ def build_service_params(
         "bridge_configurations": bridge_configurations,
         "owner_id": parsed_data.get("owner_id"),
         "limit": parsed_data.get("limit"),
+        "service_tier": parsed_data.get("service_tier"),
     }
 
 
