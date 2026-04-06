@@ -252,20 +252,12 @@ def fix_json_string(bad_json: str, max_rounds: int = 30) -> str:
     if not s:
         raise ValueError("Input is empty.")
 
-    # Fast path 1: already valid JSON.
-    parsed = _try_loads(s)
-    if parsed is not None:
-        return _dump_compact(parsed)
-
-    # Fast path 2: Python dict/list repr (single-quoted, True/False/None literals).
-    # This handles the case where the AI returns str(dict) instead of json.dumps(dict).
     parsed = _try_ast_literal(s)
     if parsed is not None:
         return _dump_compact(parsed)
 
     s = _strip_common_wrappers(s)
 
-    # After stripping wrappers, try ast again (handles ```json\n{...}``` blocks).
     parsed = _try_ast_literal(s)
     if parsed is not None:
         return _dump_compact(parsed)
@@ -274,21 +266,15 @@ def fix_json_string(bad_json: str, max_rounds: int = 30) -> str:
     s = _balance_brackets_and_braces(s)
 
     for _ in range(max_rounds):
-        parsed = _try_loads(s)
-        if parsed is not None:
-            return _dump_compact(parsed)
-
         try:
-            json.loads(s)
+            return _dump_compact(json.loads(s))
         except json.JSONDecodeError as err:
             new_s = _repair_from_decode_error(s, err)
             if new_s == s:
                 break
             s = _balance_brackets_and_braces(new_s)
 
-    # Last attempt.
-    s = _balance_brackets_and_braces(s)
-    return _dump_compact(json.loads(s))
+    return _dump_compact(json.loads(_balance_brackets_and_braces(s)))
 
 
 def _try_loads(text: str) -> Any:
@@ -299,14 +285,9 @@ def _try_loads(text: str) -> Any:
 
 
 def _try_ast_literal(text: str) -> Any:
-    """Try to parse a Python literal (str/dict/list repr) using ast.literal_eval.
-    This correctly handles single-quoted strings and Python True/False/None literals
-    that the AI sometimes returns as str(dict) instead of json.dumps(dict).
-    """
+    """Parse a Python literal (dict/list repr) via ast.literal_eval."""
     try:
         result = ast.literal_eval(text)
-        # Only accept dicts, lists, strings, numbers, bools — not bare primitives
-        # that could cause false positives on plain text.
         if isinstance(result, (dict, list)):
             return result
         return None
@@ -327,26 +308,14 @@ def _strip_common_wrappers(s: str) -> str:
 
 def _repair_common_text_issues(s: str) -> str:
     """Fix common JSON formatting mistakes."""
-    # Remove trailing commas before object/array closers.
     s = re.sub(r",\s*(\}|\])", r"\1", s)
-
-    # Replace Python boolean/null literals with JSON equivalents.
-    # Must be done before quote conversion to avoid matching inside strings.
     s = re.sub(r'(?<!["\w])True(?!["\w])', 'true', s)
     s = re.sub(r'(?<!["\w])False(?!["\w])', 'false', s)
     s = re.sub(r'(?<!["\w])None(?!["\w])', 'null', s)
-
-    # Convert simple single-quoted keys to double-quoted keys.
     s = re.sub(r"(?<!\\)'([A-Za-z0-9_\- ]+)'\s*:", r'"\1":', s)
-
-    # Convert single-quoted values to double-quoted values (after colon or in arrays).
-    # Handles: : 'value'  and  ['value', 'value2']
-    s = re.sub(r":\s*'([^'\\]*(?:\\.[^'\\]*)*)'" , r':"\1"', s)
+    s = re.sub(r":\s*'([^'\\]*(?:\\.[^'\\]*)*)'", r':"\1"', s)
     s = re.sub(r"(?<=[\[,])\s*'([^'\\]*(?:\\.[^'\\]*)*)'", r'"\1"', s)
-
-    # Remove non-printable control chars (except common whitespace chars).
     s = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
-
     return s
 
 
@@ -379,19 +348,16 @@ def _balance_brackets_and_braces(s: str) -> str:
             if stack and ch == stack[-1]:
                 stack.pop()
                 out.append(ch)
-            # Skip unmatched closing token.
         else:
             out.append(ch)
 
     if in_string:
         out.append('"')
-
     while stack:
         out.append(stack.pop())
 
     repaired = "".join(out)
-    repaired = re.sub(r",\s*(\}|\])", r"\1", repaired)
-    return repaired
+    return re.sub(r",\s*(\}|\])", r"\1", repaired)
 
 
 def _repair_from_decode_error(s: str, err: json.JSONDecodeError) -> str:
@@ -416,15 +382,13 @@ def _repair_from_decode_error(s: str, err: json.JSONDecodeError) -> str:
         if candidate != s:
             return candidate
         if pos < len(s) and s[pos] == "'":
-            return s[:pos] + '"' + s[pos + 1 :]
+            return s[:pos] + '"' + s[pos + 1:]
 
     if "Extra data" in msg:
-        decoder = json.JSONDecoder()
         try:
-            obj, _ = decoder.raw_decode(s)
+            obj, _ = json.JSONDecoder().raw_decode(s)
             return _dump_compact(obj)
         except Exception:
             pass
 
-    # Generic fallback: keep valid prefix and rebalance.
     return _balance_brackets_and_braces(s[:pos].rstrip())
