@@ -10,7 +10,7 @@ from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
-from src.utils.formatter import apply_variables_to_template_json
+from src.utils.formatter import apply_variables_to_template_json, fix_json_string
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.common_utils import (
@@ -498,8 +498,13 @@ async def chat(request_body):
                                 ai_data = parsed["item"]
                             else:
                                 ai_data = parsed
-                        except:
-                            pass
+                        except Exception:
+                            try:
+                                repaired = fix_json_string(ai_data)
+                                ai_data = json.loads(repaired)
+                                ai_data = ai_data.get("item")
+                            except Exception:
+                                pass  # keep ai_data as the raw string
                     
                     # Get template directly using widget_id from ai_data
                     if isinstance(ai_data, dict):
