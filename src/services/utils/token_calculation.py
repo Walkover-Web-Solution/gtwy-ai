@@ -7,6 +7,7 @@ class TokenCalculator:
     def __init__(self, service, model_output_config):
         self.service = service
         self.model_output_config = model_output_config
+        self.service_tier = None
         self.total_usage = {
             "total_tokens": 0,
             "input_tokens": 0,
@@ -87,6 +88,8 @@ class TokenCalculator:
                 usage["reasoningTokens"] = (model_response["usage"].get("output_tokens_details") or {}).get(
                     "reasoning_tokens", 0
                 )
+                if model_response.get("service_tier"):
+                    self.service_tier = model_response["service_tier"]
 
             case "anthropic":
                 usage["inputTokens"] = model_response["usage"]["input_tokens"]
@@ -160,9 +163,12 @@ class TokenCalculator:
             Dictionary with cost breakdown using total_usage
         """
         model_obj = model_config_document[service][model]
-        
+
         # Regular chat model cost calculation
         pricing = model_obj['outputConfig']['usage'][0]['total_cost']
+
+        # Priority processing charges 2x the standard cost
+        priority_multiplier = 2 if self.service_tier == "priority" else 1
 
         cost = {
             "input_cost": 0,
@@ -210,7 +216,7 @@ class TokenCalculator:
             + cost["cache_read_cost"]
             + cost["cache_creation_cost"]
             + cost["audio_cost"]
-        )
+        ) * priority_multiplier
 
         return cost
     
