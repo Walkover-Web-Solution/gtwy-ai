@@ -228,7 +228,6 @@ def parse_request_body(request_body):
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
         "limit": body.get("limit"),
-        "service_tier": body.get("service_tier"),
     }
 
 
@@ -327,6 +326,8 @@ async def load_model_configuration(model, configuration, service):
             and (config["level"] == 0 or config["level"] == 1 or config["level"] == 2)
             or key in configuration
         ):
+            if config.get("level") == 0 and key not in configuration:
+                continue
             custom_config[key] = configuration.get(key, config["default"])
 
     return model_obj, custom_config, model_output_config
@@ -624,7 +625,6 @@ def build_service_params(
         "bridge_configurations": bridge_configurations,
         "owner_id": parsed_data.get("owner_id"),
         "limit": parsed_data.get("limit"),
-        "service_tier": parsed_data.get("service_tier"),
     }
 
 

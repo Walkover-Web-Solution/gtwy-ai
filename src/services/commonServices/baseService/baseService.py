@@ -96,7 +96,6 @@ class BaseService:
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
-        self.service_tier = params.get("service_tier")
         self.tool_call_limit_error = None
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
