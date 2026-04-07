@@ -37,12 +37,12 @@ async def lifespan(app: FastAPI):
     await sub_queue_obj.create_queue_if_not_exists()
 
     consume_task = None
+    batch_task = None
     if Config.CONSUMER_STATUS.lower() == "true":
         consume_task = asyncio.create_task(consume_messages_in_executor())
+        batch_task = asyncio.create_task(repeat_function())
 
     asyncio.create_task(init_async_dbservice()) if Config.ENVIROMENT == "LOCAL" else await init_async_dbservice()
-
-    asyncio.create_task(repeat_function())
 
     logger.info("Starting MongoDB change stream listener as a background task.")
     change_stream_task = asyncio.create_task(background_listen_for_changes())
@@ -59,6 +59,8 @@ async def lifespan(app: FastAPI):
 
     if consume_task:
         consume_task.cancel()
+    if batch_task:
+        batch_task.cancel()
 
     await queue_obj.disconnect()
     await sub_queue_obj.disconnect()
@@ -68,6 +70,12 @@ async def lifespan(app: FastAPI):
             await consume_task
     except asyncio.CancelledError:
         logger.error("Consumer task was cancelled during shutdown.")
+
+    try:
+        if batch_task:
+            await batch_task
+    except asyncio.CancelledError:
+        logger.info("Batch script task was cancelled during shutdown.")
 
     try:
         await change_stream_task
