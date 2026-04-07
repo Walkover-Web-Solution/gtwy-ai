@@ -33,7 +33,7 @@ class TokenCalculator:
     def calculate_usage(self, model_response):
         usage = {}
         match self.service:
-            case "open_router" | "mistral" | "ai_ml" | "openai_completion":
+            case "open_router" | "mistral" | "openai_completion":
                 usage["inputTokens"] = model_response["usage"]["prompt_tokens"]
                 usage["outputTokens"] = model_response["usage"]["completion_tokens"]
                 usage["totalTokens"] = model_response["usage"]["total_tokens"]

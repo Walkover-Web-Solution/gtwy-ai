@@ -391,47 +391,6 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 ),
             },
         }
-    elif service == service_name["ai_ml"] and type == "image":
-        image_urls = []
-        for image_data in response.get("data", []):
-            image_urls.append(
-                {
-                    "revised_prompt": image_data.get("revised_prompt"),
-                    "image_url": image_data.get("original_url"),
-                    "permanent_url": image_data.get("url"),
-                    "size": image_data.get("size"),
-                }
-            )
-
-        return {
-            "data": {"image_urls": image_urls},
-            "usage": {
-                "generated_images": response.get("usage", {}).get("generated_images", None),
-                "output_tokens": response.get("usage", {}).get("output_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-            },
-        }
-    elif service == service_name["ai_ml"]:
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
-                "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens"),
-            },
-        }
 
 
 async def send_alert(data):

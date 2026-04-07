@@ -22,7 +22,6 @@ def _make_mapper(
 SERVICE_MAPPERS = {
     service_name["openai"]:            _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(429,)),
     service_name["openai_completion"]: _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(429,)),
-    service_name["ai_ml"]:             _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(429,)),
     service_name["gemini"]:            _make_mapper(invalid=(400,),          unauthorized=(403,), limited=(429,)),
     service_name["anthropic"]:         _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(429,)),
     service_name["groq"]:              _make_mapper(invalid=(400, 401),      unauthorized=(403,), limited=(422, 429, 498)),
