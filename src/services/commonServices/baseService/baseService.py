@@ -429,6 +429,12 @@ class BaseService:
                 data = new_config["text"]
                 new_config["text"] = {"format": data}
             
+            if new_config.get("verbosity") and service == service_name["openai"]:
+                verbosity = new_config.pop("verbosity", {})
+
+                if isinstance(verbosity, dict) and "level" in verbosity:
+                    new_config.setdefault("text", {})["verbosity"] = verbosity["level"]
+
             # Handle Reasoning config 
             if new_config.get("reasoning", False):
                 reasoning_formatter(service, new_config)
