@@ -274,7 +274,11 @@ def fix_json_string(bad_json: str, max_rounds: int = 30) -> str:
                 break
             s = _balance_brackets_and_braces(new_s)
 
-    return _dump_compact(json.loads(_balance_brackets_and_braces(s)))
+    final_s = _balance_brackets_and_braces(s)
+    try:
+        return _dump_compact(json.loads(final_s))
+    except Exception:
+        return bad_json
 
 
 def _try_loads(text: str) -> Any:
