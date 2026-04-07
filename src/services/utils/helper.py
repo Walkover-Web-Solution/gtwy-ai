@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import operator
@@ -553,3 +554,55 @@ class Helper:
         
         if user_message := response_data.get(agent_config_update_keys["_user_message"]):
             parsed_data["user"] = user_message
+
+
+def build_rerun_queue_message(log, data_to_send):
+    """Build an independent queue message for a single rerun from the conversation log."""
+    body = copy.deepcopy(data_to_send.get("body", {}))
+    body.update({
+        "user": log["user"],
+        "message_id": log["message_id"],
+        "thread_id": log.get("thread_id"),
+        "sub_thread_id": log.get("sub_thread_id"),
+        "variables": log.get("variables") or {},
+        "user_urls": log.get("user_urls") or [],
+        "is_rerun": True,
+    })
+    body.setdefault("configuration", {}).update({"response_format": {"type": "default"}, "stream": False})
+    return {"body": body, "state": data_to_send.get("state", {}), "path_params": data_to_send.get("path_params", {})}
+
+
+async def queue_rerun_messages(data_to_send, queue_obj, org_id, message_ids=None, bridge_id=None, thread_id=None, sub_thread_id=None):
+    """
+    Fetch conversation logs and publish rerun messages to the queue.
+
+    By message_ids: reruns each specified message.
+    By thread_id + sub_thread_id: fetches last 6 conversations, reruns the most recent one.
+
+    Returns:
+        Dict with keys: queued (list), not_found (list), conversations (list, thread mode only).
+    """
+    from src.db_services.conversationDbService import find_rerun_logs
+
+    logs_map, conversations = await find_rerun_logs(
+        org_id, message_ids=message_ids, bridge_id=bridge_id,
+        thread_id=thread_id, sub_thread_id=sub_thread_id,
+    )
+
+    queued, not_found = [], []
+    ids_to_process = message_ids if message_ids else list(logs_map.keys())
+
+    for mid in ids_to_process:
+        log = logs_map.get(mid)
+        if not log:
+            not_found.append(mid)
+            continue
+        msg = build_rerun_queue_message(log, data_to_send)
+        # For thread-based rerun, attach conversations as explicit history
+        if conversations:
+            msg["body"].setdefault("configuration", {})["conversation"] = conversations
+        await queue_obj.publish_message(msg)
+        queued.append(mid)
+
+    return {"queued": queued, "not_found": not_found, "conversations": conversations}
+

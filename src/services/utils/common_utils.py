@@ -228,6 +228,7 @@ def parse_request_body(request_body):
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
         "limit": body.get("limit"),
+        "is_rerun": body.get("is_rerun", False),
     }
 
 
@@ -768,6 +769,34 @@ async def process_background_tasks(
             result["historyParams"],
             parsed_data["version_id"],
         )
+
+        # For reruns, directly UPDATE the existing conversation log instead of inserting via queue
+        if parsed_data.get("is_rerun"):
+            from src.db_services.conversationDbService import update_conversation_log
+
+            update_data = payload.get("conversation_log_data", {})
+            # Remove identity fields that must not be overwritten
+            for key in ("message_id", "user", "thread_id", "sub_thread_id", "bridge_id", "org_id"):
+                update_data.pop(key, None)
+            update_data["updated_at"] = datetime.now()
+
+            await update_conversation_log(parsed_data["message_id"], parsed_data["org_id"], update_data)
+
+            asyncio.create_task(
+                _update_history_redis(
+                    [parsed_data["usage"]],
+                    result["historyParams"],
+                    parsed_data["version_id"],
+                    thread_info,
+                )
+            )
+
+            # Still publish metrics (but skip save_history)
+            data = await make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info)
+            data = make_json_serializable(data)
+            await sub_queue_obj.publish_message(data)
+            return
+
         history_entries.append(payload)
 
         asyncio.create_task(
