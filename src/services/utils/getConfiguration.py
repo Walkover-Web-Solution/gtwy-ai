@@ -195,8 +195,6 @@ async def _prepare_configuration_response(
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
     add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_flag)
-
-    guardrails_value = guardrails if guardrails is not None else (result.get("bridges", {}).get("settings", {}).get("guardrails") or {})
     web_search_filters_value = web_search_filters or result.get("bridges", {}).get("web_search_filters") or {}
 
     base_config = {
@@ -216,7 +214,7 @@ async def _prepare_configuration_response(
         "gpt_memory": gpt_memory,
         "version_id": version_id or result.get("bridges", {}).get("published_version_id"),
         "gpt_memory_context": gpt_memory_context,
-        "maximum_iterations": result.get("bridges", {}).get("settings", {}).get("maximum_iterations", 3),
+        "settings": result.get("bridges", {}).get("settings", {}),
         "variables": variables,
         "rag_data": rag_data,
         "actions": result.get("bridges", {}).get("actions", []),
@@ -225,8 +223,6 @@ async def _prepare_configuration_response(
         "bridge_id": result["bridges"].get("parent_id", result["bridges"].get("_id")),
         "variables_state": result.get("bridges", {}).get("variables_state", {}),
         "built_in_tools": built_in_tools or result.get("bridges", {}).get("built_in_tools"),
-        "fall_back": result.get("bridges", {}).get("settings", {}).get("fall_back") or {},
-        "guardrails": guardrails_value,
         "is_embed": result.get("bridges", {}).get("folder_type") == "embed",
         "user_id": result.get("bridges", {}).get("user_id"),
         "folder_id": result.get("bridges", {}).get("folder_id"),
