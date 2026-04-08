@@ -1,6 +1,7 @@
 import asyncio
 import json
 import traceback
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 
 import pydash as _
@@ -44,6 +45,11 @@ executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
 class BaseService:
     def __init__(self, params):
         self.customConfig = params.get("customConfig")
+        self._initial_tool_choice = (
+            deepcopy(self.customConfig.get("tool_choice"))
+            if isinstance(self.customConfig, dict) and self.customConfig.get("tool_choice") is not None
+            else None
+        )
         self.configuration = params.get("configuration")
         self.apikey = params.get("apikey")
         self.variables = params.get("variables")
@@ -109,6 +115,30 @@ class BaseService:
 
     def aiconfig(self):
         return self.customConfig
+
+    @staticmethod
+    def _is_specific_tool_choice(tool_choice):
+        if isinstance(tool_choice, str):
+            return tool_choice not in {"auto", "none", "required", "default", "any"}
+
+        if isinstance(tool_choice, dict):
+            # OpenAI function mode / Anthropic tool mode both indicate a concrete tool selection.
+            return bool(tool_choice.get("name") or tool_choice.get("function", {}).get("name"))
+
+        return False
+
+    def _history_aiconfig(self):
+        if not isinstance(self.customConfig, dict):
+            return self.customConfig
+
+        ai_config = deepcopy(self.customConfig)
+
+        # During function-call recursion we may switch tool_choice to auto for runtime flow.
+        # For history visibility, keep the originally selected concrete tool choice.
+        if self._is_specific_tool_choice(self._initial_tool_choice):
+            ai_config["tool_choice"] = deepcopy(self._initial_tool_choice)
+
+        return ai_config
 
     async def run_tool(self, responses, service):
         codes_mapping, function_list = make_code_mapping_by_service(responses, service)
@@ -372,7 +402,7 @@ class BaseService:
                 *({"url": u, "type": "pdf"} for u in (self.files or [])),
                 *({"url": u, "type": "audio"} for u in (self.audio_data or [])),
             ],
-            "AiConfig": self.customConfig,
+            "AiConfig": self._history_aiconfig(),
             "firstAttemptError": model_response.get("firstAttemptError") or "",
             "annotations": _.get(model_response, self.modelOutputConfig.get("annotations")) or [],
             "fallback_model": (
