@@ -77,7 +77,7 @@ class BaseService:
         self.apikey_status = params.get("apikey_status")
         self.image_data = params.get("images")
         self.audio_data = params.get("audios")
-        self.tool_call_count = params.get("tool_call_count")
+        self.maximum_iterations = params.get("maximum_iterations")
         self.text = params.get("text")
         self.tool_id_and_name_mapping = params.get("tool_id_and_name_mapping")
         self.batch = params.get("batch")
@@ -208,7 +208,7 @@ class BaseService:
                 configuration["tool_choice"] = {"type": "auto"}
             else:
                 configuration["tool_choice"] = "auto"
-        if validate_tool_call(service, model_response) and loop_count <= int(self.tool_call_count or 0):
+        if validate_tool_call(service, model_response) and loop_count <= int(self.maximum_iterations or 0):
             loop_count += 1
         else:
             if validate_tool_call(service, model_response):

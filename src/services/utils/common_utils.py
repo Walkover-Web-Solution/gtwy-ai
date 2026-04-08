@@ -197,7 +197,7 @@ def parse_request_body(request_body):
             for url in body.get("user_urls", [])
             if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
         ],
-        "tool_call_count": body.get("tool_call_count"),
+        "maximum_iterations": body.get("maximum_iterations"),
         "tokens": {},
         "memory": "",
         "bridge_summary": body.get("bridge_summary"),
@@ -610,7 +610,7 @@ def build_service_params(
         "apikey_object_id": parsed_data["apikey_object_id"],
         "images": parsed_data["images"],
         "audios": parsed_data.get("audios"),
-        "tool_call_count": parsed_data["tool_call_count"],
+        "maximum_iterations": parsed_data["maximum_iterations"],
         "rag_data": parsed_data["rag_data"],
         "name": parsed_data["name"],
         "org_name": parsed_data["org_name"],

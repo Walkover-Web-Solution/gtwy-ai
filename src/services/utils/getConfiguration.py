@@ -216,7 +216,7 @@ async def _prepare_configuration_response(
         "gpt_memory": gpt_memory,
         "version_id": version_id or result.get("bridges", {}).get("published_version_id"),
         "gpt_memory_context": gpt_memory_context,
-        "tool_call_count": result.get("bridges", {}).get("tool_call_count", 3),
+        "maximum_iterations": result.get("bridges", {}).get("settings", {}).get("maximum_iterations", 3),
         "variables": variables,
         "rag_data": rag_data,
         "actions": result.get("bridges", {}).get("actions", []),
