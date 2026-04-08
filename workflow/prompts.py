@@ -1,4 +1,9 @@
-from enum import StrEnum
+from enum import Enum
+
+# Python 3.10 compatibility: StrEnum was added in 3.11
+class StrEnum(str, Enum):
+    def __str__(self):
+        return self.value
 
 
 class Markers(StrEnum):

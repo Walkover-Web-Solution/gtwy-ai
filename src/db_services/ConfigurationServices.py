@@ -484,11 +484,6 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
 
         bridge_data = result[0]
 
-        # Split apikeys_combined into apikeys and apikey_status
-        combined = bridge_data.pop("apikeys_combined", {})
-        bridge_data["apikeys"] = {k: {ek: ev for ek, ev in v.items() if ek != "status"} for k, v in combined.items()}
-        bridge_data["apikey_status"] = {k: v.get("status") for k, v in combined.items()}
-
         # Check if folder_id is present and fetch folder API keys
         if bridge_data.get("folder_id"):
             folder_pipeline = [
@@ -744,10 +739,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             if folder_result and folder_result[0].get("folder_apikeys"):
                 folder_data = folder_result[0]
                 # Split status out of folder_apikeys
-                raw = folder_data["folder_apikeys"]
-                bridge_data["folder_apikeys"] = {k: {ek: ev for ek, ev in v.items() if ek != "status"} for k, v in raw.items()}
-                bridge_data["apikey_status"] = {k: v.get("status") for k, v in raw.items()}
-                bridge_data["apikey_object_id"] = folder_data["apikey_object_id"]
+                bridge_data["folder_apikeys"] = folder_result[0]["folder_apikeys"]
+                bridge_data["apikey_object_id"] = folder_result[0]["apikey_object_id"]
             else:
                 bridge_data["folder_apikeys"] = {}
 
@@ -833,6 +826,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             bridge_data["folder_limit"] = 0
             bridge_data["folder_usage"] = 0
             bridge_data["folder_type"] = None
+            
 
         # Structure the final response
         response = {"success": True, "bridges": bridge_data}

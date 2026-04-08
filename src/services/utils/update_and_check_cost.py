@@ -45,7 +45,7 @@ async def _check_limit(limit_type, data, version_id):
     # Get limit value from data
     try:
         if limit_type == "apikey":
-            limit_value = float(data.get("apikeys", {}).get(data.get("service"), {}).get(limit_field, 0) or 0) or float(
+            limit_value = float(data.get("apikeys_combined").get(data.get("service"), {}).get(limit_field, 0) or 0) or float(
                 data.get("folder_apikeys", {}).get(data.get("service"), {}).get(limit_field, 0) or 0
             )
         else:
@@ -179,7 +179,7 @@ async def check_bridge_api_folder_limits(result, bridge_data, version_id):
 
     service_identifier = result.get("service")
     if service_identifier and (
-        (result.get("apikeys") and service_identifier in result.get("apikeys", {}))
+        (result.get("apikeys_combined") and service_identifier in result.get("apikeys_combined", {}))
         or (result.get("folder_apikeys") and service_identifier in result.get("folder_apikeys", {}))
     ):
         api_error = await _check_limit(limit_types["apikey"], data=result, version_id=version_id)

@@ -327,6 +327,8 @@ async def load_model_configuration(model, configuration, service):
             and (config["level"] == 0 or config["level"] == 1 or config["level"] == 2)
             or key in configuration
         ):
+            if config.get("level") == 0 and key not in configuration:
+                continue
             custom_config[key] = configuration.get(key, config["default"])
 
     return model_obj, custom_config, model_output_config
@@ -1370,9 +1372,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 parsed_data["configuration"]["model"] = fall_back.get("model")
 
                 if parsed_data["service"] != original_service:
-                    parsed_data["apikey"] = fall_back.get("apikey") or (
-                        Config.AI_ML_APIKEY if fall_back.get("service") == "ai_ml" else None
-                    )
+                    parsed_data["apikey"] = fall_back.get("apikey")
                     fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
                         parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
                     )

@@ -15,6 +15,12 @@ _checkpoint_mongo_client = async_mongo_client.delegate
 from globals import logger
 from workflow.builder import build_workflow_graph
 from workflow.tool_adapter import build_langchain_tools
+from src.services.session_manager import (
+    publish_workflow_event,
+    register_session_in_redis,
+    subscribe_to_human_input,
+    unregister_session_from_redis,
+)
 from src.services.utils.common_utils import (
     create_latency_object,
     process_background_tasks,
@@ -205,6 +211,9 @@ def _build_history_params(session: WorkflowSession, content: str, message_id: st
 # ---------------------------------------------------------------------------
 
 async def _emit_to_ws(run_id: str, event: str, node: str, data: dict) -> None:
+    # Publish to Redis for cross-worker WS event relay
+    await publish_workflow_event(run_id, event, node, data)
+
     ws = registry.get_ws(run_id)
     if not ws:
         return
@@ -217,13 +226,28 @@ async def _emit_to_ws(run_id: str, event: str, node: str, data: dict) -> None:
 async def _wait_for_human_input(run_id: str) -> None:
     """Wait for a human answer from the WS endpoint and resume the workflow."""
     queue = registry.create_input_queue(run_id)
+    sub_task = None
     try:
         logger.info(f"[Workflow] waiting for human input on run_id={run_id}")
-        resume_value = await asyncio.wait_for(queue.get(), timeout=600)  # 10 min timeout
+        # subscribe_to_human_input blocks until an answer arrives via Redis and
+        # puts it into queue. Handles its own 600s timeout internally.
+        sub_task = asyncio.create_task(subscribe_to_human_input(run_id, queue))
+        resume_value = await asyncio.wait_for(queue.get(), timeout=605)
+        sub_task.cancel()
+        try:
+            await sub_task
+        except asyncio.CancelledError:
+            pass
         logger.info(f"[Workflow] human input received for run_id={run_id}: {resume_value!r}")
         asyncio.create_task(resume_advanced_workflow(run_id, resume_value))
     except asyncio.TimeoutError:
         logger.warning(f"[Workflow] human input timeout for run_id={run_id}")
+        if sub_task:
+            sub_task.cancel()
+            try:
+                await sub_task
+            except asyncio.CancelledError:
+                pass
         registry.remove(run_id)
     finally:
         HUMAN_INPUT_QUEUES.pop(run_id, None)
@@ -348,9 +372,11 @@ async def create_advanced_workflow_session(parsed_data: dict, bridge_configurati
 
     compiled_graph = build_workflow_graph(tools, tool_schemas, checkpointer)
 
-    # Use thread_id + sub_thread_id as LangGraph thread key for persistent history
-    thread_key = f"{parsed_data.get('thread_id')}:{parsed_data.get('sub_thread_id')}"
-    run_id = parsed_data["message_id"]
+    # Use thread_id + sub_thread_id as session/connection key and LangGraph thread key
+    thread_id = parsed_data.get('thread_id')
+    sub_thread_id = parsed_data.get('sub_thread_id')
+    run_id = f"{thread_id}_{sub_thread_id}"
+    thread_key = f"{thread_id}:{sub_thread_id}"
     session = WorkflowSession(
         run_id=run_id,
         graph=compiled_graph,
@@ -360,6 +386,7 @@ async def create_advanced_workflow_session(parsed_data: dict, bridge_configurati
         tool_schemas=tool_schemas,
     )
     registry.register(session)
+    await register_session_in_redis(run_id)
     return session
 
 
@@ -445,6 +472,7 @@ async def stream_and_emit_workflow(
 
     # Cleanup session when workflow completes (not interrupted)
     if not interrupt_payload:
+        await unregister_session_from_redis(session.run_id)
         registry.remove(session.run_id)
 
     await emit("done", "system", {

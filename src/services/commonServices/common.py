@@ -10,7 +10,7 @@ from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
-from src.utils.formatter import apply_variables_to_template_json
+from src.utils.formatter import apply_variables_to_template_json, fix_json_string
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.common_utils import (
@@ -365,8 +365,6 @@ async def chat(request_body):
                 # Check if service has changed - if so, create new service handler
                 if parsed_data["service"] != original_service:
                     parsed_data["apikey"] = fallback_config.get("apikey")
-                    if parsed_data["apikey"] is None and fallback_config.get("service") == "ai_ml":
-                        parsed_data["apikey"] = Config.AI_ML_APIKEY
 
                     # Load fresh model configuration for the fallback service and model
                     (
@@ -407,8 +405,6 @@ async def chat(request_body):
                     class_obj.model = parsed_data["model"]
                     if fallback_config.get("apikey"):
                         class_obj.apikey = fallback_config["apikey"]
-                        if class_obj.apikey is None and fallback_config.get("service") == "ai_ml":
-                            class_obj.apikey = Config.AI_ML_APIKEY
 
                     # Reconfigure custom_config for fallback service
                     class_obj.customConfig = await configure_custom_settings(
@@ -498,8 +494,13 @@ async def chat(request_body):
                                 ai_data = parsed["item"]
                             else:
                                 ai_data = parsed
-                        except:
-                            pass
+                        except Exception:
+                            try:
+                                repaired = fix_json_string(ai_data)
+                                ai_data = json.loads(repaired)
+                                ai_data = ai_data.get("item")
+                            except Exception:
+                                pass  # keep ai_data as the raw string
                     
                     # Get template directly using widget_id from ai_data
                     if isinstance(ai_data, dict):
