@@ -84,7 +84,6 @@ class BaseService:
         self.processed_prompts = params.get("processed_prompts")
         self.name = params.get("name")
         self.org_name = params.get("org_name")
-        self.send_error_to_webhook = params.get("send_error_to_webhook")
         self.built_in_tools = params.get("built_in_tools")
         self.function_time_logs = params.get("function_time_logs")
         self.files = params.get("files") or []

@@ -6,7 +6,7 @@ from src.configs.constant import redis_keys
 from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_prefix, make_json_serializable, release_lock
 from ..commonServices.baseService.baseService import sendResponse
 from ..commonServices.queueService.queueLogService import sub_queue_obj
-from ..utils.send_error_webhook import create_response_format
+from src.utils.alert_template import create_response_format
 from .ai_middleware_format import process_batch_results
 from .batch_script_utils import get_batch_result_handler, is_finalized_batch_item
 from .helper import Helper

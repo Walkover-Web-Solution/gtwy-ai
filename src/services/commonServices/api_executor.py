@@ -1,11 +1,9 @@
+import asyncio
 import copy
 import traceback
 from src.configs.constant import service_name
 from src.services.commonServices.baseService.utils import serialize_config
-from ..utils.ai_middleware_format import send_alert
 from src.exceptions import ApiCallError
-
-
 
 
 async def execute_api_call(
@@ -49,18 +47,22 @@ async def execute_api_call(
 
             # Send alert if required (even on failure)
             if alert_on_retry:
-                await send_alert(
-                    data={
-                        "org_name": org_name,
-                        "bridge_name": name,
-                        "configuration": serialize_config(configuration),
-                        "message_id": message_id,
-                        "bridge_id": bridge_id,
-                        "org_id": org_id,
-                        "message": "API call failed - no retry attempted",
+                from src.send_alert import send_alert
+                from src.configs.constant import alert_types
+                asyncio.create_task(send_alert(
+                    bridge_id=bridge_id,
+                    org_id=org_id,
+                    bridge_name=name,
+                    error_log={
                         "error": result.get("error"),
-                    }
-                )
+                        "message": "API call failed - no retry attempted",
+                        "message_id": message_id,
+                        "org_name": org_name,
+                        "configuration": serialize_config(configuration),
+                    },
+                    error_type=alert_types["retry_mechanism"],
+                    is_external_error=False,
+                ))
 
             return result
 

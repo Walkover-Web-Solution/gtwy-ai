@@ -17,13 +17,12 @@ from src.db_services.metrics_service import (
     save_conversations_to_redis,
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
-from src.configs.constant import bridge_ids, redis_keys
+from src.configs.constant import bridge_ids, redis_keys, alert_types
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
-from src.services.utils.ai_middleware_format import send_alert
+from src.send_alert import send_alert
 from src.services.utils.apiservice import fetch
-from src.services.utils.send_error_webhook import send_error_to_webhook
 from src.services.utils.time import Timer
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
@@ -205,6 +204,7 @@ def parse_request_body(request_body):
         "doc_ids": body.get("ddc_ids"),
         "rag_data": body.get("rag_data"),
         "name": body.get("name"),
+        "api_collection": body.get("api_collection"),
         "org_name": body.get("org_name"),
         "variables_state": body.get("variables_state"),
         "built_in_tools": body.get("built_in_tools") or [],
@@ -574,7 +574,6 @@ def build_service_params(
     thread_info=None,
     timer=None,
     memory=None,
-    send_error_to_webhook=None,
     bridge_configurations=None,
 ):
     token_calculator = TokenCalculator(parsed_data["service"], model_output_config)
@@ -615,7 +614,6 @@ def build_service_params(
         "rag_data": parsed_data["rag_data"],
         "name": parsed_data["name"],
         "org_name": parsed_data["org_name"],
-        "send_error_to_webhook": send_error_to_webhook,
         "built_in_tools": parsed_data["built_in_tools"],
         "files": parsed_data["files"],
         "file_data": parsed_data["file_data"],
@@ -801,16 +799,18 @@ async def process_background_tasks(
 async def process_background_tasks_for_error(parsed_data, error):
     tasks = [
         send_alert(
-            data={
-                "org_name": parsed_data["org_name"],
-                "bridge_name": parsed_data["name"],
-                "configuration": parsed_data["configuration"],
-                "error": str(error),
-                "message_id": parsed_data["message_id"],
-                "bridge_id": parsed_data["bridge_id"],
-                "message": "Exception for the code",
-                "org_id": parsed_data["org_id"],
-            }
+            bridge_id=parsed_data["bridge_id"],
+            org_id=parsed_data["org_id"],
+            error_log={"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]},
+            error_type=alert_types["error"],
+            bridge_name=parsed_data.get("name"),
+            is_embed=parsed_data.get("is_embed"),
+            user_id=parsed_data.get("user_id"),
+            thread_id=parsed_data.get("thread_id"),
+            service=parsed_data.get("service"),
+            is_playground=parsed_data.get("is_playground"),
+            api_collection=parsed_data.get("api_collection"),
+            is_external_error=False,
         ),
         _publish_history_to_queue(
             [parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]
@@ -964,32 +964,6 @@ def filter_missing_vars(missing_vars, variables_state):
 
 def get_service_by_model(model):
     return next((s for s in model_config_document if model in model_config_document[s]), None)
-
-
-def send_error(
-    bridge_id,
-    org_id,
-    error_message,
-    error_type,
-    bridge_name=None,
-    is_embed=None,
-    user_id=None,
-    thread_id=None,
-    service=None,
-):
-    asyncio.create_task(
-        send_error_to_webhook(
-            bridge_id,
-            org_id,
-            error_message,
-            error_type=error_type,
-            bridge_name=bridge_name,
-            is_embed=is_embed,
-            user_id=user_id,
-            thread_id=thread_id,
-            service=service,
-        )
-    )
 
 
 def restructure_json_schema(response_type, service):
@@ -1357,7 +1331,6 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         thread_info,
                         timer,
                         params.get("memory"),
-                        params.get("send_error_to_webhook"),
                         bridge_configurations,
                     )
                     fallback_class_obj = await Helper.create_service_handler(fallback_params, parsed_data["service"])

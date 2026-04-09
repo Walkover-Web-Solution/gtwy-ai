@@ -247,6 +247,7 @@ async def _prepare_configuration_response(
         "chatbot_auto_answers": chatbot_auto_answers,
         "cache_on": cache_on,
         "richui_templates": result.get("bridges", {}).get("richui_templates"),
+        "api_collection":apikey_src,
         "limit": {
             "bridge": {
                 "limit": bridge_data.get("bridges", {}).get("bridge_limit"),

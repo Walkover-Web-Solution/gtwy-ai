@@ -180,6 +180,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                 "apikey_limit_reset_period": {"$ifNull": ["$apikey_limit_reset_period", "monthly"]},
                                 "apikey_limit_start_date": {"$ifNull": ["$apikey_limit_start_date", None]},
                                 "status": {"$ifNull": ["$status", None]},
+                                "name": 1
                             }
                         },
                     ],
@@ -230,6 +231,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                                                 "apikey_limit_reset_period": "$$matched_doc.apikey_limit_reset_period",
                                                                 "apikey_limit_start_date": "$$matched_doc.apikey_limit_start_date",
                                                                 "status": "$$matched_doc.status",
+                                                                "name":"$$matched_doc.name",
                                                             },
                                                         }
                                                     },
@@ -585,6 +587,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                                             "apikey_limit_reset_period": {"$ifNull": ["$$matched.apikey_limit_reset_period", "monthly"]},
                                                             "apikey_limit_start_date": {"$ifNull": ["$$matched.apikey_limit_start_date", None]},
                                                             "status": {"$ifNull": ["$$matched.status", None]},
+                                                            "name": "$matched.apikey"
                                                         },
                                                     }
                                                 },

@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
-from src.configs.constant import redis_keys
+from src.configs.constant import redis_keys, alert_types
 from src.utils.formatter import apply_variables_to_template_json, fix_json_string
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
@@ -38,7 +38,6 @@ from src.services.utils.common_utils import (
     process_variable_state,
     restructure_json_schema,
     validate_json_schema_configuration,
-    send_error,
     setup_agent_pre_tools,
     update_usage_metrics,
     process_batch_background_tasks,
@@ -50,8 +49,8 @@ from src.services.utils.rich_text_support import process_chatbot_response
 from src.services.auto_router_service import apply_auto_model_selection
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
-from ..utils.send_error_webhook import send_error_to_webhook
 from .baseService.utils import sendResponse
+from src.send_alert import send_alert
 from .response_caching_service import handle_response_caching
 from workflow import execute_advanced_workflow
 
@@ -215,17 +214,20 @@ async def chat(request_body):
 
         # Handle missing variables
         if missing_vars:
-            send_error(
-                parsed_data["bridge_id"],
-                parsed_data["org_id"],
-                missing_vars,
-                error_type="Variable",
+            asyncio.create_task(send_alert(
+                bridge_id=parsed_data["bridge_id"],
+                org_id=parsed_data["org_id"],
+                error_log=missing_vars,
+                error_type=alert_types["variable"],
                 bridge_name=parsed_data.get("name"),
                 is_embed=parsed_data.get("is_embed"),
                 user_id=parsed_data.get("user_id"),
                 thread_id=parsed_data.get("thread_id"),
                 service=parsed_data.get("service"),
-            )
+                is_playground=parsed_data.get("is_playground"),
+                api_collection=parsed_data.get("api_collection"),
+                is_external_error=False,
+            ))
 
         # Step 8: Configure Custom Settings
         custom_config = await configure_custom_settings(
@@ -245,7 +247,6 @@ async def chat(request_body):
             thread_info,
             timer,
             memory,
-            send_error_to_webhook,
             bridge_configurations,
         )
         # Step 10: json_schema service conversion
@@ -386,7 +387,6 @@ async def chat(request_body):
                         thread_info,
                         timer,
                         memory,
-                        send_error_to_webhook,
                         bridge_configurations,
                     )
                     # Step 9 : json_schema service conversion
@@ -442,17 +442,20 @@ async def chat(request_body):
             result["response"]["error"] = result["error"]
 
         if original_error:
-            send_error(
-                parsed_data["bridge_id"],
-                parsed_data["org_id"],
-                original_error,
-                error_type="retry_mechanism",
+            asyncio.create_task(send_alert(
+                bridge_id=parsed_data["bridge_id"],
+                org_id=parsed_data["org_id"],
+                error_log=original_error,
+                error_type=alert_types["retry_mechanism"],
                 bridge_name=parsed_data.get("name"),
                 is_embed=parsed_data.get("is_embed"),
                 user_id=parsed_data.get("user_id"),
                 thread_id=parsed_data.get("thread_id"),
                 service=parsed_data.get("service"),
-            )
+                is_playground=parsed_data.get("is_playground"),
+                api_collection=parsed_data.get("api_collection"),
+                is_external_error=False,
+            ))
 
         if parsed_data["configuration"]["type"] == "chat":
             if parsed_data["is_rich_text"] and parsed_data["bridgeType"] and not parsed_data["reasoning_model"]:
@@ -742,15 +745,18 @@ async def batch(request_body):
 
         # Send alert if there are any missing variables across all batch items
         if all_missing_vars:
-            send_error(
-                parsed_data["bridge_id"],
-                parsed_data["org_id"],
-                all_missing_vars,
-                error_type="Variable",
+            asyncio.create_task(send_alert(
+                bridge_id=parsed_data["bridge_id"],
+                org_id=parsed_data["org_id"],
+                error_log=all_missing_vars,
+                error_type=alert_types["variable"],
                 bridge_name=parsed_data.get("name"),
                 is_embed=parsed_data.get("is_embed"),
                 user_id=parsed_data.get("user_id"),
-            )
+                is_playground=parsed_data.get("is_playground"),
+                api_collection=parsed_data.get("api_collection"),
+                is_external_error=False,
+            ))
 
         # Store processed prompts in parsed_data
         parsed_data["processed_prompts"] = processed_prompts
@@ -851,7 +857,6 @@ async def image(request_body):
             thread_info,
             timer,
             None,
-            send_error_to_webhook,
             bridge_configurations,
         )
 

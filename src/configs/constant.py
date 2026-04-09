@@ -92,3 +92,11 @@ agent_config_update_keys = {
     "_response_type": "_response_type",
     "_user_message": "_user_message"
 }
+
+alert_types = {
+    "error": "Error",
+    "variable": "Variable",
+    "metrix_limit_reached": "metrix_limit_reached",
+    "retry_mechanism": "retry_mechanism",
+    "broadcast_response": "broadcast_response",
+}

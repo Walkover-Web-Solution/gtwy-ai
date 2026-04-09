@@ -392,12 +392,6 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
             },
         }
 
-
-async def send_alert(data):
-    dataTosend = {**data, "ENVIROMENT": Config.ENVIROMENT} if Config.ENVIROMENT else data
-    await fetch("https://flow.sokt.io/func/scriYP8m551q", method="POST", json_body=dataTosend)
-
-
 def finish_reason_mapping(finish_reason):
     finish_reason_mapping = {
         # Completed / natural stop
