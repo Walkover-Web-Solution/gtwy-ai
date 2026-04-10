@@ -13,6 +13,8 @@ PROVIDER_NAME_OVERRIDES = {
     "google": "gemini",
 }
 
+logger.info(f"Notdiamond API KEY in GET MODELS: {Config.NOT_DIAMOND_API_KEY}")
+
 
 async def refresh_supported_services():
     """Refresh supported provider list from NotDiamond into in-memory store."""
