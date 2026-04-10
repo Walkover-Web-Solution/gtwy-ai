@@ -104,7 +104,7 @@ async def chat_multiple_agents(request_body):
         # Save request-level values from "configuration" that must survive the
         # bridge-config merge (primary_config["configuration"] is the raw DB config
         # and will fully overwrite primary_body["configuration"] via .update()).
-        original_response_format = (body.get("configuration") or {}).get("response_format")
+        original_response_format = (body.get("settings") or {}).get("response_format")
 
         primary_body.update(primary_config)
         primary_body["wrapper_id"] = wrapper_id

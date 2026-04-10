@@ -81,7 +81,7 @@ async def playground_chat_completion_bridge(
     flag = data_to_send.get("body", {}).get("flag") or False
     if not flag:
         response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
-        data_to_send["body"]["configuration"]["response_format"] = response_format
+        data_to_send["body"]["settings"]["response_format"] = response_format
     # Check if response_format is present and publish to queue
     if not flag and response_format and response_format.get("type") != "default":
         try:

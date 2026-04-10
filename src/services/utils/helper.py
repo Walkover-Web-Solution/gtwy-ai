@@ -227,7 +227,7 @@ class Helper:
             ]:
                 if key == "response_format":
                     config[key] = db_config.get(
-                        key, response["configuration"].get(key, {"type": "default", "cred": {}})
+                        key, response["settings"].get(key, {"type": "default", "cred": {}})
                     )
                 elif key == "fine_tune_model":
                     config[key] = db_config.get(key, response["configuration"].get(key, {}))

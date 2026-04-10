@@ -146,6 +146,7 @@ async def _prepare_configuration_response(
             "apikey": apikey,
             "apikey_object_id": apikey_object_id,
             "RTLayer": False,
+            "settings": result.get("bridges", {}).get("settings", {}),
             "bridge_id": result["bridges"].get("parent_id", result["bridges"].get("_id")),
             "version_id": version_id or result.get("bridges", {}).get("published_version_id"),
         }
