@@ -21,7 +21,7 @@ async def refresh_supported_services():
             response = await http_client.get(
                 "https://api.notdiamond.ai/v2/models",
                 headers={
-                    "Authorization": f"Bearer {Config.NOTDIAMOND_API_KEY}",
+                    "Authorization": f"Bearer {Config.NOT_DIAMOND_API_KEY}",
                     "Content-Type": "application/json",
                 },
             )
