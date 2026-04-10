@@ -35,6 +35,10 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
 
     message_id = str(uuid.uuid1())
     data_to_send["body"]["message_id"] = message_id
+
+    if data_to_send['body']['configuration'].get('response_format') is not None:
+        data_to_send['body']['settings']['response_format'] = data_to_send['body']['configuration']['response_format']
+        del data_to_send['body']['configuration']['response_format']
     
     response_format = data_to_send.get("body", {}).get("settings", {}).get("response_format",{}) 
     mode = data_to_send.get("body", {}).get("mode")

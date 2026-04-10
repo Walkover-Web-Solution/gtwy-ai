@@ -115,7 +115,7 @@ async def chat_multiple_agents(request_body):
         # Restore response_format set at request-level (e.g. RTLayer from playground/
         # interface middleware) that was clobbered by the bridge-config merge above.
         if original_response_format is not None:
-            primary_body.setdefault("configuration", {})["response_format"] = original_response_format
+            primary_body.setdefault("settings", {})["response_format"] = original_response_format
             print(f"[chat_multiple_agents] response_format restored: type={original_response_format.get('type')}, channel={original_response_format.get('cred', {}).get('channel')}")
 
         # Create a complete request_body structure for the primary agent

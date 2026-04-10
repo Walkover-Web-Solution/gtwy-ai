@@ -565,7 +565,7 @@ def build_rerun_queue_message(log, data_to_send):
         "user_urls": log.get("user_urls") or [],
         "is_rerun": True,
     })
-    body.setdefault("configuration", {}).update({"response_format": {"type": "default"}, "stream": False})
+    body.setdefault("settings", {}).update({"response_format": {"type": "default"}, "stream": False})
     return {"body": body, "state": data_to_send.get("state", {}), "path_params": data_to_send.get("path_params", {})}
 
 
