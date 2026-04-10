@@ -192,24 +192,6 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
         "prompt": history_params.get("prompt"),
     }
 
-    latency = latency_data.get("over_all_time", 0) if latency_data else 0
-    llm_latency = latency_data.get("model_execution_time", 0) if latency_data else 0
-
-    function_time_logs = latency_data.get("function_time_logs", []) if latency_data else []
-    if isinstance(function_time_logs, list):
-        tool_call_latency = sum(item.get("time_taken", 0) for item in function_time_logs if isinstance(item, dict))
-    elif isinstance(function_time_logs, dict):
-        tool_call_latency = 0
-        for value in function_time_logs.values():
-            if isinstance(value, dict):
-                tool_call_latency += value.get("time_taken", 0)
-            elif isinstance(value, (int, float)):
-                tool_call_latency += value
-    else:
-        tool_call_latency = 0
-
-    system_latency = max((latency or 0) - (llm_latency or 0) - (tool_call_latency or 0), 0)
-
     metrics_data = []
     for data_obj in dataset:
         if not data_obj or not data_obj.get("orgId"):
@@ -228,10 +210,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
                 "apikey_id": data_obj.get("apikey_object_id", {}).get(service, "")
                 if data_obj.get("apikey_object_id")
                 else "",
-                "latency": latency,
-                "llm_latency": llm_latency,
-                "tool_call_latency": tool_call_latency,
-                "system_latency": system_latency,
+                "latency": latency_data,
                 "success": data_obj.get("success", False),
                 "cost": data_obj.get("expectedCost", 0) or 0.0,
                 "time_zone": "Asia/Kolkata",
