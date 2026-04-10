@@ -7,7 +7,7 @@ from src.services.utils.auto_router_utils import (
     get_supported_services,
 )
 
-client = AsyncNotDiamond(api_key=Config.NOTDIAMOND_API_KEY) if Config.NOTDIAMOND_API_KEY else None
+client = AsyncNotDiamond(api_key=Config.NOT_DIAMOND_API_KEY) if Config.NOT_DIAMOND_API_KEY else None
 
 INTERNAL_TO_NOTDIAMOND_PROVIDER = {value: key for key, value in PROVIDER_NAME_OVERRIDES.items()}
 
