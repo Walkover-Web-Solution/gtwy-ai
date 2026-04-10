@@ -1,6 +1,5 @@
 from config import Config
 from notdiamond import AsyncNotDiamond
-from globals import logger
 from src.configs.model_configuration import model_config_document
 from src.services.utils.auto_router_utils import (
     PROVIDER_NAME_OVERRIDES,
@@ -9,7 +8,6 @@ from src.services.utils.auto_router_utils import (
 )
 
 client = AsyncNotDiamond(api_key=Config.NOT_DIAMOND_API_KEY) if Config.NOT_DIAMOND_API_KEY else None
-logger.info(f"Notdiamond API KEY in SELECT MODEL: {Config.NOT_DIAMOND_API_KEY}")
 INTERNAL_TO_NOTDIAMOND_PROVIDER = {value: key for key, value in PROVIDER_NAME_OVERRIDES.items()}
 
 async def apply_auto_model_selection(parsed_data, timer):
@@ -84,7 +82,6 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation, t
             return best_model, best_service
     
         except Exception as error:
-            logger.error(f"NotDiamond select_model failed: {str(error)}")
             if execution_time_logs is not None:
                 execution_time_logs.append(
                     {"step": f"NotDiamond select_model failed: {str(error)}", "time_taken": timer.stop("NotDiamond select_model")}
