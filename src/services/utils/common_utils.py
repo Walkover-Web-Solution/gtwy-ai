@@ -17,13 +17,12 @@ from src.db_services.metrics_service import (
     save_conversations_to_redis,
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
-from src.configs.constant import bridge_ids, redis_keys
+from src.configs.constant import bridge_ids, redis_keys, alert_types
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
-from src.services.utils.ai_middleware_format import send_alert
+from src.send_alert import send_alert
 from src.services.utils.apiservice import fetch
-from src.services.utils.send_error_webhook import send_error_to_webhook
 from src.services.utils.time import Timer
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
@@ -160,7 +159,8 @@ def parse_request_body(request_body):
         "service_apikeys": body.get("service_apikeys") or {},
         "bridgeType": body.get("chatbot"),
         "template": body.get("template"),
-        "response_format": body.get("configuration", {}).get("response_format"),
+        "settings": body.get("settings", {}),
+        "response_format": body.get("settings", {}).get("response_format"),
         "response_type": body.get("configuration", {}).get("response_type"),
         "mode": body.get("mode"),
         "model": body.get("configuration", {}).get("model"),
@@ -196,7 +196,7 @@ def parse_request_body(request_body):
             for url in body.get("user_urls", [])
             if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
         ],
-        "tool_call_count": body.get("tool_call_count"),
+        "maximum_iterations": body.get("maximum_iterations"),
         "tokens": {},
         "memory": "",
         "bridge_summary": body.get("bridge_summary"),
@@ -205,13 +205,14 @@ def parse_request_body(request_body):
         "doc_ids": body.get("ddc_ids"),
         "rag_data": body.get("rag_data"),
         "name": body.get("name"),
+        "api_collection": body.get("api_collection"),
         "org_name": body.get("org_name"),
         "variables_state": body.get("variables_state"),
         "built_in_tools": body.get("built_in_tools") or [],
         "thread_flag": body.get("thread_flag") or False,
         "files": body.get("files") or [],
-        "fall_back": body.get("fall_back") or {},
-        "guardrails": body.get("bridges", {}).get("guardrails") or {},
+        "fall_back": body.get("settings", {}).get("fall_back") or {},
+        "guardrails": body.get("settings", {}).get("guardrails") or {},
         "testcase_data": body.get("testcase_data") or {},
         "is_embed": body.get("is_embed"),
         "user_id": body.get("user_id"),
@@ -228,6 +229,7 @@ def parse_request_body(request_body):
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
         "limit": body.get("limit"),
+        "is_rerun": body.get("is_rerun", False),
     }
 
 
@@ -326,6 +328,8 @@ async def load_model_configuration(model, configuration, service):
             and (config["level"] == 0 or config["level"] == 1 or config["level"] == 2)
             or key in configuration
         ):
+            if config.get("level") == 0 and key not in configuration:
+                continue
             custom_config[key] = configuration.get(key, config["default"])
 
     return model_obj, custom_config, model_output_config
@@ -572,7 +576,6 @@ def build_service_params(
     thread_info=None,
     timer=None,
     memory=None,
-    send_error_to_webhook=None,
     bridge_configurations=None,
 ):
     token_calculator = TokenCalculator(parsed_data["service"], model_output_config)
@@ -609,11 +612,10 @@ def build_service_params(
         "apikey_object_id": parsed_data["apikey_object_id"],
         "images": parsed_data["images"],
         "audios": parsed_data.get("audios"),
-        "tool_call_count": parsed_data["tool_call_count"],
+        "maximum_iterations": parsed_data["maximum_iterations"],
         "rag_data": parsed_data["rag_data"],
         "name": parsed_data["name"],
         "org_name": parsed_data["org_name"],
-        "send_error_to_webhook": send_error_to_webhook,
         "built_in_tools": parsed_data["built_in_tools"],
         "files": parsed_data["files"],
         "file_data": parsed_data["file_data"],
@@ -768,6 +770,34 @@ async def process_background_tasks(
             result["historyParams"],
             parsed_data["version_id"],
         )
+
+        # For reruns, directly UPDATE the existing conversation log instead of inserting via queue
+        if parsed_data.get("is_rerun"):
+            from src.db_services.conversationDbService import update_conversation_log
+
+            update_data = payload.get("conversation_log_data", {})
+            # Remove identity fields that must not be overwritten
+            for key in ("message_id", "user", "thread_id", "sub_thread_id", "bridge_id", "org_id"):
+                update_data.pop(key, None)
+            update_data["updated_at"] = datetime.now()
+
+            await update_conversation_log(parsed_data["message_id"], parsed_data["org_id"], update_data)
+
+            asyncio.create_task(
+                _update_history_redis(
+                    [parsed_data["usage"]],
+                    result["historyParams"],
+                    parsed_data["version_id"],
+                    thread_info,
+                )
+            )
+
+            # Still publish metrics (but skip save_history)
+            data = await make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info)
+            data = make_json_serializable(data)
+            await sub_queue_obj.publish_message(data)
+            return
+
         history_entries.append(payload)
 
         asyncio.create_task(
@@ -799,16 +829,18 @@ async def process_background_tasks(
 async def process_background_tasks_for_error(parsed_data, error):
     tasks = [
         send_alert(
-            data={
-                "org_name": parsed_data["org_name"],
-                "bridge_name": parsed_data["name"],
-                "configuration": parsed_data["configuration"],
-                "error": str(error),
-                "message_id": parsed_data["message_id"],
-                "bridge_id": parsed_data["bridge_id"],
-                "message": "Exception for the code",
-                "org_id": parsed_data["org_id"],
-            }
+            bridge_id=parsed_data["bridge_id"],
+            org_id=parsed_data["org_id"],
+            error_log={"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]},
+            error_type=alert_types["error"],
+            bridge_name=parsed_data.get("name"),
+            is_embed=parsed_data.get("is_embed"),
+            user_id=parsed_data.get("user_id"),
+            thread_id=parsed_data.get("thread_id"),
+            service=parsed_data.get("service"),
+            is_playground=parsed_data.get("is_playground"),
+            api_collection=parsed_data.get("api_collection"),
+            is_external_error=False,
         ),
         _publish_history_to_queue(
             [parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]
@@ -962,32 +994,6 @@ def filter_missing_vars(missing_vars, variables_state):
 
 def get_service_by_model(model):
     return next((s for s in model_config_document if model in model_config_document[s]), None)
-
-
-def send_error(
-    bridge_id,
-    org_id,
-    error_message,
-    error_type,
-    bridge_name=None,
-    is_embed=None,
-    user_id=None,
-    thread_id=None,
-    service=None,
-):
-    asyncio.create_task(
-        send_error_to_webhook(
-            bridge_id,
-            org_id,
-            error_message,
-            error_type=error_type,
-            bridge_name=bridge_name,
-            is_embed=is_embed,
-            user_id=user_id,
-            thread_id=thread_id,
-            service=service,
-        )
-    )
 
 
 def restructure_json_schema(response_type, service):
@@ -1234,6 +1240,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
         "tools_call_data": error.args[1] if error and len(error.args) > 1 else None,
         "message_id": parsed_data["message_id"],
         "AiConfig": class_obj.aiconfig() if class_obj else None,
+        "firstAttemptError": parsed_data.get("firstAttemptError") or "",
         "folder_id": parsed_data.get("folder_id"),
         "folder_limit": parsed_data.get("folder_limit", 0),
         "parent_id": parsed_data.get("parent_bridge_id", ""),
@@ -1342,9 +1349,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 parsed_data["configuration"]["model"] = fall_back.get("model")
 
                 if parsed_data["service"] != original_service:
-                    parsed_data["apikey"] = fall_back.get("apikey") or (
-                        Config.AI_ML_APIKEY if fall_back.get("service") == "ai_ml" else None
-                    )
+                    parsed_data["apikey"] = fall_back.get("apikey")
                     fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
                         parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
                     )
@@ -1358,7 +1363,6 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         thread_info,
                         timer,
                         params.get("memory"),
-                        params.get("send_error_to_webhook"),
                         bridge_configurations,
                     )
                     fallback_class_obj = await Helper.create_service_handler(fallback_params, parsed_data["service"])

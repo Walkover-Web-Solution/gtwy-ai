@@ -251,15 +251,17 @@ async def guardrails_check(parsed_data: dict) -> dict:
         parsed_data (dict): Parsed request data containing guardrails settings
             Expected format:
             {
-                'guardrails': {
-                    'is_enabled': bool,
-                    'guardrails_configuration': {
-                        'toxicity': true,
-                        'bias': false,
-                        'hallucination': true,
-                        ...
-                    },
-                    'guardrails_custom_prompt': str
+                'settings': {
+                    'guardrails': {
+                        'is_enabled': bool,
+                        'guardrails_configuration': {
+                            'toxicity': true,
+                            'bias': false,
+                            'hallucination': true,
+                            ...
+                        },
+                        'guardrails_custom_prompt': str
+                    }
                 },
                 'user': str  # User message to validate
             }
@@ -269,7 +271,7 @@ async def guardrails_check(parsed_data: dict) -> dict:
     """
     try:
         # Get guardrails configuration
-        guardrails = parsed_data.get("guardrails", {})
+        guardrails = parsed_data.get("settings", {}).get("guardrails", {})
 
         # Get the last user message (current message)
         user_message = parsed_data.get("user")

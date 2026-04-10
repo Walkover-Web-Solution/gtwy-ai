@@ -13,8 +13,6 @@ from ....configs.constant import service_name
 from ....db_services import metrics_service
 from ....services.cache_service import make_json_serializable
 from ....services.commonServices.queueService.queueLogService import sub_queue_obj
-from ..AiMl.ai_ml_image_model import AiMlImageModel
-from ..AiMl.ai_ml_model_run import ai_ml_model_run, ai_ml_stream
 from ..anthropic.anthropicModelRun import anthropic_runmodel, anthropic_stream
 from ..deepgram.deepgramModelRun import deepgram_runmodel
 from ..Google.gemini_image_model import gemini_image_model
@@ -77,7 +75,7 @@ class BaseService:
         self.apikey_status = params.get("apikey_status")
         self.image_data = params.get("images")
         self.audio_data = params.get("audios")
-        self.tool_call_count = params.get("tool_call_count")
+        self.maximum_iterations = params.get("maximum_iterations")
         self.text = params.get("text")
         self.tool_id_and_name_mapping = params.get("tool_id_and_name_mapping")
         self.batch = params.get("batch")
@@ -86,7 +84,6 @@ class BaseService:
         self.processed_prompts = params.get("processed_prompts")
         self.name = params.get("name")
         self.org_name = params.get("org_name")
-        self.send_error_to_webhook = params.get("send_error_to_webhook")
         self.built_in_tools = params.get("built_in_tools")
         self.function_time_logs = params.get("function_time_logs")
         self.files = params.get("files") or []
@@ -97,6 +94,12 @@ class BaseService:
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
         self.tool_call_limit_error = None
+        self.stream_mode = params.get("customConfig", {}).get("stream") is True
+        if self.stream_mode:
+            self.streamer = StreamingService(mode="sse")
+        else:
+            self.streamer = None
+
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
             self.streamer = StreamingService(mode="sse")
@@ -134,7 +137,7 @@ class BaseService:
             tools[function_response["name"]] = function_response["content"]
 
             match service:
-                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'ai_ml':
+                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral':
                     assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
                     configuration['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]})
                     tool_calls_id = assistant_tool_calls['id']
@@ -208,7 +211,7 @@ class BaseService:
                 configuration["tool_choice"] = {"type": "auto"}
             else:
                 configuration["tool_choice"] = "auto"
-        if validate_tool_call(service, model_response) and loop_count <= int(self.tool_call_count or 0):
+        if validate_tool_call(service, model_response) and loop_count <= int(self.maximum_iterations or 0):
             loop_count += 1
         else:
             if validate_tool_call(service, model_response):
@@ -302,7 +305,6 @@ class BaseService:
             service_name["open_router"],
             service_name["mistral"],
             service_name["gemini"],
-            service_name["ai_ml"],
             service_name["openai_completion"],
         ]:
             if funcModelResponse and self.service != service_name["openai"]:
@@ -317,7 +319,6 @@ class BaseService:
                     service_name["grok"],
                     service_name["open_router"],
                     service_name["gemini"],
-                    service_name["ai_ml"],
                 ]:
                     _.set_(
                         model_response,
@@ -403,7 +404,6 @@ class BaseService:
                     service == service_name["openai_completion"]
                     or service == service_name["groq"]
                     or service == service_name["grok"]
-                    or service == service_name["ai_ml"]
                 ):
                     if configuration.get("tool_choice"):
                         if configuration["tool_choice"] not in ["auto", "none", "required", "default"]:
@@ -578,21 +578,6 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
-            elif service == service_name["ai_ml"]:
-                response = await ai_ml_model_run(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
-                )
             elif service == service_name["deepgram"]:
                 response = await deepgram_runmodel(
                     configuration,
@@ -661,8 +646,6 @@ class BaseService:
                 generator = mistral_stream(configuration, apikey)
             elif service == service_name["gemini"]:
                 generator = gemini_modelrun_stream(configuration, apikey)
-            elif service == service_name["ai_ml"]:
-                generator = ai_ml_stream(configuration, apikey)
             else:
                 raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
 
@@ -677,6 +660,8 @@ class BaseService:
             if error_in_stream:
                 raise ApiCallError(error_in_stream, service=service)
 
+            stream_service_tier = stream_state.get("service_tier")
+
             accumulated_response = build_accumulated_response(
                 service=service,
                 configuration=configuration,
@@ -686,6 +671,7 @@ class BaseService:
                 final_usage=final_usage,
                 final_finish_reason=final_finish_reason,
                 last_delta=last_delta,
+                service_tier=stream_service_tier,
             )
 
             if self.token_calculator:
@@ -739,10 +725,6 @@ class BaseService:
                 response = await OpenAIImageModel(configuration, apikey, self.execution_time_logs, self.timer)
             if service == service_name["gemini"]:
                 response = await gemini_image_model(configuration, apikey, self.execution_time_logs, self.timer)
-            if service == service_name["ai_ml"]:
-                response = await AiMlImageModel(
-                    configuration, apikey, self.execution_time_logs, self.timer, self.image_data
-                )
             if not response["success"]:
                 raise ValueError(response["error"])
             return {"success": True, "modelResponse": response["response"]}

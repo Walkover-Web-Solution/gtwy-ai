@@ -109,7 +109,7 @@ This document provides a comprehensive flow of the Completion API from request i
 - `variables`: Prompt variables
 - `rag_data`: Document data for RAG
 - `gpt_memory`: Memory settings
-- `tool_call_count`: Maximum tool calls allowed
+- `maximum_iterations`: Maximum tool calls allowed
 - `built_in_tools`: Built-in tool flags (e.g., web search)
 - `web_search_filters`: Domain allowlist for web search
 - `guardrails`: Guardrails config for content filtering
@@ -284,7 +284,7 @@ This document provides a comprehensive flow of the Completion API from request i
   "variables": { /* prompt variables */ },
   "memory": "string",
   "rag_data": [ /* document data */ ],
-  "tool_call_count": 3,
+  "maximum_iterations": 3,
   "built_in_tools": [ /* tool flags */ ],
   "files": [ /* file URLs */ ],
   "web_search_filters": [ /* allowed domains */ ],
@@ -425,7 +425,7 @@ This document provides a comprehensive flow of the Completion API from request i
 - Returns formatted responses for each tool call
 
 #### Tool Call Limits
-- **Maximum Rounds**: Configurable per bridge (`tool_call_count`)
+- **Maximum Rounds**: Configurable per bridge (`maximum_iterations`)
 - **Default**: 3 rounds of tool calling
 - **Prevention**: Avoids infinite loops
 

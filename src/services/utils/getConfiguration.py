@@ -24,12 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_apikeys(apikeys_dict, key_type="API"):
-    normalized_keys = {}
+    normalized_keys = {
+        key_type: {},
+        "status": {}
+    }
 
     try:
         for service_name, apikey_data in apikeys_dict.items():
             if isinstance(apikey_data, dict) and "apikey" in apikey_data:
-                normalized_keys[service_name] = apikey_data["apikey"]
+                normalized_keys[key_type][service_name] = apikey_data["apikey"]
+                normalized_keys["status"][service_name] = apikey_data.get("status", "working")
             else:
                 logger.warning(f"{key_type} key not found for service: {service_name}")
     except (KeyError, TypeError) as e:
@@ -89,20 +93,28 @@ async def _prepare_configuration_response(
 
     service = service.lower() if service else ""
 
+    # Initialize apikey_status with default value
+    apikey_status = {}
+
     # Normalize API keys
-    apikeys_dict = result.get("bridges", {}).get("apikeys", {})
+    apikeys_dict = result.get("bridges", {}).get("apikeys_combined", {})
     if apikeys_dict:
-        result["bridges"]["apikeys"] = _normalize_apikeys(apikeys_dict, "API")
+        apiandstatus = _normalize_apikeys(apikeys_dict, "apikeys")
+        result["bridges"]["apikeys"] = apiandstatus.get("apikeys")
+        apikey_status = apiandstatus.get("status", {})
 
     # Normalize folder API keys
     folder_apikeys_dict = result.get("bridges", {}).get("folder_apikeys", {})
     if folder_apikeys_dict:
-        result["bridges"]["folder_apikeys"] = _normalize_apikeys(folder_apikeys_dict, "Folder API")
+        apiandstatus =  _normalize_apikeys(folder_apikeys_dict, "folder_apikeys")
+        result["bridges"]["folder_apikeys"] = apiandstatus.get("folder_apikeys")
+        apikey_status = apiandstatus.get("status", {})
 
+    
     apikey_src = apikeys_dict or folder_apikeys_dict or {}
     apikey = setup_api_key(service, result, apikey, chatbot)
     apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
-    apikey_status = result.get('bridges', {}).get('apikey_status')
+    
 
     # Overriding fields from Body (if Given)
     auto_model_select = override_fields.get("auto_model_select") or result.get("bridges", {}).get("auto_model_select")
@@ -174,8 +186,8 @@ async def _prepare_configuration_response(
     gpt_memory_context = bridge.get("gpt_memory_context")
     gpt_memory = result.get("bridges", {}).get("gpt_memory")
 
-    tone = configuration.get("tone", {})
-    responseStyle = configuration.get("responseStyle", {})
+    tone = bridge.get("settings", {}).get("tone", {})
+    responseStyle = bridge.get("settings", {}).get("responseStyle", {})
     configuration["prompt"] = Helper.append_tone_and_response_style_prompts(
         configuration["prompt"], tone, responseStyle
     )
@@ -195,8 +207,6 @@ async def _prepare_configuration_response(
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
     add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_flag)
-
-    guardrails_value = guardrails if guardrails is not None else (result.get("bridges", {}).get("guardrails") or {})
     web_search_filters_value = web_search_filters or result.get("bridges", {}).get("web_search_filters") or {}
 
     base_config = {
@@ -216,7 +226,7 @@ async def _prepare_configuration_response(
         "gpt_memory": gpt_memory,
         "version_id": version_id or result.get("bridges", {}).get("published_version_id"),
         "gpt_memory_context": gpt_memory_context,
-        "tool_call_count": result.get("bridges", {}).get("tool_call_count", 3),
+        "settings": result.get("bridges", {}).get("settings", {}),
         "variables": variables,
         "rag_data": rag_data,
         "actions": result.get("bridges", {}).get("actions", []),
@@ -225,8 +235,6 @@ async def _prepare_configuration_response(
         "bridge_id": result["bridges"].get("parent_id", result["bridges"].get("_id")),
         "variables_state": result.get("bridges", {}).get("variables_state", {}),
         "built_in_tools": built_in_tools or result.get("bridges", {}).get("built_in_tools"),
-        "fall_back": result.get("bridges", {}).get("fall_back") or {},
-        "guardrails": guardrails_value,
         "is_embed": result.get("bridges", {}).get("folder_type") == "embed",
         "user_id": result.get("bridges", {}).get("user_id"),
         "folder_id": result.get("bridges", {}).get("folder_id"),
@@ -235,6 +243,7 @@ async def _prepare_configuration_response(
         "chatbot_auto_answers": chatbot_auto_answers,
         "cache_on": cache_on,
         "richui_templates": result.get("bridges", {}).get("richui_templates"),
+        "api_collection":apikey_src,
         "limit": {
             "bridge": {
                 "limit": bridge_data.get("bridges", {}).get("bridge_limit"),

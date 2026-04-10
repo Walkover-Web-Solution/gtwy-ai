@@ -73,7 +73,7 @@ async def get_bridges_without_tools(bridge_id=None, org_id=None, version_id=None
 
 async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None):
     try:
-        cache_key = f"{redis_keys['bridge_data_with_tools_']}{version_id or bridge_id}"
+        cache_key = f"{redis_keys['bridge_data_with_tools_']}{org_id}_{version_id or bridge_id}"
 
         # Attempt to retrieve data from Redis cache
         cached_data = await find_in_cache(cache_key)
@@ -180,6 +180,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                 "apikey_limit_reset_period": {"$ifNull": ["$apikey_limit_reset_period", "monthly"]},
                                 "apikey_limit_start_date": {"$ifNull": ["$apikey_limit_start_date", None]},
                                 "status": {"$ifNull": ["$status", None]},
+                                "name": 1
                             }
                         },
                     ],
@@ -230,6 +231,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                                                 "apikey_limit_reset_period": "$$matched_doc.apikey_limit_reset_period",
                                                                 "apikey_limit_start_date": "$$matched_doc.apikey_limit_start_date",
                                                                 "status": "$$matched_doc.status",
+                                                                "name":"$$matched_doc.name",
                                                             },
                                                         }
                                                     },
@@ -484,11 +486,6 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
 
         bridge_data = result[0]
 
-        # Split apikeys_combined into apikeys and apikey_status
-        combined = bridge_data.pop("apikeys_combined", {})
-        bridge_data["apikeys"] = {k: {ek: ev for ek, ev in v.items() if ek != "status"} for k, v in combined.items()}
-        bridge_data["apikey_status"] = {k: v.get("status") for k, v in combined.items()}
-
         # Check if folder_id is present and fetch folder API keys
         if bridge_data.get("folder_id"):
             folder_pipeline = [
@@ -590,6 +587,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                                             "apikey_limit_reset_period": {"$ifNull": ["$$matched.apikey_limit_reset_period", "monthly"]},
                                                             "apikey_limit_start_date": {"$ifNull": ["$$matched.apikey_limit_start_date", None]},
                                                             "status": {"$ifNull": ["$$matched.status", None]},
+                                                            "name": "$matched.apikey"
                                                         },
                                                     }
                                                 },
@@ -744,10 +742,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             if folder_result and folder_result[0].get("folder_apikeys"):
                 folder_data = folder_result[0]
                 # Split status out of folder_apikeys
-                raw = folder_data["folder_apikeys"]
-                bridge_data["folder_apikeys"] = {k: {ek: ev for ek, ev in v.items() if ek != "status"} for k, v in raw.items()}
-                bridge_data["apikey_status"] = {k: v.get("status") for k, v in raw.items()}
-                bridge_data["apikey_object_id"] = folder_data["apikey_object_id"]
+                bridge_data["folder_apikeys"] = folder_result[0]["folder_apikeys"]
+                bridge_data["apikey_object_id"] = folder_result[0]["apikey_object_id"]
             else:
                 bridge_data["folder_apikeys"] = {}
 
@@ -833,6 +829,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             bridge_data["folder_limit"] = 0
             bridge_data["folder_usage"] = 0
             bridge_data["folder_type"] = None
+            
 
         # Structure the final response
         response = {"success": True, "bridges": bridge_data}
@@ -882,10 +879,10 @@ async def get_bridge_by_slugname(org_id, slug_name):
         raise BadRequestException("Failed to fetch bridge by slugName") from error
 
 
-async def update_bridge(bridge_id=None, update_fields=None, version_id=None):
+async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org_id=""):
     model = version_model if version_id else configurationModel
     id_to_use = ObjectId(version_id) if version_id else ObjectId(bridge_id)
-    cache_key = f"{version_id if version_id else bridge_id}"
+    cache_key = f"{org_id}_{version_id if version_id else bridge_id}"
 
     updated_bridge = await model.find_one_and_update(
         {"_id": ObjectId(id_to_use)}, {"$set": update_fields}, return_document=True, upsert=True
