@@ -18,7 +18,7 @@ from src.db_services.metrics_service import (
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.configs.constant import bridge_ids, redis_keys, alert_types
-from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue
+from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
 from src.send_alert import send_alert
@@ -1038,6 +1038,7 @@ def restructure_json_schema(response_type, service):
             schema = json_schema.get("schema") if "schema" in json_schema else json_schema
             if not schema or not isinstance(schema, dict):
                 return response_type
+            schema = remove_additional_properties_with_anyof(schema)
             return {
                 "format": {
                     "type": "json_schema",
@@ -1239,6 +1240,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
         "tools_call_data": error.args[1] if error and len(error.args) > 1 else None,
         "message_id": parsed_data["message_id"],
         "AiConfig": class_obj.aiconfig() if class_obj else None,
+        "firstAttemptError": parsed_data.get("firstAttemptError") or "",
         "folder_id": parsed_data.get("folder_id"),
         "folder_limit": parsed_data.get("folder_limit", 0),
         "parent_id": parsed_data.get("parent_bridge_id", ""),

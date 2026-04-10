@@ -175,13 +175,140 @@ def _build_workflow_response_payload(
     }
 
 
+def _extract_tool_calls_from_state(final_state: dict) -> list[dict]:
+    """Extract tool call information from workflow state in the same format as direct flow.
+    
+    Direct flow format: list of dicts where each dict has tool_call_id as key:
+    [
+        {
+            "tool_call_id": {
+                "name": "tool_name",
+                "args": {...},
+                "data": {...},
+                "id": "tool_id"
+            }
+        }
+    ]
+    """
+    tool_calls_list = []
+    tasks = final_state.get("tasks", [])
+    
+    for task in tasks:
+        if task.get("status") in ("completed", "failed"):
+            tool_name = task.get("tool_name", "unknown")
+            task_id = task.get("id", "")
+            result = task.get("result", "")
+            
+            # Parse result to extract actual response data
+            try:
+                if isinstance(result, str) and result.strip().startswith("{"):
+                    result_data = json.loads(result)
+                else:
+                    result_data = result
+            except:
+                result_data = result
+            
+            # Build tool call entry matching direct flow format
+            tool_call_entry = {
+                task_id: {
+                    "name": tool_name,
+                    "args": {
+                        "title": task.get("title", ""),
+                        "description": task.get("description", ""),
+                    },
+                    "data": {
+                        "response": result_data if task.get("status") == "completed" else {"error": result_data},
+                        "metadata": {
+                            "type": "workflow_task",
+                            "status": task.get("status"),
+                            "complexity": task.get("estimated_complexity", "moderate"),
+                        },
+                        "status": 1 if task.get("status") == "completed" else 0,
+                    },
+                    "id": tool_name,
+                }
+            }
+            tool_calls_list.append(tool_call_entry)
+    
+    return tool_calls_list
+
+
+def _format_workflow_message(final_state: dict, interrupt_payload: dict | None) -> str:
+    """Format the AI message based on workflow state and interrupts."""
+    if interrupt_payload:
+        interrupt_type = interrupt_payload.get("type", "")
+        
+        if interrupt_type == "planner_question":
+            question = interrupt_payload.get("question", "")
+            options = interrupt_payload.get("options", [])
+            thinking = interrupt_payload.get("planner_thinking", [])
+            
+            msg_parts = []
+            if thinking:
+                msg_parts.append("**Planning Analysis:**")
+                for step in thinking:
+                    if step.get("type") == "reasoning":
+                        msg_parts.append(f"- {step.get('content', '')}")
+            
+            msg_parts.append(f"\n**Question:** {question}")
+            if options:
+                msg_parts.append("\n**Options:**")
+                for i, opt in enumerate(options, 1):
+                    msg_parts.append(f"{i}. {opt}")
+            
+            return "\n".join(msg_parts)
+        
+        elif interrupt_type == "worker_clarification":
+            question = interrupt_payload.get("question", "")
+            task_id = interrupt_payload.get("task_id", "")
+            return f"**Worker needs clarification for task {task_id}:**\n{question}"
+        
+        elif interrupt_type == "step_approval":
+            task = interrupt_payload.get("task", {})
+            return f"**Approval needed for task:**\n{task.get('title', '')}\n{task.get('description', '')}"
+        
+        elif interrupt_type == "plan_approval":
+            tasks = interrupt_payload.get("tasks", [])
+            msg_parts = ["**Plan created and awaiting approval:**"]
+            for task in tasks:
+                msg_parts.append(f"- {task.get('title', '')}: {task.get('description', '')}")
+            return "\n".join(msg_parts)
+    
+    # No interrupt - return final answer
+    final_answer = final_state.get("final_answer", "")
+    if final_answer:
+        return final_answer
+    
+    # Fallback: show task completion summary
+    completed = [t for t in final_state.get("tasks", []) if t.get("status") == "completed"]
+    if completed:
+        msg_parts = ["**Tasks completed:**"]
+        for task in completed:
+            msg_parts.append(f"- {task.get('title', '')}: {task.get('result', '')[:200]}")
+        return "\n".join(msg_parts)
+    
+    return "Workflow in progress..."
+
+
 def _build_history_params(session: WorkflowSession, content: str, message_id: str, response: dict) -> dict:
     pd = session.parsed_data
+    final_state = session.last_state
+    interrupt_payload = response.get("data", {}).get("pending_interrupt")
+    
+    # Extract tool calls from completed tasks
+    tool_calls = _extract_tool_calls_from_state(final_state)
+    
+    # Format the AI message properly
+    ai_message = _format_workflow_message(final_state, interrupt_payload)
+    
+    # Get runtime variables from workflow state (updated during execution)
+    runtime_variables = final_state.get("runtime_variables") or pd.get("variables") or {}
+    
     return {
         "thread_id": pd.get("thread_id"),
         "sub_thread_id": pd.get("sub_thread_id"),
-        "user": pd.get("original_user") or "",
-        "message": content,
+        "user": pd.get("original_user") or pd.get("user") or "",
+        "message": ai_message,
         "org_id": pd.get("org_id"),
         "bridge_id": pd.get("bridge_id"),
         "model": pd.get("model"),
@@ -191,7 +318,7 @@ def _build_history_params(session: WorkflowSession, content: str, message_id: st
         "actor": "user",
         "tools": {},
         "chatbot_message": "",
-        "tools_call_data": [],
+        "tools_call_data": tool_calls,
         "message_id": message_id,
         "llm_urls": [],
         "revised_prompt": None,
@@ -203,6 +330,7 @@ def _build_history_params(session: WorkflowSession, content: str, message_id: st
         "response": response,
         "folder_id": pd.get("folder_id"),
         "prompt": (pd.get("configuration") or {}).get("prompt"),
+        "variables": runtime_variables,
     }
 
 
@@ -527,6 +655,12 @@ async def execute_advanced_workflow(
     result["response"]["data"]["message_id"] = parsed_data["message_id"]
 
     latency = create_latency_object(timer, params)
+    
+    # Sync runtime_variables from workflow state back to parsed_data for history
+    workflow_state = result.get("workflow_state", {})
+    if workflow_state.get("runtime_variables"):
+        parsed_data["variables"] = workflow_state["runtime_variables"]
+    
     update_usage_metrics(parsed_data, params, latency, result=result, success=True)
     result["response"]["usage"]["cost"] = parsed_data.get("usage", {}).get("expectedCost", 0)
 

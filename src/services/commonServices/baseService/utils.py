@@ -783,3 +783,58 @@ async def run_stream_and_collect(generator, streamer):
         "last_delta": last_delta,
         "service_tier": service_tier,
     }
+
+
+def remove_additional_properties_with_anyof(schema):
+    """
+    Remove additionalProperties when anyOf exists at the same level.
+
+    For Anthropic and Mistral, having both anyOf and additionalProperties
+    at the same level can cause issues. This removes additionalProperties
+    when anyOf is present.
+
+    Args:
+        schema (dict): The JSON schema to format
+
+    Returns:
+        dict: The formatted schema with additionalProperties removed where anyOf exists
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    def process_schema(obj):
+        """Recursively process schema to remove additionalProperties when anyOf exists."""
+        if isinstance(obj, dict):
+            # If both anyOf and additionalProperties exist at same level, remove additionalProperties and type
+            if 'anyOf' in obj and 'additionalProperties' in obj:
+                del obj['additionalProperties']
+                del obj['type']
+
+            # Recursively process properties
+            if 'properties' in obj and isinstance(obj['properties'], dict):
+                for prop_value in obj['properties'].values():
+                    process_schema(prop_value)
+
+            # Recursively process items (for arrays)
+            if 'items' in obj:
+                process_schema(obj['items'])
+
+            # Recursively process additionalProperties
+            if 'additionalProperties' in obj and isinstance(obj['additionalProperties'], dict):
+                process_schema(obj['additionalProperties'])
+
+            # Recursively process allOf, anyOf, oneOf
+            for combiner in ['allOf', 'anyOf', 'oneOf']:
+                if combiner in obj and isinstance(obj[combiner], list):
+                    for item in obj[combiner]:
+                        if isinstance(item, dict):
+                            process_schema(item)
+
+            # Process definitions if they exist
+            if 'definitions' in obj and isinstance(obj['definitions'], dict):
+                for definition in obj['definitions'].values():
+                    if isinstance(definition, dict):
+                        process_schema(definition)
+
+    process_schema(schema)
+    return schema
