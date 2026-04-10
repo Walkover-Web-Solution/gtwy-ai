@@ -78,6 +78,8 @@ async def call_gtwy_agent(args):
         request_body["variables"] = variables
         request_body["org_id"] = org_id
         request_body["bridge_configurations"] = bridge_configurations
+        request_body["maximum_iterations"] = args.get("maximum_iterations")
+        request_body["maximum_iteration_limit_reached"] = args.get("maximum_iteration_limit_reached", False)
 
         # Step 4: Create data structure for chat function
         # Pass timer state from parent request to maintain latency tracking in recursive calls

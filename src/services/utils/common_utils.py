@@ -197,6 +197,7 @@ def parse_request_body(request_body):
             if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
         ],
         "maximum_iterations": body.get("maximum_iterations"),
+        "maximum_iteration_limit_reached": body.get("maximum_iteration_limit_reached", False),
         "tokens": {},
         "memory": "",
         "bridge_summary": body.get("bridge_summary"),
@@ -613,6 +614,7 @@ def build_service_params(
         "images": parsed_data["images"],
         "audios": parsed_data.get("audios"),
         "maximum_iterations": parsed_data["maximum_iterations"],
+        "maximum_iteration_limit_reached": parsed_data.get("maximum_iteration_limit_reached", False),
         "rag_data": parsed_data["rag_data"],
         "name": parsed_data["name"],
         "org_name": parsed_data["org_name"],
@@ -1484,12 +1486,11 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         if class_obj.streamer:
             model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
             formatted_response = result.get("response", {}) if isinstance(result, dict) else {}
-            if getattr(class_obj, 'tool_call_limit_error', None):
-                result["error"] = class_obj.tool_call_limit_error
             if result.get("error"):
                 formatted_response["error"] = result["error"]
             finish_reason = (
-                result.get("stream_finish_reason")
+                "maximum_iteration_limit_reached" if class_obj.maximum_iteration_limit_reached
+                else result.get("stream_finish_reason")
                 or model_response.get("finish_reason")
                 or model_response.get("status")
                 or ""

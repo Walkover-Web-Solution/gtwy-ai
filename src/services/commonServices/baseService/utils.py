@@ -127,6 +127,31 @@ def transform_required_params_to_required(
                 transformed_properties[key]["items"]["type"] = "array"
     return transformed_properties
 
+def disable_tool_call(configuration: dict, service: str):
+    if service in (
+        service_name["openai"],
+        service_name["openai_completion"],
+        service_name["mistral"],
+        service_name["groq"],
+        service_name["grok"],
+        service_name["open_router"]
+    ):
+        configuration["tool_choice"] = "none"
+
+    elif service == service_name["gemini"]:
+        # Disabling Tool Call
+        configuration["config"].tool_config = types.ToolConfig(
+            function_calling_config=types.FunctionCallingConfig(
+                mode="NONE"
+            )
+        )
+        # Disabling Auto Tool call (Required)
+        configuration["config"].automatic_function_calling = types.AutomaticFunctionCallingConfig(
+            disable=True
+        )
+
+    elif service == service_name["anthropic"]:
+        configuration["tool_choice"] = {"type": "none"}
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
     if (
@@ -375,6 +400,9 @@ async def process_data_and_run_tools(codes_mapping, self):
                     # Pass bridge_configurations if available
                     if hasattr(self, "bridge_configurations") and self.bridge_configurations:
                         agent_args["bridge_configurations"] = self.bridge_configurations
+
+                    agent_args["maximum_iterations"] = int(self.maximum_iterations or 3)
+                    agent_args["maximum_iteration_limit_reached"] = self.maximum_iteration_limit_reached
 
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:

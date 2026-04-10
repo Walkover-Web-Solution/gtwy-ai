@@ -34,8 +34,10 @@ from .utils import (
     sendResponse,
     tool_call_formatter,
     validate_tool_call,
-    reasoning_formatter
+    reasoning_formatter,
+    disable_tool_call
 )
+from src.services.tool_call_utils import init_tool_count, decrement_tool_count
 from src.exceptions import ApiCallError
 
 executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
@@ -93,7 +95,7 @@ class BaseService:
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
-        self.tool_call_limit_error = None
+        self.maximum_iteration_limit_reached = params.get("maximum_iteration_limit_reached", False)
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
             self.streamer = StreamingService(mode="sse")
@@ -111,7 +113,7 @@ class BaseService:
 
     async def run_tool(self, responses, service):
         codes_mapping, function_list = make_code_mapping_by_service(responses, service)
-        if not self.playground:
+        if not self.playground and self.response_format["type"] != "webhook":
             asyncio.create_task(
                 sendResponse(self.response_format, data={"function_call": True, "Name": function_list}, success=True)
             )
@@ -202,6 +204,8 @@ class BaseService:
     async def function_call(self, configuration, service, response, loop_count=0, tools=None):
         if tools is None:
             tools = {}
+        if loop_count == 0:
+            init_tool_count(self.message_id, self.maximum_iterations)
         if not response.get("success"):
             return {"success": False, "error": response.get("error")}
 
@@ -211,16 +215,14 @@ class BaseService:
                 configuration["tool_choice"] = {"type": "auto"}
             else:
                 configuration["tool_choice"] = "auto"
-        if validate_tool_call(service, model_response) and loop_count <= int(self.maximum_iterations or 0):
-            loop_count += 1
-        else:
-            if validate_tool_call(service, model_response):
-                tool_call_limit_msg = "Execution stopped in between because tool call limit exceeded."
-                response["error"] = tool_call_limit_msg
-                self.tool_call_limit_error = tool_call_limit_msg
-            if self.stream_mode and self.streamer and response.get("has_tool_calls"):
-                response["stream_finish_reason"] = "tool_call_limit_reached"
+        if not validate_tool_call(service, model_response):
             return response
+
+        loop_count += 1
+        remaining = decrement_tool_count(self.message_id)
+        if loop_count >= int(self.maximum_iterations or 3) or remaining <= 0:
+            disable_tool_call(configuration, service)
+            self.maximum_iteration_limit_reached = True
         func_response_data, mapping_response_data, tools_call_data = await self.run_tool(model_response, service)
         self.func_tool_call_data.append(tools_call_data)
 
@@ -242,7 +244,7 @@ class BaseService:
         configuration, tools = self.update_configration(
             model_response, func_response_data, configuration, mapping_response_data, service, tools
         )
-        if not self.playground and not self.stream_mode:
+        if not self.playground and not self.stream_mode and self.response_format["type"] != "webhook":
             asyncio.create_task(
                 sendResponse(
                     self.response_format,
@@ -383,8 +385,7 @@ class BaseService:
             "response": response,
             "folder_id": self.folder_id,
             "prompt": self.configuration.get("prompt"),
-            "is_cached": is_cached,
-            "error": self.tool_call_limit_error or "",
+            "is_cached": is_cached
         }
 
     def service_formatter(self, configuration: object, service: str):  # changes
@@ -459,6 +460,9 @@ class BaseService:
             if service == service_name["deepgram"]:
                 if new_config.get("model_option"):
                     new_config["model"] = f"{new_config['model']}-{new_config.pop('model_option')}"
+
+            if self.maximum_iteration_limit_reached:
+                disable_tool_call(new_config, service)
 
             return new_config
         except Exception as e:

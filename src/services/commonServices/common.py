@@ -13,6 +13,7 @@ from src.configs.constant import redis_keys, alert_types
 from src.utils.formatter import apply_variables_to_template_json, fix_json_string
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
+from src.services.tool_call_utils import cleanup_tool_count
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
@@ -144,6 +145,8 @@ async def chat_multiple_agents(request_body):
 async def chat(request_body): 
     result = {}
     class_obj = {}
+    parsed_data = {}
+    message_id_for_cleanup = None
     first_execution_error_code = None
     completion_success = True
     original_service = None
@@ -152,6 +155,7 @@ async def chat(request_body):
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
+        message_id_for_cleanup = parsed_data.get("message_id")
         
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
@@ -439,8 +443,8 @@ async def chat(request_body):
             raise ValueError(result)
         # Add message_id to response
         result["response"]["data"]["message_id"] = parsed_data["message_id"]
-        if getattr(class_obj, 'tool_call_limit_error', None):
-            result["error"] = class_obj.tool_call_limit_error
+        if getattr(class_obj, 'maximum_iteration_limit_reached', False):
+            result["response"]["data"]["finish_reason"] = "maximum_iteration_limit_reached"
         if result.get("error"):
             result["response"]["error"] = result["error"]
 
@@ -655,6 +659,7 @@ async def chat(request_body):
         completion_success = False
         raise ValueError(error_object) from None
     finally:
+        cleanup_tool_count(message_id_for_cleanup)
         await update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, first_execution_error_code, completion_success)
 
 
