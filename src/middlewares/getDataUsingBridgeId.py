@@ -74,9 +74,12 @@ async def add_configuration_data_to_body(request: Request):
                     request.state.profile["owner_id"] = f"{org_id}_{bridge_folder_id}_{bridge_user_id}"
 
         body_wrapper_id = body.get("wrapper_id")
+        incoming_response_format = body.get("settings", {}).get("response_format")
         body.update(primary_config)
         if body_wrapper_id is not None:
             body["wrapper_id"] = body_wrapper_id
+        if incoming_response_format is not None:
+            body.setdefault("settings", {})["response_format"] = incoming_response_format
         
         explicit_stream = body.get("stream")
 

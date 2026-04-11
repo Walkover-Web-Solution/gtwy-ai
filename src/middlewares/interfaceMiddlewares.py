@@ -70,10 +70,10 @@ async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMe
                 **json.loads(profile.get("variables", "{}")),
             },
             "settings": {
+                **body.configuration.get("settings", {}),
                 "response_format": {"type": "default", "cred": {}}
                 if flag
                 else {"type": "RTLayer", "cred": {"channel": channelId, "ttl": 1, "apikey": Config.RTLAYER_AUTH}},
-                **body.configuration.get("settings", {}),
                 "max_token": bridges.get("max_token", None) if isPublic else None,
             },
             "chatbot": True,

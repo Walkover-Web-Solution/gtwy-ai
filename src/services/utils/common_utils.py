@@ -597,6 +597,7 @@ def build_service_params(
         "modelOutputConfig": model_output_config,
         "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
+        "response_format": parsed_data.get("response_format") or {},
         "execution_time_logs": parsed_data.get("execution_time_logs", []),
         "function_time_logs": [],
         "timer": timer,
