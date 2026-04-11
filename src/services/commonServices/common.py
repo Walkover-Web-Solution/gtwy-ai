@@ -417,9 +417,9 @@ async def chat(request_body):
 
                 # Mark that this was a retry attempt and store original error
                 if result["success"]:
-                    result["historyParams"]["firstAttemptError"] = (
-                        f"Original attempt failed with {original_service}/{original_model}: {original_error}. Retried with {parsed_data['service']}/{parsed_data['model']}"
-                    )
+                    firstAttemptError = f"Original attempt failed with {original_service}/{original_model}: {original_error}. Retried with {parsed_data['service']}/{parsed_data['model']}"
+                    result["response"]["data"]["firstAttemptError"] = firstAttemptError
+                    result["historyParams"]["firstAttemptError"] = firstAttemptError
                     result["response"]["data"]["fallback"] = True
 
             except Exception as retry_error:
