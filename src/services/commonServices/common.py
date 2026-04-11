@@ -431,7 +431,7 @@ async def chat(request_body):
                 parsed_data["model"] = original_model
                 parsed_data["service"] = original_service
                 parsed_data["firstAttemptError"] = (
-                        f"Original attempt failed with {original_service}/{original_model}: {original_error}. Retried with {parsed_data['service']}/{parsed_data['model']}"
+                        f"Original attempt failed with {original_service}/{original_model}: {original_error}. Retried with {fallback_config['service']}/{fallback_config['model']}"
                     )
                 raise retry_error from original_exception
 
