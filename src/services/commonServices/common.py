@@ -360,56 +360,45 @@ async def chat(request_body):
                 original_model = parsed_data["model"]
 
                 # Update parsed_data with fallback configuration
-                parsed_data["model"] = fallback_config.get("model", parsed_data["model"])
-                parsed_data["service"] = fallback_config.get("service", parsed_data["service"])
-                parsed_data["configuration"]["model"] = fallback_config.get("model")
-                # Check if service has changed - if so, create new service handler
-                if parsed_data["service"] != original_service:
-                    parsed_data["apikey"] = fallback_config.get("apikey")
+                fallback_model = fallback_config.get("model", parsed_data["model"])
+                fallback_service = fallback_config.get("service", parsed_data["service"])
+                parsed_data["model"] = fallback_model
+                parsed_data["service"] = fallback_service
+                parsed_data["configuration"]["model"] = fallback_model
+                if fallback_config.get("apikey"):
+                    parsed_data["apikey"] = fallback_config["apikey"]
 
-                    # Load fresh model configuration for the fallback service and model
-                    (
-                        fallback_model_config,
-                        fallback_custom_config,
-                        fallback_model_output_config,
-                    ) = await load_model_configuration(
-                        parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
+                # Always rebuild fallback handler/config to avoid stale customConfig/model reuse
+                (
+                    fallback_model_config,
+                    fallback_custom_config,
+                    fallback_model_output_config,
+                ) = await load_model_configuration(
+                    parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
+                )
+
+                fallback_custom_config = await configure_custom_settings(
+                    fallback_model_config["configuration"], fallback_custom_config, parsed_data["service"]
+                )
+                params = build_service_params(
+                    parsed_data,
+                    fallback_custom_config,
+                    fallback_model_output_config,
+                    thread_info,
+                    timer,
+                    memory,
+                    bridge_configurations,
+                )
+
+                if (
+                    "response_type" in fallback_custom_config
+                    and fallback_custom_config["response_type"].get("type") == "json_schema"
+                ):
+                    fallback_custom_config["response_type"] = restructure_json_schema(
+                        fallback_custom_config["response_type"], parsed_data["service"]
                     )
 
-                    # Configure custom settings specifically for the fallback service
-                    fallback_custom_config = await configure_custom_settings(
-                        fallback_model_config["configuration"], fallback_custom_config, parsed_data["service"]
-                    )
-                    params = build_service_params(
-                        parsed_data,
-                        fallback_custom_config,
-                        fallback_model_output_config,
-                        thread_info,
-                        timer,
-                        memory,
-                        bridge_configurations,
-                    )
-                    # Step 9 : json_schema service conversion
-                    if (
-                        "response_type" in fallback_custom_config
-                        and fallback_custom_config["response_type"].get("type") == "json_schema"
-                    ):
-                        fallback_custom_config["response_type"] = restructure_json_schema(
-                            fallback_custom_config["response_type"], parsed_data["service"]
-                        )
-
-                    # Create new service handler for the fallback service
-                    class_obj = await Helper.create_service_handler(params, parsed_data["service"])
-                else:
-                    # Same service, just update existing class_obj
-                    class_obj.model = parsed_data["model"]
-                    if fallback_config.get("apikey"):
-                        class_obj.apikey = fallback_config["apikey"]
-
-                    # Reconfigure custom_config for fallback service
-                    class_obj.customConfig = await configure_custom_settings(
-                        model_config["configuration"], custom_config, parsed_data["service"]
-                    )
+                class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
                 # Execute with updated configuration
                 result = await class_obj.execute()

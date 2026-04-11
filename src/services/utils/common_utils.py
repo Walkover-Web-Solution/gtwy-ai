@@ -1344,34 +1344,30 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
         if fall_back and fall_back.get("is_enable", False):
             try:
-                parsed_data["model"] = fall_back.get("model", parsed_data["model"])
-                parsed_data["service"] = fall_back.get("service", parsed_data["service"])
-                parsed_data["configuration"]["model"] = fall_back.get("model")
+                fallback_model = fall_back.get("model", parsed_data["model"])
+                fallback_service = fall_back.get("service", parsed_data["service"])
+                parsed_data["model"] = fallback_model
+                parsed_data["service"] = fallback_service
+                parsed_data["configuration"]["model"] = fallback_model
+                if fall_back.get("apikey"):
+                    parsed_data["apikey"] = fall_back["apikey"]
 
-                if parsed_data["service"] != original_service:
-                    parsed_data["apikey"] = fall_back.get("apikey")
-                    fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
-                        parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
-                    )
-                    fb_custom_config = await configure_custom_settings(
-                        fb_model_config["configuration"], fb_custom_config, parsed_data["service"]
-                    )
-                    fallback_params = build_service_params(
-                        parsed_data,
-                        fb_custom_config,
-                        fb_model_output_config,
-                        thread_info,
-                        timer,
-                        params.get("memory"),
-                        bridge_configurations,
-                    )
-                    fallback_class_obj = await Helper.create_service_handler(fallback_params, parsed_data["service"])
-                else:
-                    fallback_class_obj = class_obj
-                    fallback_class_obj.model = parsed_data["model"]
-                    if fall_back.get("apikey"):
-                        fallback_class_obj.apikey = fall_back["apikey"]
-                    fallback_params = params
+                fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
+                    parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
+                )
+                fb_custom_config = await configure_custom_settings(
+                    fb_model_config["configuration"], fb_custom_config, parsed_data["service"]
+                )
+                fallback_params = build_service_params(
+                    parsed_data,
+                    fb_custom_config,
+                    fb_model_output_config,
+                    thread_info,
+                    timer,
+                    params.get("memory"),
+                    bridge_configurations,
+                )
+                fallback_class_obj = await Helper.create_service_handler(fallback_params, parsed_data["service"])
 
                 # Transfer the live streamer so the same SSE queue/RTLayer channel is reused
                 fallback_class_obj.streamer = class_obj.streamer
