@@ -175,19 +175,11 @@ async def handle_batch_results(batch_id, apikey):
         # We have some results (partial or complete)
         return all_results, True
 
-    # No results available - return error based on status
+    # No results available - return error based on status (Except for 'completed')
     if status == "completed":
-        # Completed but no files - unusual case
-        error_info = [
-            {
-                "error": {
-                    "message": "Batch completed but no result files were generated",
-                    "type": "no_results",
-                    "batch_status": status,
-                },
-                "status_code": 400,
-            }
-        ]
+        # Completed but no files - Continue Polling
+        return None, False
+
     elif status == "failed":
         error_info = [
             {
