@@ -11,7 +11,6 @@ from src.utils.alert_utils import (
     get_details_payload,
     send_external_alert,
     send_internal_alert,
-    should_skip_alert,
 )
 
 
@@ -21,6 +20,7 @@ async def send_alert(
     error_log=None,
     error_type=None,
     bridge_name=None,
+    org_name=None,
     is_embed=None,
     user_id=None,
     thread_id=None,
@@ -33,23 +33,13 @@ async def send_alert(
     is_external_error=False,
     error_location=None,
 ):
-    """Send alerts to configured webhooks.
-    
-    Args:
-        bridge_id: Agent/Bridge identifier
-        org_id: Organization ID
-        error_log: Error details dictionary (must include error, message, message_id, org_name, configuration)
-        error_type: Type of alert (use alert_types constants)
-        is_external_error: True for external AI service errors, False for internal errors
-        error_location: Error location details (file, function, code, location_string)
-    """
     try:
         api_collection = api_collection or {}
         api_name = api_collection.get(service, {}).get("name", None)
 
         # Internal errors: Send directly to default webhook
         if not is_external_error:
-            payload = build_base_payload(bridge_id, org_id, bridge_name, error_type, api_name, is_playground, error_log)
+            payload = build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api_name, is_playground, error_log, service)
             await send_internal_alert(payload, error_location)
             return
 
@@ -85,20 +75,19 @@ async def send_alert(
             webhook_config = entry.get("webhookConfiguration")
             bridges = entry.get("bridges", [])
 
+            # Check if webhook configuration exists
+            if not webhook_config:
+                continue
+
             # Check if this webhook should receive this alert
             if error_type not in entry.get("alertType", []):
                 continue
             if bridge_id not in bridges and "all" not in bridges:
                 continue
 
-            # Skip if metric limit already reached
-            comparison_value = response if error_type == alert_types["broadcast_response"] else error_log
-            if should_skip_alert(error_type, entry, comparison_value):
-                continue
-
             # Build webhook payload
             payload = build_webhook_payload(
-                details_payload, error_type, bridge_id, org_id, user_id, 
+                details_payload, error_type, bridge_id, org_id, org_name, user_id,
                 thread_id, service, is_playground, api_name, bridge_name, is_embed
             )
 
@@ -110,7 +99,9 @@ async def send_alert(
                     payload["embeduserId"] = embed_user_id
 
             # Send alert
-            webhook_url = webhook_config["url"]
+            webhook_url = webhook_config.get("url")
+            if not webhook_url:
+                continue
             headers = webhook_config.get("headers", {})
             await send_external_alert(webhook_url, headers, error_type, payload, response, user_question, variables)
 

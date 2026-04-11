@@ -57,6 +57,7 @@ def handle_exceptions(func):
             body = request_body.get("body", {})
             bridge_id = path_params.get("bridge_id") or body.get("bridge_id")
             org_id = state.get("profile", {}).get("org", {}).get("id")
+            org_name = state.get("profile", {}).get("org", {}).get("name")
             bridge_name = body.get("name")
             is_embed = body.get("is_embed")
             user_id = body.get("user_id")
@@ -70,6 +71,7 @@ def handle_exceptions(func):
                 error_log=error_json,
                 error_type=alert_types["error"],
                 bridge_name=bridge_name,
+                org_name=org_name,
                 is_embed=is_embed,
                 user_id=user_id,
                 thread_id=thread_id,

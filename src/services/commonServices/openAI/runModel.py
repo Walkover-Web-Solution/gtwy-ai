@@ -168,6 +168,11 @@ async def openai_response_model(
     service="",
     count=0,
     token_calculator=None,
+    is_embed=None,
+    user_id=None,
+    thread_id=None,
+    is_playground=None,
+    api_collection=None,
 ):
     try:
         headers = _openai_headers(apiKey)
@@ -215,6 +220,11 @@ async def openai_response_model(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            is_embed=is_embed,
+            user_id=user_id,
+            thread_id=thread_id,
+            is_playground=is_playground,
+            api_collection=api_collection,
         )
 
     except Exception as error:
@@ -240,6 +250,11 @@ async def openai_completion(
     service="",
     count=0,
     token_calculator=None,
+    is_embed=None,
+    user_id=None,
+    thread_id=None,
+    is_playground=None,
+    api_collection=None,
 ):
     try:
         headers = _openai_headers(apiKey)
@@ -265,6 +280,11 @@ async def openai_completion(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            is_embed=is_embed,
+            user_id=user_id,
+            thread_id=thread_id,
+            is_playground=is_playground,
+            api_collection=api_collection,
         )
 
     except Exception as error:

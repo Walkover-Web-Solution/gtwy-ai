@@ -93,6 +93,9 @@ class BaseService:
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
+        self.is_embed = params.get("is_embed")
+        self.user_id = params.get("user_id")
+        self.api_collection = params.get("api_collection")
         self.tool_call_limit_error = None
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
@@ -484,6 +487,11 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.is_embed,
+                    self.user_id,
+                    self.thread_id,
+                    self.playground,
+                    self.api_collection,
                 )
             elif service == service_name["anthropic"]:
                 response = await loop.run_in_executor(
@@ -607,6 +615,11 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.is_embed,
+                    self.user_id,
+                    self.thread_id,
+                    self.playground,
+                    self.api_collection,
                 )
             if not response["success"]:
                 raise ApiCallError(response["error"], status_code=response.get("status_code"), service=service)

@@ -625,6 +625,9 @@ def build_service_params(
         "bridge_configurations": bridge_configurations,
         "owner_id": parsed_data.get("owner_id"),
         "limit": parsed_data.get("limit"),
+        "is_embed": parsed_data.get("is_embed"),
+        "user_id": parsed_data.get("user_id"),
+        "api_collection": parsed_data.get("api_collection"),
     }
 
 
@@ -834,6 +837,7 @@ async def process_background_tasks_for_error(parsed_data, error):
             error_log={"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]},
             error_type=alert_types["error"],
             bridge_name=parsed_data.get("name"),
+            org_name=parsed_data.get("org_name"),
             is_embed=parsed_data.get("is_embed"),
             user_id=parsed_data.get("user_id"),
             thread_id=parsed_data.get("thread_id"),

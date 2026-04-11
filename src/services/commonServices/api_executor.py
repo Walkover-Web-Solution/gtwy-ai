@@ -20,6 +20,11 @@ async def execute_api_call(
     service="",
     count=0,
     token_calculator=None,
+    is_embed=None,
+    user_id=None,
+    thread_id=None,
+    is_playground=None,
+    api_collection=None,
 ):
     try:
         # Start timer
@@ -52,15 +57,16 @@ async def execute_api_call(
                 asyncio.create_task(send_alert(
                     bridge_id=bridge_id,
                     org_id=org_id,
+                    error_log={"error": result.get("error"), "message": "Exception for the code", "message_id": message_id},
+                    error_type=alert_types["error"],
                     bridge_name=name,
-                    error_log={
-                        "error": result.get("error"),
-                        "message": "API call failed - no retry attempted",
-                        "message_id": message_id,
-                        "org_name": org_name,
-                        "configuration": serialize_config(configuration),
-                    },
-                    error_type=alert_types["retry_mechanism"],
+                    org_name=org_name,
+                    is_embed=is_embed,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    service=service,
+                    is_playground=is_playground,
+                    api_collection=api_collection,
                     is_external_error=False,
                 ))
 
