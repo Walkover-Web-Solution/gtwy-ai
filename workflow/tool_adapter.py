@@ -156,11 +156,19 @@ def extract_tool_schemas(tool_defs: list[dict]) -> list[dict]:
         required = set(tool_def.get("required") or [])
         params = []
         for param_name, param_meta in properties.items():
+            param_meta = param_meta or {}
+            # Include enum values in the type if present
+            enum_vals = param_meta.get("enum")
+            if enum_vals and isinstance(enum_vals, list):
+                param_type = f"enum({','.join(str(v) for v in enum_vals)})"
+            else:
+                param_type = param_meta.get("type", "string")
+            
             params.append(
                 {
                     "name": param_name,
-                    "type": (param_meta or {}).get("type", "string"),
-                    "description": (param_meta or {}).get("description", ""),
+                    "type": param_type,
+                    "description": param_meta.get("description", ""),
                     "required": param_name in required,
                 }
             )
@@ -220,10 +228,35 @@ def build_tool_payload_hint(tool_fn: Any) -> str:
     return "Use exact keys: " + ", ".join(parts) if parts else "No explicit args schema."
 
 
-def build_langchain_tools(parsed_data: dict, bridge_configurations: dict) -> tuple[list[StructuredTool], list[dict]]:
+_RESEARCH_TOOL_TYPES = {"RAG", inbuild_tools["Gtwy_Web_Search"]}
+
+
+def _classify_tool(tool_name: str, tool_id_and_name_mapping: dict) -> str:
+    """Classify a tool as 'research' or 'execution' based on its type in the mapping.
+    
+    Research tools (read/search): RAG, Gtwy_Web_Search — used by planner during research phase.
+    Execution tools (action/write): AGENT, HTTP, etc. — used by workers during task execution.
+    """
+    mapping = tool_id_and_name_mapping.get(tool_name, {})
+    tool_type = mapping.get("type", "")
+    if tool_type in _RESEARCH_TOOL_TYPES or tool_name in _RESEARCH_TOOL_TYPES:
+        return "research"
+    return "execution"
+
+
+def build_langchain_tools(parsed_data: dict, bridge_configurations: dict) -> tuple[list[StructuredTool], list[StructuredTool], list[dict]]:
+    """Build LangChain tools separated by purpose.
+    
+    Returns: (research_tools, execution_tools, tool_schemas)
+    - research_tools: Read/search tools for planner's research phase
+    - execution_tools: Action/write tools for worker task execution
+    - tool_schemas: Schema descriptions for all tools (planner sees all schemas for planning)
+    """
     tool_defs = parsed_data.get("tools") or []
     executor = WorkflowToolExecutor(parsed_data, bridge_configurations)
-    tools: list[StructuredTool] = []
+    tool_id_and_name_mapping = parsed_data.get("tool_id_and_name_mapping") or {}
+    research_tools: list[StructuredTool] = []
+    execution_tools: list[StructuredTool] = []
 
     for tool_def in tool_defs:
         if tool_def.get("type") != "function" or not tool_def.get("name"):
@@ -272,13 +305,16 @@ def build_langchain_tools(parsed_data: dict, bridge_configurations: dict) -> tup
             normalized_kwargs = {_field_aliases.get(key, key): value for key, value in kwargs.items()}
             return await executor.execute(_tool_name, normalized_kwargs)
 
-        tools.append(
-            StructuredTool.from_function(
-                coroutine=_tool_runner,
-                name=tool_def["name"],
-                description=tool_def.get("description", ""),
-                args_schema=args_schema,
-            )
+        tool = StructuredTool.from_function(
+            coroutine=_tool_runner,
+            name=tool_def["name"],
+            description=tool_def.get("description", ""),
+            args_schema=args_schema,
         )
 
-    return tools, extract_tool_schemas(tool_defs)
+        if _classify_tool(tool_def["name"], tool_id_and_name_mapping) == "research":
+            research_tools.append(tool)
+        else:
+            execution_tools.append(tool)
+
+    return research_tools, execution_tools, extract_tool_schemas(tool_defs)

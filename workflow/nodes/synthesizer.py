@@ -2,7 +2,7 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from workflow.llm import create_llm
+from workflow.llm import create_llm, extract_text_from_response
 from workflow.prompts import FINAL_ANSWER_PROMPT
 
 
@@ -49,13 +49,22 @@ def make_synthesizer_node():
             temperature=config.get("planner_temperature", 0.4),
             streaming=True,
             json_mode=bool(response_schema),
+            service=config.get("synthesizer_service", "openai"),
         )
         full_text = ""
         async for chunk in llm.astream([
             SystemMessage(content=prompt),
             HumanMessage(content="Produce the final consolidated output now."),
         ]):
-            full_text += chunk.content or ""
+            # Safely extract text from chunk, handling Anthropic content blocks
+            c = chunk.content
+            if isinstance(c, str):
+                full_text += c
+            elif isinstance(c, list):
+                # Anthropic returns list of content blocks; extract text blocks only
+                for block in c:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        full_text += block.get("text", "")
 
         return {"final_answer": full_text}
 

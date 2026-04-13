@@ -18,14 +18,14 @@ from workflow.nodes import (
 from workflow.state import WorkflowState
 
 
-def build_workflow_graph(tools, tool_schemas, checkpointer):
+def build_workflow_graph(research_tools, execution_tools, tool_schemas, checkpointer):
     graph = StateGraph(WorkflowState)
 
-    graph.add_node("planner", make_planner_node(tools, tool_schemas))
+    graph.add_node("planner", make_planner_node(research_tools, tool_schemas))
     graph.add_node("wait_for_human", make_human_input_node())
     graph.add_node("wait_for_approval", make_plan_approval_node())
     graph.add_node("wait_for_step_approval", make_step_approval_node())
-    graph.add_node("executor", make_executor_node(tools))
+    graph.add_node("executor", make_executor_node(execution_tools))
     graph.add_node("synthesizer", make_synthesizer_node())
 
     graph.set_entry_point("planner")

@@ -114,10 +114,13 @@ def _build_initial_state(parsed_data: dict, tool_schemas: list[dict], run_id: st
         "api_key": parsed_data.get("apikey"),
         "user_config": {
             "planner_model": parsed_data.get("model"),
+            "planner_service": parsed_data.get("service", "openai"),
             "planner_temperature": parsed_data.get("configuration", {}).get("temperature", 0.3),
             "executor_model": parsed_data.get("model"),
+            "executor_service": parsed_data.get("service", "openai"),
             "executor_temperature": parsed_data.get("configuration", {}).get("temperature", 0.4),
             "synthesizer_model": parsed_data.get("model"),
+            "synthesizer_service": parsed_data.get("service", "openai"),
             "require_plan_approval": parsed_data.get("configuration", {}).get("require_plan_approval", True),
             "require_step_approval": parsed_data.get("configuration", {}).get("require_step_approval", False),
             "system_prompt": parsed_data.get("configuration", {}).get("prompt", ""),
@@ -147,7 +150,6 @@ def _build_initial_state(parsed_data: dict, tool_schemas: list[dict], run_id: st
         "planner_response": None,
         "worker_messages": None,
         "runtime_variables": parsed_data.get("variables") or {},
-        "response_format": parsed_data.get("response_format") or {},
         "response_schema": None,
     }
 
@@ -234,60 +236,93 @@ def _extract_tool_calls_from_state(final_state: dict) -> list[dict]:
 
 
 def _format_workflow_message(final_state: dict, interrupt_payload: dict | None) -> str:
-    """Format the AI message based on workflow state and interrupts."""
+    """Format the AI message for the user in a clean, friendly way."""
     if interrupt_payload:
         interrupt_type = interrupt_payload.get("type", "")
-        
+
         if interrupt_type == "planner_question":
             question = interrupt_payload.get("question", "")
             options = interrupt_payload.get("options", [])
             thinking = interrupt_payload.get("planner_thinking", [])
-            
+
             msg_parts = []
-            if thinking:
-                msg_parts.append("**Planning Analysis:**")
-                for step in thinking:
-                    if step.get("type") == "reasoning":
-                        msg_parts.append(f"- {step.get('content', '')}")
-            
-            msg_parts.append(f"\n**Question:** {question}")
+            # Show brief reasoning context if available
+            reasoning = [s.get("content", "") for s in (thinking or []) if s.get("type") in ("reasoning", "plan_reasoning") and s.get("content")]
+            if reasoning:
+                msg_parts.append(reasoning[-1])
+                msg_parts.append("")
+
+            msg_parts.append(question)
+
             if options:
-                msg_parts.append("\n**Options:**")
+                msg_parts.append("")
                 for i, opt in enumerate(options, 1):
-                    msg_parts.append(f"{i}. {opt}")
-            
+                    msg_parts.append(f"  {i}. {opt}")
+
             return "\n".join(msg_parts)
-        
+
         elif interrupt_type == "worker_clarification":
             question = interrupt_payload.get("question", "")
+            # Find task title from state for friendlier message
             task_id = interrupt_payload.get("task_id", "")
-            return f"**Worker needs clarification for task {task_id}:**\n{question}"
-        
+            task_title = ""
+            for t in final_state.get("tasks", []):
+                if t.get("id") == task_id:
+                    task_title = t.get("title", "")
+                    break
+            if task_title:
+                return f"While working on \"{task_title}\", I need some help:\n\n{question}"
+            return f"I need some clarification to continue:\n\n{question}"
+
         elif interrupt_type == "step_approval":
             task = interrupt_payload.get("task", {})
-            return f"**Approval needed for task:**\n{task.get('title', '')}\n{task.get('description', '')}"
-        
+            title = task.get("title", "")
+            description = task.get("description", "")
+            tool = task.get("tool_name", "")
+            msg_parts = [f"I'm about to run the next step: **{title}**"]
+            if description:
+                msg_parts.append(f"\n{description}")
+            if tool:
+                msg_parts.append(f"\nTool: `{tool}`")
+            msg_parts.append("\nShould I proceed?")
+            return "\n".join(msg_parts)
+
         elif interrupt_type == "plan_approval":
             tasks = interrupt_payload.get("tasks", [])
-            msg_parts = ["**Plan created and awaiting approval:**"]
-            for task in tasks:
-                msg_parts.append(f"- {task.get('title', '')}: {task.get('description', '')}")
+            thinking = interrupt_payload.get("planner_thinking", [])
+            goal = interrupt_payload.get("goal", "")
+
+            msg_parts = []
+            # Show reasoning summary if present
+            reasoning = [s.get("content", "") for s in (thinking or []) if s.get("type") in ("reasoning", "plan_reasoning") and s.get("content")]
+            if reasoning:
+                msg_parts.append(reasoning[-1])
+                msg_parts.append("")
+
+            msg_parts.append(f"Here's my plan ({len(tasks)} step{'s' if len(tasks) != 1 else ''}):\n")
+            for i, task in enumerate(tasks, 1):
+                title = task.get("title", f"Step {i}")
+                tool = task.get("tool_name", "")
+                tool_tag = f" (using `{tool}`)" if tool else ""
+                msg_parts.append(f"  {i}. **{title}**{tool_tag}")
+            msg_parts.append("\nDo you approve this plan?")
             return "\n".join(msg_parts)
-    
-    # No interrupt - return final answer
+
+    # No interrupt — return final answer
     final_answer = final_state.get("final_answer", "")
     if final_answer:
         return final_answer
-    
-    # Fallback: show task completion summary
+
+    # Fallback: task completion summary
     completed = [t for t in final_state.get("tasks", []) if t.get("status") == "completed"]
     if completed:
-        msg_parts = ["**Tasks completed:**"]
+        msg_parts = [f"Completed {len(completed)} task{'s' if len(completed) != 1 else ''}:"]
         for task in completed:
-            msg_parts.append(f"- {task.get('title', '')}: {task.get('result', '')[:200]}")
+            result_preview = (task.get("result", "") or "")[:200]
+            msg_parts.append(f"  - **{task.get('title', '')}**: {result_preview}")
         return "\n".join(msg_parts)
-    
-    return "Workflow in progress..."
+
+    return "Working on it..."
 
 
 def _build_history_params(session: WorkflowSession, content: str, message_id: str, response: dict) -> dict:
@@ -376,7 +411,8 @@ async def _wait_for_human_input(run_id: str) -> None:
                 await sub_task
             except asyncio.CancelledError:
                 pass
-        registry.remove(run_id)
+        # Don't remove session — keep for recovery from checkpoint if user reconnects
+        registry.remove_ws(run_id)
     finally:
         HUMAN_INPUT_QUEUES.pop(run_id, None)
 
@@ -493,12 +529,12 @@ def _ensure_ttl_index() -> None:
 
 
 async def create_advanced_workflow_session(parsed_data: dict, bridge_configurations: dict) -> WorkflowSession:
-    tools, tool_schemas = build_langchain_tools(parsed_data, bridge_configurations)
+    research_tools, execution_tools, tool_schemas = build_langchain_tools(parsed_data, bridge_configurations)
 
     _ensure_ttl_index()
     checkpointer = MongoDBSaver(_checkpoint_mongo_client, Config.MONGODB_DATABASE_NAME)
 
-    compiled_graph = build_workflow_graph(tools, tool_schemas, checkpointer)
+    compiled_graph = build_workflow_graph(research_tools, execution_tools, tool_schemas, checkpointer)
 
     # Use thread_id + sub_thread_id as session/connection key and LangGraph thread key
     thread_id = parsed_data.get('thread_id')
@@ -598,10 +634,12 @@ async def stream_and_emit_workflow(
     content, response = _build_workflow_response_payload(session.run_id, final_state, interrupt_payload)
     response["data"]["message_id"] = message_id
 
-    # Cleanup session when workflow completes (not interrupted)
+    # Keep session alive after completion — checkpoint persists in MongoDB for 7 days.
+    # If user reconnects or sends a follow-up, we can resume from checkpoint.
+    # Only clean up WebSocket and input queue, not the session itself.
     if not interrupt_payload:
-        await unregister_session_from_redis(session.run_id)
-        registry.remove(session.run_id)
+        registry.remove_ws(session.run_id)
+        HUMAN_INPUT_QUEUES.pop(session.run_id, None)
 
     await emit("done", "system", {
         "final_answer": final_answer,
@@ -624,10 +662,53 @@ async def stream_and_emit_workflow(
 # Public API: resume & execute
 # ---------------------------------------------------------------------------
 
-async def resume_advanced_workflow(run_id: str, resume_value: Any) -> dict:
+async def _recover_session(run_id: str, parsed_data: dict, bridge_configurations: dict) -> WorkflowSession | None:
+    """Rebuild a session from MongoDB checkpoint when the in-process registry lost it.
+    
+    This handles: server restart, worker switch, connection drop, or timeout cleanup.
+    The MongoDB checkpoint persists for 7 days, so we can always recover.
+    """
+    try:
+        research_tools, execution_tools, tool_schemas = build_langchain_tools(parsed_data, bridge_configurations)
+        _ensure_ttl_index()
+        checkpointer = MongoDBSaver(_checkpoint_mongo_client, Config.MONGODB_DATABASE_NAME)
+        compiled_graph = build_workflow_graph(research_tools, execution_tools, tool_schemas, checkpointer)
+
+        thread_id = parsed_data.get("thread_id")
+        sub_thread_id = parsed_data.get("sub_thread_id")
+        thread_key = f"{thread_id}:{sub_thread_id}"
+
+        session = WorkflowSession(
+            run_id=run_id,
+            graph=compiled_graph,
+            config={"configurable": {"thread_id": thread_key}},
+            parsed_data=parsed_data,
+            bridge_configurations=bridge_configurations,
+            tool_schemas=tool_schemas,
+        )
+
+        # Verify checkpoint exists
+        snapshot = await compiled_graph.aget_state(session.config)
+        if not snapshot or not snapshot.values:
+            logger.warning(f"[Workflow] No checkpoint found for run_id={run_id}")
+            return None
+
+        session.last_state = dict(snapshot.values)
+        registry.register(session)
+        await register_session_in_redis(run_id)
+        logger.info(f"[Workflow] Session recovered from checkpoint for run_id={run_id}")
+        return session
+    except Exception as e:
+        logger.error(f"[Workflow] Session recovery failed for run_id={run_id}: {e}")
+        return None
+
+
+async def resume_advanced_workflow(run_id: str, resume_value: Any, parsed_data: dict = None, bridge_configurations: dict = None) -> dict:
     session = registry.get(run_id)
+    if session is None and parsed_data and bridge_configurations:
+        session = await _recover_session(run_id, parsed_data, bridge_configurations)
     if session is None:
-        raise ValueError(f"Workflow session {run_id} not found")
+        raise ValueError(f"Workflow session {run_id} not found — checkpoint may have expired")
 
     message_id = session.parsed_data.get("message_id", run_id)
     result = await stream_and_emit_workflow(session, Command(resume=resume_value), message_id)
@@ -645,9 +726,27 @@ async def execute_advanced_workflow(
 ) -> JSONResponse:
     session = await create_advanced_workflow_session(parsed_data, bridge_configurations)
 
-    initial_state = _build_initial_state(parsed_data, session.tool_schemas, session.run_id)
+    # Check if there's an existing checkpoint for this run_id (reconnect / connection drop)
+    existing_snapshot = await session.graph.aget_state(session.config)
+    if existing_snapshot and existing_snapshot.values:
+        prev_state = dict(existing_snapshot.values)
+        session.last_state = prev_state
+        logger.info(f"[Workflow] Resuming from existing checkpoint for run_id={session.run_id}")
 
-    result = await stream_and_emit_workflow(session, initial_state, parsed_data["message_id"])
+        if existing_snapshot.next:
+            # Workflow was interrupted mid-run — resume it with the new user message as input
+            user_input = parsed_data.get("user", "")
+            result = await stream_and_emit_workflow(session, Command(resume=user_input), parsed_data["message_id"])
+        else:
+            # Workflow completed previously — start fresh with new goal but carry context
+            initial_state = _build_initial_state(parsed_data, session.tool_schemas, session.run_id)
+            # Carry over completed context from previous run
+            initial_state["scratchpad"] = prev_state.get("scratchpad", [])
+            result = await stream_and_emit_workflow(session, initial_state, parsed_data["message_id"])
+    else:
+        # Fresh workflow — no prior checkpoint
+        initial_state = _build_initial_state(parsed_data, session.tool_schemas, session.run_id)
+        result = await stream_and_emit_workflow(session, initial_state, parsed_data["message_id"])
 
     if not result["success"]:
         raise ValueError(result)
