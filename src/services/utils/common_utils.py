@@ -771,33 +771,6 @@ async def process_background_tasks(
             parsed_data["version_id"],
         )
 
-        # For reruns, directly UPDATE the existing conversation log instead of inserting via queue
-        if parsed_data.get("is_rerun"):
-            from src.db_services.conversationDbService import update_conversation_log
-
-            update_data = payload.get("conversation_log_data", {})
-            # Remove identity fields that must not be overwritten
-            for key in ("message_id", "user", "thread_id", "sub_thread_id", "bridge_id", "org_id"):
-                update_data.pop(key, None)
-            update_data["updated_at"] = datetime.now()
-
-            await update_conversation_log(parsed_data["message_id"], parsed_data["org_id"], update_data)
-
-            asyncio.create_task(
-                _update_history_redis(
-                    [parsed_data["usage"]],
-                    result["historyParams"],
-                    parsed_data["version_id"],
-                    thread_info,
-                )
-            )
-
-            # Still publish metrics (but skip save_history)
-            data = await make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info)
-            data = make_json_serializable(data)
-            await sub_queue_obj.publish_message(data)
-            return
-
         history_entries.append(payload)
 
         asyncio.create_task(
@@ -842,9 +815,6 @@ async def process_background_tasks_for_error(parsed_data, error):
             api_collection=parsed_data.get("api_collection"),
             is_external_error=False,
         ),
-        _publish_history_to_queue(
-            [parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]
-        ),
         save_sub_thread_id_and_name(
             parsed_data["thread_id"],
             parsed_data["sub_thread_id"],
@@ -855,6 +825,13 @@ async def process_background_tasks_for_error(parsed_data, error):
             parsed_data["user"],
         ),
     ]
+
+    tasks.append(
+        _publish_history_to_queue(
+            [parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]
+        )
+    )
+
     await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)
 
 

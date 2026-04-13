@@ -4,6 +4,7 @@ import json
 import operator
 import re
 import traceback
+import uuid
 from datetime import datetime
 from functools import reduce
 
@@ -558,12 +559,13 @@ def build_rerun_queue_message(log, data_to_send):
     body = copy.deepcopy(data_to_send.get("body", {}))
     body.update({
         "user": log["user"],
-        "message_id": log["message_id"],
+        "message_id": str(uuid.uuid4()),
         "thread_id": log.get("thread_id"),
         "sub_thread_id": log.get("sub_thread_id"),
         "variables": log.get("variables") or {},
         "user_urls": log.get("user_urls") or [],
         "is_rerun": True,
+        "original_message_id": log["message_id"],
     })
     body.setdefault("settings", {}).update({"response_format": {"type": "default"}, "stream": False})
     return {"body": body, "state": data_to_send.get("state", {}), "path_params": data_to_send.get("path_params", {})}
