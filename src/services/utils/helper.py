@@ -4,6 +4,7 @@ import json
 import operator
 import re
 import traceback
+import uuid
 from datetime import datetime
 from functools import reduce
 
@@ -35,6 +36,7 @@ from ..commonServices.openAI.openai_completion_response import OpenaiCompletion
 from ..commonServices.openAI.openai_embedding_call import OpenaiEmbedding
 from ..commonServices.openAI.openai_response import OpenaiResponse
 from ..commonServices.openRouter.openRouter_call import OpenRouter
+from ..cache_service import make_json_serializable
 
 
 class Helper:
@@ -556,14 +558,23 @@ class Helper:
 def build_rerun_queue_message(log, data_to_send):
     """Build an independent queue message for a single rerun from the conversation log."""
     body = copy.deepcopy(data_to_send.get("body", {}))
+    original_thread_id = log.get("thread_id")
+    original_sub_thread_id = log.get("sub_thread_id")
+    rerun_suffix = uuid.uuid4().hex[:8]
+    rerun_thread_base = original_thread_id or original_sub_thread_id or "thread"
+    rerun_sub_thread_base = original_sub_thread_id or original_thread_id or "subthread"
+
     body.update({
         "user": log["user"],
-        "message_id": log["message_id"],
-        "thread_id": log.get("thread_id"),
-        "sub_thread_id": log.get("sub_thread_id"),
+        "message_id": str(uuid.uuid1()),
+        "thread_id": f"rerun_{rerun_thread_base}_{rerun_suffix}",
+        "sub_thread_id": f"rerun_{rerun_sub_thread_base}_{rerun_suffix}",
         "variables": log.get("variables") or {},
         "user_urls": log.get("user_urls") or [],
         "is_rerun": True,
+        "original_message_id": log["message_id"],
+        "original_thread_id": original_thread_id,
+        "original_sub_thread_id": original_sub_thread_id,
     })
     body.setdefault("settings", {}).update({"response_format": {"type": "default"}, "stream": False})
     return {"body": body, "state": data_to_send.get("state", {}), "path_params": data_to_send.get("path_params", {})}
@@ -597,7 +608,8 @@ async def queue_rerun_messages(data_to_send, queue_obj, org_id, message_ids=None
         msg = build_rerun_queue_message(log, data_to_send)
         # For thread-based rerun, attach conversations as explicit history
         if conversations:
-            msg["body"].setdefault("configuration", {})["conversation"] = conversations
+            serialized_conversations = make_json_serializable(conversations)
+            msg["body"].setdefault("configuration", {})["conversation"] = serialized_conversations
         await queue_obj.publish_message(msg)
         queued.append(mid)
 
