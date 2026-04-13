@@ -6,7 +6,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import Field as PydanticField, create_model
 
 from globals import logger
-from workflow.llm import create_llm
+from workflow.llm import create_llm, extract_text_from_response, extract_json_from_text
 from workflow.tool_adapter import build_tool_payload_hint, normalize_tool_payload
 from workflow.prompts import EXECUTOR_SYSTEM_PROMPT, REFLECTION_PROMPT, Markers
 
@@ -51,9 +51,9 @@ def _create_ask_planner_tool() -> StructuredTool:
     )
 
 
-async def _reflect_on_result(task: dict, result_text: str, api_key: str, model: str) -> dict:
+async def _reflect_on_result(task: dict, result_text: str, api_key: str, model: str, service: str = "openai") -> dict:
     """Quality review of executor output. Returns {passed, quality_score, reasoning, improvement_hint}."""
-    llm = create_llm(model=model, api_key=api_key, temperature=0.1, json_mode=True)
+    llm = create_llm(model=model, api_key=api_key, temperature=0.1, json_mode=True, service=service)
     prompt = REFLECTION_PROMPT.format(
         task_title=task["title"],
         task_description=task["description"],
@@ -63,7 +63,7 @@ async def _reflect_on_result(task: dict, result_text: str, api_key: str, model: 
     try:
         response = await llm.ainvoke([SystemMessage(content=prompt),
                                       HumanMessage(content="Evaluate now.")])
-        return json.loads(response.content)
+        return extract_json_from_text(extract_text_from_response(response))
     except Exception as e:
         logger.error(f"[Workflow] Reflection failed for task '{task['title']}': {e}")
         return {"passed": True, "quality_score": 7, "reasoning": "Reflection failed", "improvement_hint": ""}
@@ -88,6 +88,7 @@ async def _execute_single_task(
     llm = create_llm(
         model=model, api_key=state["api_key"], temperature=temperature,
         streaming=True, tools=all_tools,
+        service=state.get("user_config", {}).get("executor_service", "openai"),
     )
 
     planner_response = state.get("planner_response")
@@ -212,8 +213,9 @@ def make_executor_node(tools: list[StructuredTool]):
         replan_reason: str | None = None
 
         # Run all dependency-free tasks in parallel
-        coros = [
-            _execute_single_task(
+        # Track which coroutine corresponds to which task index
+        coros_with_idx = [
+            (_execute_single_task(
                 task=tasks[idx],
                 task_idx=idx,
                 state=state,
@@ -224,20 +226,18 @@ def make_executor_node(tools: list[StructuredTool]):
                 completed=completed,
                 scratchpad=scratchpad,
                 saved_messages=saved_messages,
-            )
+            ), idx)
             for idx in runnable
         ]
-        results = await asyncio.gather(*coros, return_exceptions=True)
+        results = await asyncio.gather(*[coro for coro, _ in coros_with_idx], return_exceptions=True)
 
-        for res in results:
+        # Match results to task indices correctly
+        for (_, task_idx), res in zip(coros_with_idx, results):
             if isinstance(res, Exception):
-                # Find the task that raised — mark it failed
-                for idx in runnable:
-                    if tasks[idx]["status"] == "pending":
-                        tasks[idx] = {**tasks[idx], "status": "failed", "result": str(res)}
-                        needs_replan = True
-                        replan_reason = f"Task '{tasks[idx]['title']}' raised exception: {res}"
-                        break
+                # Mark the CORRECT task that raised as failed
+                tasks[task_idx] = {**tasks[task_idx], "status": "failed", "result": str(res)}
+                needs_replan = True
+                replan_reason = f"Task '{tasks[task_idx]['title']}' raised exception: {res}"
                 continue
 
             task_idx = res["task_idx"]
@@ -263,7 +263,7 @@ def make_executor_node(tools: list[StructuredTool]):
             # Self-reflection (skip for simple tasks)
             reflection = None
             if enable_reflection and task.get("estimated_complexity", "moderate") != "simple":
-                reflection_result = await _reflect_on_result(task, result_text, state["api_key"], model)
+                reflection_result = await _reflect_on_result(task, result_text, state["api_key"], model, service=config.get("executor_service", "openai"))
                 passed = reflection_result.get("passed", True)
                 reflection = json.dumps(reflection_result)
 
@@ -283,7 +283,7 @@ def make_executor_node(tools: list[StructuredTool]):
                         scratchpad=scratchpad,
                     )
                     result_text = retry_res["result_text"]
-                    reflection_result = await _reflect_on_result(task, result_text, state["api_key"], model)
+                    reflection_result = await _reflect_on_result(task, result_text, state["api_key"], model, service=config.get("executor_service", "openai"))
                     passed = reflection_result.get("passed", True)
                     reflection = json.dumps(reflection_result)
 
@@ -308,7 +308,7 @@ def make_executor_node(tools: list[StructuredTool]):
             "completed_tasks": completed,
             "current_task_index": next_idx,
             "scratchpad": scratchpad,
-            "step_approved": False,
+            "step_approved": False,  # Reset for next cycle — ensures fresh approval for subsequent tasks
             "needs_replan": needs_replan,
             "replan_reason": replan_reason,
             "needs_worker_clarification": needs_worker_clarification,

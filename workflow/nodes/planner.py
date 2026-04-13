@@ -5,12 +5,13 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from globals import logger
-from workflow.llm import create_llm
+from workflow.llm import create_llm, extract_text_from_response, extract_json_from_text
 from workflow.tool_adapter import normalize_tool_payload
 from workflow.prompts import (
     PLANNER_SYSTEM_PROMPT,
     RESEARCH_SYSTEM_PROMPT,
     REPLAN_SYSTEM_PROMPT,
+    WORKER_CLARIFICATION_PROMPT,
     Markers,
 )
 
@@ -67,7 +68,6 @@ def _parse_tasks(parsed: dict) -> list[dict]:
             "acceptance_criteria": raw_task.get("acceptance_criteria", "Task completed successfully"),
             "estimated_complexity": raw_task.get("estimated_complexity", "moderate"),
             "reflection": None,
-            "worker_thread_id": str(uuid.uuid4()),
         })
     return tasks
 
@@ -112,6 +112,7 @@ async def _run_research_phase(
     research_llm = create_llm(
         model=model, api_key=state["api_key"], temperature=temperature,
         streaming=True, tools=tools,
+        service=state.get("user_config", {}).get("planner_service", "openai"),
     )
     messages = [
         SystemMessage(content=RESEARCH_SYSTEM_PROMPT + "\n\n" + base_prompt),
@@ -158,15 +159,72 @@ def make_planner_node(tools: list[StructuredTool], tool_schemas: list[dict]):
         is_replan = state.get("needs_replan", False)
         logger.info(f"[Workflow] Planner node started (replan={is_replan}, model={model})")
 
-        # Worker clarification path — planner just forwards the question to the human
+        # Worker clarification path — planner tries to resolve itself first, only escalates to user if it can't
         if state.get("needs_worker_clarification") and state.get("worker_question"):
-            return {
-                "needs_question": True,
-                "question_text": state["worker_question"],
-                "question_options": [],
-                "planner_thinking": [{"type": "reasoning", "content": "Worker needs clarification before continuing."}],
-                "needs_worker_clarification": False,
-            }
+            # Find the task the worker is stuck on
+            stuck_task = {}
+            for t in state.get("tasks", []):
+                if t.get("id") == state.get("worker_question_task_id"):
+                    stuck_task = t
+                    break
+
+            completed = state.get("completed_tasks") or []
+            completed_summary = "\n".join(
+                f"- {c['title']}: {c['result'][:200]}" for c in completed
+            ) if completed else "None"
+            plan_summary = "\n".join(
+                f"- [{t['status']}] {t['title']}: {t['description'][:150]}" for t in state.get("tasks", [])
+            ) if state.get("tasks") else "No tasks"
+
+            clarification_prompt = WORKER_CLARIFICATION_PROMPT.format(
+                goal=state["goal"],
+                task_title=stuck_task.get("title", "Unknown"),
+                task_description=stuck_task.get("description", ""),
+                worker_question=state["worker_question"],
+                completed_summary=completed_summary,
+                plan_summary=plan_summary,
+            )
+
+            llm = create_llm(
+                model=model, api_key=state["api_key"], temperature=temperature,
+                json_mode=True, service=config.get("planner_service", "openai"),
+            )
+            try:
+                response = await llm.ainvoke([
+                    SystemMessage(content=clarification_prompt),
+                    HumanMessage(content="Resolve the worker's question now."),
+                ])
+                response_text = extract_text_from_response(response)
+                parsed_response = extract_json_from_text(response_text)
+            except Exception as e:
+                logger.error(f"[Workflow] Planner clarification LLM failed: {e}")
+                parsed_response = {"mode": "escalate", "reasoning": str(e), "question": {"text": state["worker_question"], "options": []}}
+
+            thinking = [{"type": "reasoning", "content": parsed_response.get("reasoning", "")}]
+
+            if parsed_response.get("mode") == "answer":
+                # Planner resolved it — send answer back to executor
+                logger.info(f"[Workflow] Planner resolved worker question for task '{stuck_task.get('title')}'")
+                return {
+                    "planner_response": parsed_response["answer"],
+                    "needs_worker_clarification": False,
+                    "worker_question": None,
+                    "planner_thinking": thinking,
+                    "needs_question": False,
+                    "worker_messages": state.get("worker_messages"),
+                }
+            else:
+                # Planner can't resolve — escalate to user
+                logger.info(f"[Workflow] Planner escalating worker question to user for task '{stuck_task.get('title')}'")
+                escalate_q = parsed_response.get("question", {})
+                return {
+                    "needs_question": True,
+                    "question_text": escalate_q.get("text", state["worker_question"]),
+                    "question_options": escalate_q.get("options", []),
+                    "planner_thinking": thinking,
+                    "needs_worker_clarification": False,
+                    "worker_messages": state.get("worker_messages"),
+                }
 
         tool_block = _format_tool_schemas(tool_schemas)
 
@@ -211,12 +269,15 @@ def make_planner_node(tools: list[StructuredTool], tool_schemas: list[dict]):
             temperature=temperature,
             streaming=True,
             json_mode=True,
+            service=config.get("planner_service", "openai"),
         )
         response = await llm.ainvoke([
             SystemMessage(content=plan_prompt),
             HumanMessage(content=user_message),
         ])
-        parsed = json.loads(response.content)
+        # Safely extract text from response (handles Anthropic content blocks)
+        response_text = extract_text_from_response(response)
+        parsed = extract_json_from_text(response_text)
         reasoning = parsed.get("reasoning", "")
         if reasoning:
             thinking_steps.append({"type": "plan_reasoning", "content": reasoning})

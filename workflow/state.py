@@ -13,7 +13,6 @@ class TaskItem(TypedDict):
     acceptance_criteria: str
     estimated_complexity: str
     reflection: Optional[str]
-    worker_thread_id: Optional[str]
 
 
 class UserConfig(TypedDict, total=False):
@@ -24,7 +23,6 @@ class UserConfig(TypedDict, total=False):
     synthesizer_model: str
     require_plan_approval: bool
     require_step_approval: bool
-    max_tokens: int
     system_prompt: str
     enable_reflection: bool
     max_retries: int
@@ -50,7 +48,6 @@ class WorkflowState(TypedDict):
     plan_revision_count: int
     needs_replan: bool
     replan_reason: Optional[str]
-    response_format: Optional[dict]
     response_schema: Optional[dict]
 
     # --- Human interaction ---

@@ -6,7 +6,7 @@ def route_after_planner(state: WorkflowState) -> str:
         return "executor"
     if state.get("needs_question"):
         return "wait_for_human"
-    require_plan_approval = state.get("user_config", {}).get("require_plan_approval", False)
+    require_plan_approval = state.get("user_config", {}).get("require_plan_approval", True)
     if require_plan_approval and not state.get("plan_approved"):
         return "wait_for_approval"
     return "executor"
