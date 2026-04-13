@@ -67,8 +67,8 @@ def build_webhook_payload(details_payload, error_type, bridge_id, org_id, org_na
 async def send_internal_alert(payload, error_location):
     if error_location:
         payload["error_location"] = error_location
-    if Config.ENVIROMENT:
-        payload["ENVIROMENT"] = Config.ENVIROMENT
+    if Config.ENVIRONMENT:
+        payload["ENVIRONMENT"] = Config.ENVIRONMENT
     
     await fetch(DEFAULT_WEBHOOK_URL, method="POST", json_body=payload)
 

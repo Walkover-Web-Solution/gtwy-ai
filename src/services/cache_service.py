@@ -9,7 +9,7 @@ from globals import logger
 # Initialize the Redis client
 client = Redis.from_url(Config.REDIS_URI)  # Adjust these parameters as needed
 
-REDIS_PREFIX = "AIMIDDLEWARE_"
+REDIS_PREFIX = f"AIMIDDLEWARE_{Config.ENVIRONMENT}_"
 DEFAULT_REDIS_TTL = 172800  # 2 days
 
 

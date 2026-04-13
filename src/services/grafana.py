@@ -9,7 +9,7 @@ try:
         server_address=Config.PROFILES_SERVER_ADDRESS,
         sample_rate=5,
         tags={
-        "env": Config.ENVIROMENT,
+        "env": Config.ENVIRONMENT,
         "service_name": Config.OTEL_SERVICE_NAME,
         "service_type": 'consumer' if Config.CONSUMER_STATUS == 'true' else 'producer'
     }

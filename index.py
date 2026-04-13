@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
         consume_task = asyncio.create_task(consume_messages_in_executor())
         batch_task = asyncio.create_task(repeat_function())
 
-    asyncio.create_task(init_async_dbservice()) if Config.ENVIROMENT == "LOCAL" else await init_async_dbservice()
+    asyncio.create_task(init_async_dbservice()) if Config.ENVIRONMENT == "LOCAL" else await init_async_dbservice()
 
     logger.info("Starting MongoDB change stream listener as a background task.")
     change_stream_task = asyncio.create_task(background_listen_for_changes())

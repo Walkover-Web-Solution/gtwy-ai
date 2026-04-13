@@ -16,7 +16,7 @@ class Queue(BaseQueue):
         return cls._instance
 
     def __init__(self):
-        queue_name = Config.QUEUE_NAME or f"AI-MIDDLEARE-DEFAULT-{Config.ENVIROMENT}"
+        queue_name = Config.QUEUE_NAME or f"AI-MIDDLEARE-DEFAULT-{Config.ENVIRONMENT}"
         super().__init__(queue_name)
         print("Queue Service Initialized")
 
