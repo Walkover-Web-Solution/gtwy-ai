@@ -69,6 +69,14 @@ class StreamingService:
             payload["fallback_error"] = fallback_error
         await self._emit(payload)
 
+    async def emit_planning(self):
+        """Emit a planning mode event."""
+        await self._emit({"event": "planning"})
+
+    async def emit_execution(self):
+        """Emit an execution mode event."""
+        await self._emit({"event": "execution"})
+
     async def generator(self):
         """SSE mode only — async generator that drains the queue for StreamingResponse."""
         while True:

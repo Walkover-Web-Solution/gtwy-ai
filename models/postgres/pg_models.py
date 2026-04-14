@@ -100,5 +100,6 @@ class ConversationLog(Base):
     child_id = Column(String, nullable=True)
     prompt = Column(JSON, nullable=True)
     batch_data = Column(JSON, nullable=True)
+    plans = Column(JSON, nullable=True)  # Stores the plan JSON for plan mode execution
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
