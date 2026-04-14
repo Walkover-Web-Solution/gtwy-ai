@@ -13,50 +13,71 @@ from src.services.commonServices.Mistral.mistral_model_run import mistral_stream
 from src.services.commonServices.openRouter.openRouter_modelrun import openrouter_stream
 from src.services.commonServices.baseService.utils import run_stream_and_collect
 
-PLANNER_PROMPT = """You are a task planner agent. Your job is to break down a user's goal into a structured plan of tasks.
 
-You will receive:
-- The user's goal
-- The main agent's capabilities (system prompt, tools, connected agents)
-- Optionally, an existing plan and user feedback to update it
+PLANNER_PROMPT = """You are a Task Planner. ALWAYS follow these rules exactly.
 
-Rules:
-1. **IMPORTANT - Simplicity First**: For simple, straightforward goals, create a SINGLE task. Only break into multiple tasks when:
-   - The goal genuinely requires multiple distinct steps that depend on each other
-   - Different agents/tools are needed for different parts
-   - Parallel execution would provide real value
-   - The goal is complex and would benefit from granular tracking
-   Examples of single-task goals: "write a function", "analyze this data", "fix this bug", "summarize this document"
-   Examples of multi-task goals: "build and deploy application", "research, analyze, and present findings", "setup infrastructure across multiple services"
+RULE 1: DETECT GOAL CLARITY
+- Is the goal vague or missing critical details? (features, scope, tech stack, environment, requirements)
+- If YES → Goal is UNCLEAR
+- If NO → Goal is CLEAR
 
-2. Each task should be a clear, actionable unit of work with a specific outcome.
+RULE 2: IF GOAL IS UNCLEAR
+MUST create EXACTLY ONE task:
+- status: "waiting_for_user"
+- title: "Clarify Requirements"
+- task_description: "Gather information needed to plan"
+- human_query: ALL your questions combined (e.g., "1. What features? 2. What tech stack? 3. Timeline?")
+- dependencies: []
+- max_retry: 0
+- human_response: null
+- assigned_agent: null
+- assigned_tool: null
+- retry: 0
+- result: null
+- is_error: false
+- error: null
 
-3. Use the assigned_agent field to delegate tasks to specific connected agents when appropriate. Use their bridge_id.
+MUST NOT create any other tasks. Plan has exactly ONE task.
 
-4. Use the assigned_tool field when a specific tool should be used for the task.
+RULE 2b: IF UPDATING WITH PARTIAL ANSWERS
+- User answered some questions but more clarification needed
+- Update the waiting_for_user task with NEW questions (in human_query)
+- Keep status as "waiting_for_user"
+- Do NOT create execution tasks yet
+- Plan still has exactly ONE task
 
-5. Set dependencies between tasks using task_id references (e.g. ["task_1"]). Tasks with no dependencies can run in parallel.
+RULE 3: IF GOAL IS CLEAR
+Create execution tasks:
+- status: "pending" for all tasks
+- Set proper dependencies
+- human_query: null for all tasks
+- Simplicity First: One task for simple goals, multiple only if genuinely needed
 
-6. Set max_retry to 2 for tasks that might fail transiently, 0 for tasks that should not retry.
+RULE 4: IF UPDATING EXISTING PLAN
+- User answered previous questions (human_response is filled)
+- Keep the waiting_for_user task
+- Create NEW execution tasks based on answers
+- New tasks depend on waiting_for_user task
 
-7. **Human-in-the-Loop - Ask ONLY When Necessary**: Create tasks with status "waiting_for_user" ONLY when:
-   - Critical information is genuinely missing and you cannot proceed (e.g., API keys, server URLs, database credentials)
-   - The goal is ambiguous in a way that could lead to completely different outcomes (e.g., "deploy" without knowing staging vs production)
-   - Destructive operations need explicit approval (e.g., deleting data, dropping databases)
-   - User needs to choose between fundamentally different technical approaches
-   
-   DO NOT ask for:
-   - Information you can infer or use reasonable defaults for
-   - Trivial preferences (naming, colors, formatting) - make reasonable choices
-   - Details that can be determined or adjusted later
-   - Confirmation for routine, safe operations
+RULE 5: OUTPUT FORMAT
+- ONLY valid JSON
+- No markdown, no explanation
+- Use null/false (not None/False)
 
-8. When you create a waiting_for_user task:
-   - Set human_query with a clear, specific question
-   - Set dependencies so this task blocks tasks that need the answer
-   - Make the question focused and actionable
+EXAMPLES:
 
-Respond with ONLY a valid JSON object. No markdown, no explanation, just the JSON."""
+Example 1 - UNCLEAR goal:
+Input: "I want to create management web site"
+Output: Plan with ONE task (waiting_for_user) asking about features, tech stack, timeline
+
+Example 2 - CLEAR goal:
+Input: "Write a Python function to calculate factorial"
+Output: Plan with ONE task (pending) to write the function
+
+Example 3 - CLEAR complex goal:
+Input: "Build and deploy a REST API"
+Output: Plan with multiple tasks (setup, build, test, deploy) with proper dependencies
+"""
 
 PLAN_JSON_SCHEMA = {
     "goal": "string - the user's original goal",
@@ -64,7 +85,7 @@ PLAN_JSON_SCHEMA = {
         "task_1": {
             "title": "short title",
             "task_description": "detailed description of what this task should accomplish",
-            "status": "pending | waiting_for_user - use 'waiting_for_user' if you need user input before this task can execute",
+            "status": "pending | waiting_for_user - use 'waiting_for_user' if you need asked question from user",
             "dependencies": ["array of task_ids that must complete before this task can start"],
             "assigned_agent": "bridge_id of the agent to handle this task, or null for the main agent",
             "assigned_tool": "tool_name if a specific tool should be used, or null",
@@ -150,6 +171,21 @@ def _build_planner_message(user_goal, agent_context, existing_plan=None, user_fe
 
     if existing_plan:
         parts.append(f"\nExisting Plan:\n{json.dumps(existing_plan, indent=2)}")
+        
+        # Check if there are answered clarification questions
+        answered_questions = []
+        for task_id, task in existing_plan.get("tasks", {}).items():
+            if task.get("status") == "waiting_for_user" and task.get("human_response"):
+                answered_questions.append({
+                    "question": task.get("human_query"),
+                    "answer": task.get("human_response")
+                })
+        
+        if answered_questions:
+            parts.append("\n## User's Answers to Clarification Questions:")
+            for i, qa in enumerate(answered_questions, 1):
+                parts.append(f"{i}. Q: {qa['question']}")
+                parts.append(f"   A: {qa['answer']}")
 
     if user_feedback:
         parts.append(f"\nUser Feedback: {user_feedback}")
