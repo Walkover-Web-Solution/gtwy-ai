@@ -388,6 +388,7 @@ class BaseService:
             "prompt": self.configuration.get("prompt"),
             "is_cached": is_cached,
             "error": self.tool_call_limit_error or "",
+            "plans": self.parsed_data.get("plans") if hasattr(self, 'parsed_data') else None,
         }
 
     def service_formatter(self, configuration: object, service: str):  # changes

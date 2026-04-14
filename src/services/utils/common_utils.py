@@ -163,6 +163,9 @@ def parse_request_body(request_body):
         "response_format": body.get("settings", {}).get("response_format"),
         "response_type": body.get("configuration", {}).get("response_type"),
         "mode": body.get("mode"),
+        "action": body.get("action"),
+        "task_id": body.get("task_id"),
+        "plans": body.get("plans"),
         "model": body.get("configuration", {}).get("model"),
         "auto_model_select": body.get("auto_model_select", False),
         "is_playground": state.get("is_playground") or body.get("is_playground") or False,
@@ -1223,6 +1226,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
         "parent_id": parsed_data.get("parent_bridge_id", ""),
         "child_id": None,
         "prompt": parsed_data["configuration"].get("prompt"),
+        "plans": parsed_data.get("plans"),
         "llm_urls": [],
         "user_urls": (
             [{"url": u, "type": "image"} for u in parsed_data.get("images", [])]

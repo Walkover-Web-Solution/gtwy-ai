@@ -53,6 +53,7 @@ from .baseService.utils import sendResponse
 from src.send_alert import send_alert
 from .response_caching_service import handle_response_caching
 from workflow import execute_advanced_workflow
+from src.services.todo.todo_handler import handle_todo_mode
 
 app = FastAPI()
 configurationModel = db["configurations"]
@@ -267,6 +268,12 @@ async def chat(request_body):
                 timer=timer,
                 thread_info=thread_info,
                 transfer_request_id=transfer_request_id,
+            )
+
+        if parsed_data.get("mode") == "plan":
+            return await handle_todo_mode(
+                parsed_data=parsed_data,
+                bridge_configurations=bridge_configurations,
             )
 
         # Execute with retry mechanism
