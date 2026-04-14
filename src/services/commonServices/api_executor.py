@@ -58,7 +58,7 @@ async def execute_api_call(
                     bridge_id=bridge_id,
                     org_id=org_id,
                     error_log={"error": result.get("error"), "message": "Exception for the code", "message_id": message_id},
-                    error_type=alert_types["error"],
+                    error_type=alert_types["retry_mechanism"],
                     bridge_name=name,
                     org_name=org_name,
                     is_embed=is_embed,
