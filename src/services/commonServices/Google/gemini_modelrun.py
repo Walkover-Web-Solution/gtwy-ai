@@ -5,6 +5,7 @@ from src.exceptions import ApiCallError
 from ..api_executor import execute_api_call
 from google import genai
 import traceback
+import uuid
 
 async def gemini_modelrun_stream(configuration, apiKey):
     """Async generator yielding normalised delta dicts for Gemini generate_content_stream."""
@@ -52,6 +53,7 @@ async def gemini_modelrun_stream(configuration, apiKey):
                         }
                 if part.get("function_call"):
                     fc = part["function_call"]
+                    fc["id"] = f"gemini_fc_{str(uuid.uuid4())}"
                     accumulated_tool_calls.append(fc)
         yield {"content": None, "tool_calls": accumulated_tool_calls or None, "usage": usage, "finish_reason": finish_reason, "reasoning": None}
     except Exception as error:

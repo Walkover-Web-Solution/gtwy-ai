@@ -183,7 +183,15 @@ class BaseService:
                     from google.genai import types
 
                     if index == 0:
-                        configuration['contents'].append(response.get('candidates', [{}])[0].get('content', {}))
+                        candidate_content = response.get('candidates', [{}])[0].get('content', {})
+                        if isinstance(candidate_content, dict):
+                            for part in candidate_content.get('parts', []) or []:
+                                function_call = part.get('function_call') if isinstance(part, dict) else None
+                                if isinstance(function_call, dict):
+                                    synthetic_id = function_call.get('id')
+                                    if isinstance(synthetic_id, str) and synthetic_id.startswith('gemini_fc_'):
+                                        function_call.pop('id', None)
+                        configuration['contents'].append(candidate_content)
 
                     function_response_content = function_response['content']
                     if isinstance(function_response_content, str):

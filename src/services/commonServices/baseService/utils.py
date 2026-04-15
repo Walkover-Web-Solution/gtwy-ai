@@ -765,7 +765,7 @@ async def run_stream_and_collect(generator, streamer):
                 await streamer.emit_tool_call(
                     name=tool_name,
                     args=args,
-                    call_id=tc.get("call_id") or tc.get("id", ""),
+                    call_id=tc.get("id") or tc.get("call_id", ""),
                 )
         if delta.get("usage"):
             final_usage = delta["usage"]
