@@ -10,7 +10,6 @@ from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys, alert_types
-from src.utils.formatter import apply_variables_to_template_json, fix_json_string
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.common_utils import (
@@ -43,6 +42,7 @@ from src.services.utils.common_utils import (
     process_batch_background_tasks,
     update_cost_usage_and_apikey_status_in_background,
     sse_stream_and_finalize,
+    render_template_if_applicable,
 )
 from src.services.utils.guardrails_validator import guardrails_check
 from src.services.utils.rich_text_support import process_chatbot_response
@@ -235,11 +235,12 @@ async def chat(request_body):
         custom_config = await configure_custom_settings(
             model_config["configuration"], custom_config, parsed_data["service"]
         )
-        # If template rendering is requested, streaming is not supported — force it off
         response_type = parsed_data.get("response_type") or {}
-        if isinstance(response_type, dict) and response_type.get("is_template", False):
-            if custom_config.get("stream", False):
-                custom_config["stream"] = False
+        template_requested = isinstance(response_type, dict) and response_type.get("is_template", False)
+        if template_requested:
+            parsed_data.setdefault("flags", {})["template_requested"] = True
+            # When templates are requested we still allow streaming, but emit a dedicated
+            # template_response event (handled inside sse_stream_and_finalize).
 
         # Step 9: Execute Service Handler
         params = build_service_params(
@@ -474,72 +475,7 @@ async def chat(request_body):
             result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
 
         # Template HTML Generation
-        response_type = parsed_data.get('response_type', {})
-        template_data = None
-        if isinstance(response_type, dict) and response_type.get('is_template', False):
-            try:
-                template_ids = response_type.get('template_id', [])
-                if not template_ids:
-                    logger.warning("Template Rendering: 'is_template' is True but 'template_id' is missing or empty.")
-                base_template = None
-                if template_ids and response_type:
-                    # Get templates from parsed_data (already fetched in pipeline)
-                    richui_templates = parsed_data.get('richui_templates', {})
-
-                    # AI Result Data
-                    ai_data = result.get('response', {}).get('data', {}).get('content', {})
-                    # Unwrap 'item' if present
-                    if isinstance(ai_data, dict) and "item" in ai_data:
-                        ai_data = ai_data["item"]
-                    elif isinstance(ai_data, str):
-                        try:
-                            parsed = json.loads(ai_data)
-                            if isinstance(parsed, dict) and "item" in parsed:
-                                ai_data = parsed["item"]
-                            else:
-                                ai_data = parsed
-                        except Exception:
-                            try:
-                                repaired = fix_json_string(ai_data)
-                                ai_data = json.loads(repaired)
-                                ai_data = ai_data.get("item")
-                            except Exception:
-                                pass  # keep ai_data as the raw string
-                    
-                    # Get template directly using widget_id from ai_data
-                    if isinstance(ai_data, dict):
-                        widget_id = ai_data.get('widget_id')
-                        if widget_id and str(widget_id) in richui_templates:
-                            base_template = richui_templates[str(widget_id)]
-                        else:
-                            logger.warning(f"Template with widget_id '{widget_id}' not found in richui_templates")
-                        
-                    # Only render if we have a matching template
-                    if base_template:
-                        try:
-                            render_format = base_template.get('template_format', {})
-                            render_data = ai_data if isinstance(ai_data, dict) else {}
-                            filled_json = apply_variables_to_template_json(
-                                render_format,
-                                render_data
-                            )
-                            result['response']['type'] = 'richui_json'
-                            result['response']['data']['content'] = filled_json
-                            result['response']['data']['ai_response'] = render_data
-
-                            # Store template data for history in chatbot_message
-                            template_data = {
-                                'template_id': base_template.get('_id') or base_template.get('id'),
-                                'template_name': base_template.get('name'),
-                                'is_template': True
-                            }
-                        except Exception as render_err:
-                            logger.error(f"Template Rendering Failed: {render_err}")
-                    else:
-                        # No template found or matched, return data as-is (default behavior for greetings, etc.)
-                        logger.info("No matching template found, returning data as-is")
-            except Exception as e:
-                logger.error(f"Error rendering template: {str(e)}")
+        template_data = render_template_if_applicable(parsed_data, result)
         # Add template data to historyParams chatbot_message if template was used and not playground
         if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
             result['historyParams']['chatbot_message'] = json.dumps(result['response']['data']['content'])
