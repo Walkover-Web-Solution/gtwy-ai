@@ -266,6 +266,8 @@ async def create_plan(parsed_data, bridge_configurations, streamer):
         "thread_id": parsed_data["thread_id"],
         "sub_thread_id": parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
         "tasks": plan_data.get("tasks", {}),
+        # Persisted so execution phases can update the same history entry
+        "message_id": parsed_data.get("message_id", ""),
     }
 
     await plan_store.save_plan(plan)

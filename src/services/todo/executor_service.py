@@ -55,6 +55,12 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
     stream are forwarded to the client in real-time, tagged with `task_id`.
     """
     assigned_agent = task.get("assigned_agent") or bridge_id
+    # A task is a "primary-agent sub-task" when no explicit agent was assigned
+    # (or the assigned agent is the main bridge itself).  For these we skip
+    # per-sub-task history so the conversation log shows only the final plan
+    # result saved by todo_handler, not every intermediate LLM call.
+    is_primary_agent_task = not task.get("assigned_agent") or task.get("assigned_agent") == bridge_id
+
     task_description = task.get("task_description", task.get("title", ""))
     human_response = task.get("human_response")
     if human_response:
@@ -75,6 +81,9 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             "variables": {},
             "bridge_configurations": bridge_configurations,
             "plans": plan,
+            # Skip per-sub-task history for the primary agent; its final
+            # response is saved once by todo_handler after full execution.
+            "skip_history": is_primary_agent_task,
         }
         
         request_body.update(agent_config)

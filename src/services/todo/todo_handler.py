@@ -8,6 +8,7 @@ from src.services.commonServices.streaming_service import StreamingService
 from src.services.todo import executor_service, plan_store, planner_service
 from src.controllers.conversationController import save_sub_thread_id_and_name
 from src.services.utils.common_utils import _publish_history_to_queue
+from src.db_services.metrics_service import publish_plan_history_update
 
 
 def _format_plan_response(plan, message_id, model="", finish_reason="completed", extract_final_result=False):
@@ -80,6 +81,19 @@ def _format_plan_response(plan, message_id, model="", finish_reason="completed",
     }
 
 
+def _build_plan_dataset(parsed_data):
+    """Minimal dataset dict for a plan-mode history entry (no token tracking at plan level)."""
+    return {
+        "orgId": parsed_data.get("org_id"),
+        "service": parsed_data.get("service"),
+        "model": parsed_data.get("model", ""),
+        "success": True,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "total_tokens": 0,
+    }
+
+
 async def _stream_plan_action(streamer, action, parsed_data, bridge_configurations, existing_plan):
     """Background task: execute the plan action and emit SSE events."""
     org_id = parsed_data["org_id"]
@@ -117,11 +131,25 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+            formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
                 finish_reason="stop",
-                accumulated_data=_format_plan_response(final_plan, message_id, model, extract_final_result=True),
+                accumulated_data=formatted,
+            )
+            # Update the history entry that was created during planning
+            plan_message_id = (final_plan or {}).get("message_id") or message_id
+            asyncio.create_task(
+                publish_plan_history_update(
+                    message_id=plan_message_id,
+                    final_plan=final_plan,
+                    history_params={
+                        "message": formatted["data"]["content"],
+                        "finish_reason": "stop",
+                        "status": (final_plan or {}).get("state") == "completed",
+                    },
+                )
             )
 
         elif action == "status":
@@ -175,11 +203,25 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+            formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
                 finish_reason="stop",
-                accumulated_data=_format_plan_response(final_plan, message_id, model, extract_final_result=True),
+                accumulated_data=formatted,
+            )
+            # Update the history entry that was created during planning
+            plan_message_id = (final_plan or {}).get("message_id") or message_id
+            asyncio.create_task(
+                publish_plan_history_update(
+                    message_id=plan_message_id,
+                    final_plan=final_plan,
+                    history_params={
+                        "message": formatted["data"]["content"],
+                        "finish_reason": "stop",
+                        "status": (final_plan or {}).get("state") == "completed",
+                    },
+                )
             )
 
         elif action == "retry":
@@ -210,18 +252,25 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+            formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
                 finish_reason="stop",
-                accumulated_data=_format_plan_response(final_plan, message_id, model, extract_final_result=True),
+                accumulated_data=formatted,
             )
-            
-            # Save history with plans
-            await _publish_history_to_queue(
-                dataset=[{"orgId": org_id, "service": parsed_data.get("service"), "model": model, "success": True, "inputTokens": 0, "outputTokens": 0}],
-                history_params={"user": parsed_data.get("user", ""), "message": "", "thread_id": parsed_data.get("thread_id"), "sub_thread_id": parsed_data.get("sub_thread_id"), "message_id": message_id, "bridge_id": bridge_id, "org_id": org_id, "service": parsed_data.get("service"), "model": model, "response": {"data": {"finish_reason": "stop"}}, "plans": final_plan},
-                version_id=parsed_data.get("version_id")
+            # Update the history entry that was created during planning
+            plan_message_id = (final_plan or {}).get("message_id") or message_id
+            asyncio.create_task(
+                publish_plan_history_update(
+                    message_id=plan_message_id,
+                    final_plan=final_plan,
+                    history_params={
+                        "message": formatted["data"]["content"],
+                        "finish_reason": "stop",
+                        "status": (final_plan or {}).get("state") == "completed",
+                    },
+                )
             )
 
         elif action == "cancel":
@@ -243,6 +292,26 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 message_id=message_id,
                 finish_reason="stop",
                 accumulated_data=_format_plan_response(plan, message_id, model),
+            )
+            # Persist initial history entry — execution phases will update it by message_id
+            asyncio.create_task(
+                _publish_history_to_queue(
+                    dataset=[_build_plan_dataset(parsed_data)],
+                    history_params={
+                        "user": parsed_data.get("user", ""),
+                        "message": "",
+                        "thread_id": thread_id,
+                        "sub_thread_id": sub_thread_id,
+                        "message_id": message_id,
+                        "bridge_id": bridge_id,
+                        "org_id": org_id,
+                        "service": parsed_data.get("service"),
+                        "model": model,
+                        "response": {"data": {"finish_reason": "planning"}},
+                        "plans": plan,
+                    },
+                    version_id=parsed_data.get("version_id"),
+                )
             )
             # Save sub_thread so it appears in the thread list (same as non-plan mode)
             asyncio.create_task(
@@ -268,6 +337,19 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 message_id=message_id,
                 finish_reason="stop",
                 accumulated_data=_format_plan_response(plan, message_id, model),
+            )
+            # Update the existing history entry with the revised plan
+            plan_message_id = plan.get("message_id") or message_id
+            asyncio.create_task(
+                publish_plan_history_update(
+                    message_id=plan_message_id,
+                    final_plan=plan,
+                    history_params={
+                        "message": "",
+                        "finish_reason": "planning",
+                        "status": True,
+                    },
+                )
             )
 
     except Exception as e:

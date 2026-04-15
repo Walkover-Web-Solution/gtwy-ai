@@ -215,6 +215,7 @@ def parse_request_body(request_body):
         "thread_flag": body.get("thread_flag") or False,
         "files": body.get("files") or [],
         "fall_back": body.get("settings", {}).get("fall_back") or {},
+        "skip_history": body.get("skip_history", False),
         "guardrails": body.get("settings", {}).get("guardrails") or {},
         "testcase_data": body.get("testcase_data") or {},
         "is_embed": body.get("is_embed"),
@@ -698,6 +699,11 @@ async def process_background_tasks(
     Also handles orchestrator mode where multiple agents are saved in a single entry.
     History and metrics are now published to the log queue for Node.js to save to DB.
     """
+    # Primary-agent sub-tasks inside plan mode skip per-call history; the
+    # single final plan result is saved by todo_handler after full execution.
+    if parsed_data.get("skip_history"):
+        return
+
     orchestrator_flag = parsed_data.get("orchestrator_flag") or parsed_data.get("body", {}).get("orchestrator_flag")
 
     is_transfer_chain = (
@@ -806,6 +812,10 @@ async def process_background_tasks(
 
 
 async def process_background_tasks_for_error(parsed_data, error):
+    # Primary-agent sub-tasks inside plan mode skip per-call history.
+    if parsed_data.get("skip_history"):
+        return
+
     tasks = [
         send_alert(
             bridge_id=parsed_data["bridge_id"],
