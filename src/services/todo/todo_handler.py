@@ -138,48 +138,46 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 await streamer.emit_error("task_id is required for respond action")
                 return
 
-            result = await executor_service.resume_task(
-                org_id, bridge_id, thread_id, sub_thread_id,
-                task_id, parsed_data.get("user", ""),
-            )
-
-            if not result.get("success"):
-                await streamer.emit_error(result.get("error", "Failed to resume task"))
+            task = existing_plan.get("tasks", {}).get(task_id)
+            if not task:
+                await streamer.emit_error(f"Task {task_id} not found")
                 return
 
-            plan = result["plan"]
+            if task["status"] != "waiting_for_user":
+                await streamer.emit_error(f"Task {task_id} is not waiting for user input")
+                return
 
-            # Signal the client we are entering execution mode
-            await streamer.emit_execution()
-            await streamer.emit_delta(json.dumps({"event": "execution_started", "state": "executing"}))
+            # Store the human response on the task
+            task["human_response"] = parsed_data.get("user", "")
+            await plan_store.update_plan(existing_plan)
 
-            # Replay settled tasks so the client can restore its state
-            sorted_task_ids = sorted(
-                plan.get("tasks", {}).keys(),
-                key=lambda x: int(x.split("_")[1]) if "_" in x and x.split("_")[1].isdigit() else 0,
+        
+            # Call planner to either ask more questions or create execution tasks
+            await streamer.emit_planning()
+            plan = await planner_service.update_plan(
+                existing_plan, None, parsed_data, bridge_configurations, streamer
             )
-            for t_id in sorted_task_ids:
-                t = plan["tasks"][t_id]
-                status = t.get("status")
-                if status == "completed":
-                    await streamer.emit_delta(json.dumps({"event": "task_started", "task_id": t_id, "title": t.get("title", ""), "replayed": True}))
-                    await streamer.emit_delta(json.dumps({"event": "task_completed", "task_id": t_id, "title": t.get("title", ""), "result": t.get("result"), "replayed": True}))
-                elif status == "failed":
-                    await streamer.emit_delta(json.dumps({"event": "task_started", "task_id": t_id, "title": t.get("title", ""), "replayed": True}))
-                    await streamer.emit_delta(json.dumps({"event": "task_error", "task_id": t_id, "title": t.get("title", ""), "is_error": True, "error": t.get("error"), "replayed": True}))
-
-            # Resume execution — live events are streamed through the same connection
-            plan["state"] = "approved"
-            await plan_store.update_plan(plan)
-            await executor_service.execute_plan(
-                org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, streamer=streamer
+            
+            # Check if planner created execution tasks (goal is now clear)
+            # If waiting_for_user task still exists with human_query, more questions needed
+            # If waiting_for_user task has no human_query or execution tasks exist, mark as completed
+            waiting_task = plan.get("tasks", {}).get("task_1")
+            has_execution_tasks = any(
+                t.get("status") == "pending" 
+                for t in plan.get("tasks", {}).values()
             )
-            final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+            
+            if has_execution_tasks and waiting_task and waiting_task.get("status") == "waiting_for_user":
+                # Goal is now clear, execution tasks created — mark clarification task as completed
+                waiting_task["status"] = "completed"
+                waiting_task["human_query"] = None
+                await plan_store.update_plan(plan)
+            
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
                 finish_reason="stop",
-                accumulated_data=_format_plan_response(final_plan, message_id, model, extract_final_result=True),
+                accumulated_data=_format_plan_response(plan, message_id, model),
             )
 
         elif action == "retry":
