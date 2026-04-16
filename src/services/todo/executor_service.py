@@ -49,6 +49,47 @@ def _is_plan_complete(tasks):
     return all(t["status"] in TERMINAL_STATUSES for t in tasks.values())
 
 
+async def _resolve_task_bridge_configurations(assigned_agent, org_id, bridge_configurations):
+    """
+    Reuse pre-fetched bridge configurations when possible.
+
+    Fallback to getConfiguration only if the assigned agent is missing from the
+    prefetched map so current execution behavior remains intact.
+    """
+    if assigned_agent in bridge_configurations:
+        return {
+            "success": True,
+            "bridge_configurations": copy.deepcopy(bridge_configurations),
+        }
+
+    logger.warning(
+        "Assigned agent %s not found in pre-fetched bridge_configurations; "
+        "falling back to getConfiguration during plan execution.",
+        assigned_agent,
+    )
+
+    from src.services.utils.getConfiguration import getConfiguration
+
+    resolved_config = await getConfiguration(
+        configuration=None,
+        service=None,
+        bridge_id=assigned_agent,
+        apikey=None,
+        variables={},
+        org_id=org_id,
+        version_id=None,
+        override_fields={},
+    )
+
+    if not resolved_config.get("success"):
+        return {
+            "success": False,
+            "error": resolved_config.get("error", "Failed to resolve agent configuration"),
+        }
+
+    return resolved_config
+
+
 async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, plan, streamer=None):
     """Execute a single task by calling the appropriate agent directly.
     
@@ -69,18 +110,11 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
 
     try:
         from src.services.commonServices.common import chat_multiple_agents
-        from src.services.utils.getConfiguration import getConfiguration
 
-        current_agent_config = bridge_configurations.get(assigned_agent, {})
-        resolved_config = await getConfiguration(
-            configuration=None,
-            service=None,
-            bridge_id=assigned_agent,
-            apikey=None,
-            variables={},
+        resolved_config = await _resolve_task_bridge_configurations(
+            assigned_agent=assigned_agent,
             org_id=org_id,
-            version_id=current_agent_config.get("version_id"),
-            override_fields={},
+            bridge_configurations=bridge_configurations,
         )
         if not resolved_config.get("success"):
             return {"success": False, "error": resolved_config.get("error", "Failed to resolve agent configuration")}
@@ -93,7 +127,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             "sub_thread_id": sub_thread_id,
             "org_id": org_id,
             "variables": {},
-            "bridge_configurations": copy.deepcopy(resolved_config.get("bridge_configurations", {})),
+            "bridge_configurations": resolved_config.get("bridge_configurations", {}),
             "plans": plan,
             # Skip per-sub-task history for the primary agent; its final
             # response is saved once by todo_handler after full execution.

@@ -99,6 +99,13 @@ STREAM_FUNCTIONS = {
 _NEEDS_STREAM_FLAG = {service_name["groq"], service_name["open_router"]}
 
 
+def _normalize_reasoning_config(reasoning_config):
+    """Normalize reasoning config so provider formatters receive an object."""
+    if isinstance(reasoning_config, str):
+        return {"effort": reasoning_config}
+    return reasoning_config
+
+
 def _build_agent_context(parsed_data, bridge_configurations):
     """Build a context string describing the available agents and tools for the planner."""
     main_bridge_id = parsed_data["bridge_id"]
