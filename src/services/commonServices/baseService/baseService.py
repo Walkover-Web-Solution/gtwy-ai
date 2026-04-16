@@ -63,7 +63,7 @@ class BaseService:
         self.response_format = params.get("response_format")
         self.execution_time_logs = params.get("execution_time_logs", {})
         self.timer = params.get("timer")
-        self.func_tool_call_data = []
+        self.func_tool_call_data = params.get("tools_call_data", [])
         self.variables_path = params.get("variables_path")
         self.message_id = params.get("message_id")
         self.bridgeType = params.get("bridgeType")
@@ -225,7 +225,10 @@ class BaseService:
                 response["stream_finish_reason"] = "tool_call_limit_reached"
             return response
         func_response_data, mapping_response_data, tools_call_data = await self.run_tool(model_response, service)
-        self.func_tool_call_data.append(tools_call_data)
+        if isinstance(tools_call_data, dict):
+            self.func_tool_call_data.extend(tools_call_data.values())
+        else:
+            self.func_tool_call_data.append(tools_call_data)
 
         # Check if transfer was detected in run_tool
         if isinstance(tools_call_data, dict) and "transfer_agent_config" in tools_call_data:

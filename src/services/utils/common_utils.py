@@ -70,9 +70,16 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
                 if param not in resolved_args:
                     if param in agent_variables:
                         resolved_args[param] = agent_variables[param]
+            display_name = (
+                function_data.get("title")
+                or function_data.get("function_name")
+                or function_data.get("endpoint_name")
+                or tool_config.get("script_id")
+            )
             resolved_pre_tools.append({
                 "type": "custom_function",
                 "name":  tool_config.get("script_id"),
+                "display_name": display_name,
                 "args": resolved_args,
             })
         else:
@@ -349,12 +356,24 @@ async def handle_fine_tune_model(parsed_data, custom_config):
 
 async def handle_pre_tools(parsed_data, custom_config):
     pre_tools = parsed_data.get("pre_tools") or []
+    if "tools_call_data" not in parsed_data:
+        parsed_data["tools_call_data"] = []
     if not pre_tools:
         return
 
     for tool in pre_tools:
         tool_type = tool.get("type")
         args = dict(tool.get("args", {}))
+        pre_log_entry = {
+            "id": tool.get("name") if tool_type == "custom_function" else tool.get("id"),
+            "name": tool.get("display_name") or tool.get("name") or tool_type,
+            "type": "pre_function",
+            "status": "error",
+            "metadata": {"flowHitId": None, "type": "function"},
+            "created_at": datetime.now(UTC).isoformat(),
+            "latency_ms": 0,
+        }
+        started_at = datetime.now(UTC)
         args["user"] = parsed_data["user"]
         args["_response_type"] = parsed_data["configuration"]["response_type"]
 
@@ -363,6 +382,12 @@ async def handle_pre_tools(parsed_data, custom_config):
                 args,
                 {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
             )
+            metadata = pre_function_response.get("metadata") if isinstance(pre_function_response, dict) else {}
+            pre_log_entry["metadata"] = {
+                "flowHitId": (metadata or {}).get("flowHitId"),
+                "type": "function",
+            }
+            pre_log_entry["status"] = "success" if pre_function_response.get("status") == 1 else "error"
             if pre_function_response.get("status") == 0:
                 parsed_data["variables"]["pre_function"] = (
                     f"Error while calling prefunction. Error message: {pre_function_response.get('response')}"
@@ -373,6 +398,8 @@ async def handle_pre_tools(parsed_data, custom_config):
                 Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
         
         elif tool_type == "query_refiner":
+            pre_log_entry["id"] = None
+            pre_log_entry["name"] = "query_refiner"
             prompt = args.get("prompt", "")
             user_query = parsed_data["user"]
             variables = {**parsed_data.get("variables", {})}
@@ -386,12 +413,16 @@ async def handle_pre_tools(parsed_data, custom_config):
                     response_type="text",
                 )
                 optimised_query = optimised_query or user_query
+                pre_log_entry["status"] = "success"
             except Exception as e:
                 optimised_query = user_query
+                pre_log_entry["status"] = "error"
          
             parsed_data["user"] = optimised_query
             
         elif tool_type == "rag_knowledgebase":
+            pre_log_entry["id"] = None
+            pre_log_entry["name"] = "rag_knowledgebase"
             resource_id = args.get("resource_id")
             collection_id = args.get("collection_id")
             owner_id = parsed_data.get("owner_id")
@@ -399,6 +430,9 @@ async def handle_pre_tools(parsed_data, custom_config):
             if not resource_id or not collection_id:
                 parsed_data["variables"]["rag_pre_result"] = ""
                 logger.warning(f"rag_knowledgebase pre-tool missing resource_id or collection_id for bridge {parsed_data.get('bridge_id')}")
+                pre_log_entry["status"] = "error"
+                pre_log_entry["latency_ms"] = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+                parsed_data["tools_call_data"].append(pre_log_entry)
                 continue
             rag_response = await get_text_from_vectorsQuery(
                 {
@@ -413,17 +447,31 @@ async def handle_pre_tools(parsed_data, custom_config):
             )
             if rag_response.get("status") == 1:
                 parsed_data["variables"]["rag_pre_result"] = rag_response.get("response")
+                pre_log_entry["status"] = "success"
             else:
                 parsed_data["variables"]["rag_pre_result"] = f"Error: {rag_response.get('response', 'unknown error')}"
+                pre_log_entry["status"] = "error"
         
         elif tool_type == "gtwy_web_search":
+            pre_log_entry["id"] = None
+            pre_log_entry["name"] = "gtwy_web_search"
             web_response = await call_firecrawl_scrape(args)
+            metadata = web_response.get("metadata") if isinstance(web_response, dict) else {}
+            pre_log_entry["metadata"] = {
+                "flowHitId": (metadata or {}).get("flowHitId"),
+                "type": "function",
+            }
             if web_response.get("status") == 1:
                 parsed_data["variables"]["web_search_pre_result"] = web_response.get("response")
+                pre_log_entry["status"] = "success"
             else:
                 response = web_response.get('response')
                 error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
                 parsed_data["variables"]["web_search_pre_result"] = error_msg
+                pre_log_entry["status"] = "error"
+
+        pre_log_entry["latency_ms"] = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+        parsed_data["tools_call_data"].append(pre_log_entry)
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
     sub_thread_id = parsed_data["sub_thread_id"]
@@ -631,6 +679,7 @@ def build_service_params(
         "is_embed": parsed_data.get("is_embed"),
         "user_id": parsed_data.get("user_id"),
         "api_collection": parsed_data.get("api_collection"),
+        "tools_call_data": parsed_data.get("tools_call_data", []),
     }
 
 
