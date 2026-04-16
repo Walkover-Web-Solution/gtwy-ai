@@ -389,5 +389,37 @@ def build_orchestrator_log_data(transfer_chain, thread_info=None):
     }
 
 
+async def publish_plan_history_update(message_id, final_plan, history_params):
+    """
+    Publish an update_history message to the log queue so Node.js can update
+    an existing history entry (identified by message_id) once plan execution
+    is complete.  The initial entry was created during the planning phase with
+    the same message_id.
+
+    Args:
+        message_id: The message_id that was stored in the plan when it was created.
+        final_plan: The fully-executed plan dict with task results.
+        history_params: Dict with optional keys: message, finish_reason, status.
+    """
+    try:
+        from ..services.cache_service import make_json_serializable
+        from ..services.commonServices.queueService.queueLogService import sub_queue_obj
+
+        update_data = {
+            "message_id": str(message_id),
+            "llm_message": history_params.get("message", ""),
+            "plans": final_plan,
+            "finish_reason": history_params.get("finish_reason", "stop"),
+            "status": history_params.get("status", True),
+        }
+        message = make_json_serializable({"update_history": update_data})
+        await sub_queue_obj.publish_message(message)
+        logger.info(f"Published plan history update for message_id: {message_id}")
+
+    except Exception as error:
+        logger.error(f"Error publishing plan history update: {str(error)}")
+        logger.error(traceback.format_exc())
+
+
 # Exporting functions
-__all__ = ["find", "find_one", "find_one_pg", "create_batch_conversation_logs", "build_history_and_metrics_payload", "build_orchestrator_log_data"]
+__all__ = ["find", "find_one", "find_one_pg", "create_batch_conversation_logs", "build_history_and_metrics_payload", "build_orchestrator_log_data", "publish_plan_history_update"]

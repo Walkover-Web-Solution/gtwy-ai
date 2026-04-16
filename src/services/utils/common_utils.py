@@ -26,10 +26,11 @@ from src.services.utils.apiservice import fetch
 from src.services.utils.time import Timer
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
+from src.utils.formatter import apply_variables_to_template_json, fix_json_string
+from src.services.utils.helper import Helper
 
 from ...controllers.conversationController import getThread
 from ..commonServices.baseService.utils import sendResponse
-from .helper import Helper
 
 UTC = timezone.utc
 
@@ -215,6 +216,7 @@ def parse_request_body(request_body):
         "thread_flag": body.get("thread_flag") or False,
         "files": body.get("files") or [],
         "fall_back": body.get("settings", {}).get("fall_back") or {},
+        "skip_history": body.get("skip_history", False),
         "guardrails": body.get("settings", {}).get("guardrails") or {},
         "testcase_data": body.get("testcase_data") or {},
         "is_embed": body.get("is_embed"),
@@ -234,6 +236,76 @@ def parse_request_body(request_body):
         "limit": body.get("limit"),
         "is_rerun": body.get("is_rerun", False),
     }
+
+
+def render_template_if_applicable(parsed_data, result):
+    response_type = parsed_data.get("response_type", {})
+    template_data = None
+
+    if not (isinstance(response_type, dict) and response_type.get("is_template", False)):
+        return template_data
+
+    try:
+        template_ids = response_type.get("template_id", [])
+        if not template_ids:
+            logger.warning(
+                "Template Rendering: 'is_template' is True but 'template_id' is missing or empty."
+            )
+
+        base_template = None
+        if template_ids and response_type:
+            richui_templates = parsed_data.get("richui_templates", {}) or {}
+
+            ai_data = result.get("response", {}).get("data", {}).get("content", {})
+            if isinstance(ai_data, dict) and "item" in ai_data:
+                ai_data = ai_data["item"]
+            elif isinstance(ai_data, str):
+                try:
+                    parsed = json.loads(ai_data)
+                    if isinstance(parsed, dict) and "item" in parsed:
+                        ai_data = parsed["item"]
+                    else:
+                        ai_data = parsed
+                except Exception:
+                    try:
+                        repaired = fix_json_string(ai_data)
+                        ai_data = json.loads(repaired)
+                        ai_data = ai_data.get("item")
+                    except Exception:
+                        pass
+
+            if isinstance(ai_data, dict):
+                widget_id = ai_data.get("widget_id")
+                if widget_id and str(widget_id) in richui_templates:
+                    base_template = richui_templates[str(widget_id)]
+                else:
+                    logger.warning(
+                        f"Template with widget_id '{widget_id}' not found in richui_templates"
+                    )
+
+            if base_template:
+                try:
+                    render_format = base_template.get("template_format", {})
+                    render_data = ai_data if isinstance(ai_data, dict) else {}
+                    filled_json = apply_variables_to_template_json(render_format, render_data)
+                    result.setdefault("response", {}).setdefault("data", {})
+                    result["response"]["type"] = "richui_json"
+                    result["response"]["data"]["content"] = filled_json
+                    result["response"]["data"]["ai_response"] = render_data
+
+                    template_data = {
+                        "template_id": base_template.get("_id") or base_template.get("id"),
+                        "template_name": base_template.get("name"),
+                        "is_template": True,
+                    }
+                except Exception as render_err:
+                    logger.error(f"Template Rendering Failed: {render_err}")
+            else:
+                logger.info("No matching template found, returning data as-is")
+    except Exception as exc:
+        logger.error(f"Error rendering template: {str(exc)}")
+
+    return template_data
 
 
 async def apply_prompt_wrapper(parsed_data):
@@ -698,6 +770,11 @@ async def process_background_tasks(
     Also handles orchestrator mode where multiple agents are saved in a single entry.
     History and metrics are now published to the log queue for Node.js to save to DB.
     """
+    # Primary-agent sub-tasks inside plan mode skip per-call history; the
+    # single final plan result is saved by todo_handler after full execution.
+    if parsed_data.get("skip_history"):
+        return
+
     orchestrator_flag = parsed_data.get("orchestrator_flag") or parsed_data.get("body", {}).get("orchestrator_flag")
 
     is_transfer_chain = (
@@ -806,6 +883,10 @@ async def process_background_tasks(
 
 
 async def process_background_tasks_for_error(parsed_data, error):
+    # Primary-agent sub-tasks inside plan mode skip per-call history.
+    if parsed_data.get("skip_history"):
+        return
+
     tasks = [
         send_alert(
             bridge_id=parsed_data["bridge_id"],
@@ -1313,6 +1394,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
     original_model = parsed_data["model"]
     timer.start()
     original_error = None
+    template_data = None
 
     try:
         from src.services.commonServices.response_caching_service import handle_response_caching
@@ -1378,6 +1460,10 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 await class_obj.streamer.emit_error(original_error)
                 await class_obj.streamer.close()
             return
+
+    template_data = render_template_if_applicable(parsed_data, result)
+    result.setdefault("response", {}).setdefault("data", {})
+    rendered_content = result["response"]["data"].get("content", {})
 
     # Handle agent transfer: save agent A's metrics/history, then fire agent B with the live streamer
     transfer_agent_config = result.get("transfer_agent_config") if isinstance(result, dict) else None
@@ -1448,6 +1534,16 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
         params["execution_time_logs"].append({"step": "streaming", "time_taken": round(timer.stop("streaming"), 4)})
         latency = create_latency_object(timer, params)
+        if template_data and result.get("historyParams") and not parsed_data.get("is_playground"):
+            result["historyParams"]["chatbot_message"] = json.dumps(rendered_content)
+
+        if template_data and class_obj.streamer:
+            await class_obj.streamer.emit_template_response(
+                message_id=str(parsed_data.get("message_id") or ""),
+                content=rendered_content,
+                metadata=template_data,
+            )
+
         if not parsed_data["is_playground"]:
             if result.get("response") and result["response"].get("data"):
                 result["response"]["data"]["message_id"] = parsed_data["message_id"]
@@ -1471,11 +1567,12 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 or model_response.get("status")
                 or ""
             )
+            accumulated_payload = None if template_data else formatted_response
             await class_obj.streamer.emit_done(
                 usage=formatted_response.get("usage", {}),
                 message_id=str(parsed_data.get("message_id") or ""),
                 finish_reason=finish_reason,
-                accumulated_data=formatted_response,
+                accumulated_data=accumulated_payload,
             )
             await class_obj.streamer.close()
     except Exception as err:

@@ -53,6 +53,9 @@ Rules:
 
 8. When you create a waiting_for_user task:
    - Set human_query with a clear, specific question
+   - **Provide human_options as a list of concise, self-explanatory choices whenever the question has a finite set of reasonable answers.** Each option should be a short string that the user can pick directly (e.g., "Staging - deploy for testing first"). Aim for 2-5 options.
+   - Set human_options to null ONLY for truly open-ended questions where you cannot anticipate the answer (e.g., "What is your API key?", "Describe the desired behavior").
+   - Set allow_custom_response to true (default) so the user can type a custom answer if none of the options fit. Set to false only when the answer MUST be one of the listed options (rare).
    - Set dependencies so this task blocks tasks that need the answer
    - Make the question focused and actionable
 
@@ -64,7 +67,7 @@ PLAN_JSON_SCHEMA = {
         "task_1": {
             "title": "short title",
             "task_description": "detailed description of what this task should accomplish",
-            "status": "pending | waiting_for_user - use 'waiting_for_user' if you need user input before this task can execute",
+            "status": "pending | waiting_for_user",
             "dependencies": ["array of task_ids that must complete before this task can start"],
             "assigned_agent": "bridge_id of the agent to handle this task, or null for the main agent",
             "assigned_tool": "tool_name if a specific tool should be used, or null",
@@ -73,7 +76,9 @@ PLAN_JSON_SCHEMA = {
             "result": None,
             "is_error": False,
             "error": None,
-            "human_query": "if status is 'waiting_for_user', put your question here (clear, specific question)",
+            "human_query": "if status is 'waiting_for_user', put your question here",
+            "human_options": ["option 1", "option 2", "option 3 - provide multiple-choice options when possible, or null for open-ended questions"],
+            "allow_custom_response": True,
             "human_response": None,
         }
     },
@@ -266,6 +271,8 @@ async def create_plan(parsed_data, bridge_configurations, streamer):
         "thread_id": parsed_data["thread_id"],
         "sub_thread_id": parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
         "tasks": plan_data.get("tasks", {}),
+        # Persisted so execution phases can update the same history entry
+        "message_id": parsed_data.get("message_id", ""),
     }
 
     await plan_store.save_plan(plan)

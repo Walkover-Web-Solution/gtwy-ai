@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import uuid
 
@@ -55,16 +56,35 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
     stream are forwarded to the client in real-time, tagged with `task_id`.
     """
     assigned_agent = task.get("assigned_agent") or bridge_id
+    # A task is a "primary-agent sub-task" when no explicit agent was assigned
+    # (or the assigned agent is the main bridge itself).  For these we skip
+    # per-sub-task history so the conversation log shows only the final plan
+    # result saved by todo_handler, not every intermediate LLM call.
+    is_primary_agent_task = not task.get("assigned_agent") or task.get("assigned_agent") == bridge_id
+
     task_description = task.get("task_description", task.get("title", ""))
     human_response = task.get("human_response")
     if human_response:
         task_description = f"{task_description}\n\nHuman Response: {human_response}"
 
     try:
-        from src.services.commonServices.common import chat
-        
-        agent_config = bridge_configurations.get(assigned_agent, {})
-        
+        from src.services.commonServices.common import chat_multiple_agents
+        from src.services.utils.getConfiguration import getConfiguration
+
+        current_agent_config = bridge_configurations.get(assigned_agent, {})
+        resolved_config = await getConfiguration(
+            configuration=None,
+            service=None,
+            bridge_id=assigned_agent,
+            apikey=None,
+            variables={},
+            org_id=org_id,
+            version_id=current_agent_config.get("version_id"),
+            override_fields={},
+        )
+        if not resolved_config.get("success"):
+            return {"success": False, "error": resolved_config.get("error", "Failed to resolve agent configuration")}
+
         request_body = {
             "user": task_description,
             "bridge_id": assigned_agent,
@@ -73,22 +93,20 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             "sub_thread_id": sub_thread_id,
             "org_id": org_id,
             "variables": {},
-            "bridge_configurations": bridge_configurations,
+            "bridge_configurations": copy.deepcopy(resolved_config.get("bridge_configurations", {})),
             "plans": plan,
+            # Skip per-sub-task history for the primary agent; its final
+            # response is saved once by todo_handler after full execution.
+            "skip_history": is_primary_agent_task,
         }
-        
-        request_body.update(agent_config)
 
-        # Force streaming so task events (delta, reasoning, tool_call) are
-        # forwarded to the client in real-time instead of a single bulk response.
+        # Match the direct request path by going through chat_multiple_agents,
+        # which applies the DB-backed agent config before entering chat().
         if streamer:
-            config = request_body.get("configuration", {})
-            if isinstance(config, dict):
-                config["stream"] = True
-                request_body["configuration"] = config
-        
+            request_body.setdefault("configuration", {})["stream"] = True
+
         data_to_send = {"body": request_body, "state": {}}
-        response = await chat(data_to_send)
+        response = await chat_multiple_agents(data_to_send)
         
         if hasattr(response, "body"):
             response_data = json.loads(response.body.decode("utf-8"))
@@ -96,7 +114,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                 content = response_data.get("response", {}).get("data", {}).get("content", "")
                 return {"success": True, "result": content}
             else:
-                return {"success": False, "error": response_data.get("message", "Task execution failed")}
+                return {"success": False, "error": response_data.get("error") or response_data.get("message") or "Task execution failed"}
 
         elif hasattr(response, "body_iterator"):
             accumulated_content = []
@@ -156,7 +174,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                 content = response.get("response", {}).get("data", {}).get("content", "")
                 return {"success": True, "result": content}
             else:
-                return {"success": False, "error": response.get("message", "Task execution failed")}
+                return {"success": False, "error": response.get("error") or response.get("message") or "Task execution failed"}
 
     except Exception as e:
         logger.error(f"Error executing task {task_id}: {e}")
