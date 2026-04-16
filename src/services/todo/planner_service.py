@@ -99,6 +99,13 @@ STREAM_FUNCTIONS = {
 _NEEDS_STREAM_FLAG = {service_name["groq"], service_name["open_router"]}
 
 
+def _normalize_reasoning_config(reasoning_config):
+    """Normalize reasoning config so provider formatters receive an object."""
+    if isinstance(reasoning_config, str):
+        return {"effort": reasoning_config}
+    return reasoning_config
+
+
 def _build_agent_context(parsed_data, bridge_configurations):
     """Build a context string describing the available agents and tools for the planner."""
     main_bridge_id = parsed_data["bridge_id"]
@@ -172,6 +179,8 @@ def _build_planner_message(user_goal, agent_context, existing_plan=None, user_fe
 
 def _build_llm_config(model, service, planner_message, reasoning_config=None):
     """Build a minimal streaming LLM configuration."""
+    reasoning_config = _normalize_reasoning_config(reasoning_config)
+
     if service == service_name["anthropic"]:
         config = {
             "model": model,
