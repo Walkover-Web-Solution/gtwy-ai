@@ -98,6 +98,8 @@ STREAM_FUNCTIONS = {
 # These services need stream=True added to the config dict (SDK-based, not handled internally)
 _NEEDS_STREAM_FLAG = {service_name["groq"], service_name["open_router"]}
 
+_USAGE_FIELDS = ("input_tokens", "output_tokens", "total_tokens", "cost")
+
 
 def _build_agent_context(parsed_data, bridge_configurations):
     """Build a context string describing the available agents and tools for the planner."""
@@ -222,6 +224,46 @@ def _parse_plan_json(content):
         raise ValueError(f"Planner returned invalid JSON: {e}\nContent: {content[:500]}")
 
 
+def _normalize_usage(usage):
+    usage = usage or {}
+    input_tokens = usage.get("input_tokens", 0) or 0
+    output_tokens = usage.get("output_tokens", 0) or 0
+    total_tokens = usage.get("total_tokens", input_tokens + output_tokens) or 0
+    cost = usage.get("cost", usage.get("expectedCost", 0)) or 0
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cost": cost,
+    }
+
+
+def _merge_usage(current_usage, additional_usage):
+    current_usage = _normalize_usage(current_usage)
+    additional_usage = _normalize_usage(additional_usage)
+    return {
+        field: current_usage.get(field, 0) + additional_usage.get(field, 0)
+        for field in _USAGE_FIELDS
+    }
+
+
+def _build_usage_summary(planner_usage, existing_summary=None):
+    planner_usage = _normalize_usage(planner_usage)
+    existing_summary = existing_summary or {}
+
+    summary = {
+        "planner": _normalize_usage(existing_summary.get("planner")),
+        "execution": _normalize_usage(existing_summary.get("execution")),
+        "tasks": existing_summary.get("tasks", {}) or {},
+        "bridges": existing_summary.get("bridges", {}) or {},
+        "totals": _normalize_usage(existing_summary.get("totals")),
+    }
+
+    summary["planner"] = _merge_usage(summary["planner"], planner_usage)
+    summary["totals"] = _merge_usage(summary["totals"], planner_usage)
+    return summary
+
+
 async def _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer):
     """
     Call the LLM in streaming mode. Tokens are emitted to `streamer` as they arrive.
@@ -252,7 +294,10 @@ async def _call_planner_streaming(planner_message, parsed_data, bridge_configura
     if not content:
         raise ValueError("Planner returned empty response")
 
-    return _parse_plan_json(content)
+    return {
+        "plan_data": _parse_plan_json(content),
+        "usage": stream_state.get("final_usage", {}) or {},
+    }
 
 
 async def create_plan(parsed_data, bridge_configurations, streamer):
@@ -261,7 +306,8 @@ async def create_plan(parsed_data, bridge_configurations, streamer):
     agent_context = _build_agent_context(parsed_data, bridge_configurations)
     planner_message = _build_planner_message(user_goal, agent_context)
 
-    plan_data = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer)
+    planner_response = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer)
+    plan_data = planner_response["plan_data"]
 
     plan = {
         "goal": plan_data.get("goal", user_goal),
@@ -273,6 +319,7 @@ async def create_plan(parsed_data, bridge_configurations, streamer):
         "tasks": plan_data.get("tasks", {}),
         # Persisted so execution phases can update the same history entry
         "message_id": parsed_data.get("message_id", ""),
+        "usage_summary": _build_usage_summary(planner_response.get("usage")),
     }
 
     await plan_store.save_plan(plan)
@@ -289,11 +336,16 @@ async def update_plan(existing_plan, user_feedback, parsed_data, bridge_configur
         user_feedback=user_feedback,
     )
 
-    plan_data = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer)
+    planner_response = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer)
+    plan_data = planner_response["plan_data"]
 
     existing_plan["tasks"] = plan_data.get("tasks", existing_plan["tasks"])
     existing_plan["goal"] = plan_data.get("goal", existing_plan["goal"])
     existing_plan["state"] = "planning"
+    existing_plan["usage_summary"] = _build_usage_summary(
+        planner_response.get("usage"),
+        existing_summary=existing_plan.get("usage_summary"),
+    )
 
     await plan_store.update_plan(existing_plan)
     return existing_plan

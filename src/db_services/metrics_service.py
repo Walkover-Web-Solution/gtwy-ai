@@ -9,7 +9,7 @@ from models.index import combined_models
 # from src.services.utils.send_error_webhook import send_error_to_webhook
 from src.configs.constant import redis_keys
 
-from ..services.cache_service import store_in_cache
+from ..services.cache_service import find_in_cache, store_in_cache
 
 postgres = combined_models["pg"]
 timescale = combined_models["timescale"]
@@ -23,8 +23,15 @@ async def save_conversations_to_redis(conversations, version_id, thread_id, sub_
     try:
         # Create Redis key
         redis_key = f"{redis_keys['conversation_']}{version_id}_{thread_id}_{sub_thread_id}"
-        # Start with existing conversations from database
-        conversation_list = conversations or []
+        cached_conversations = await find_in_cache(redis_key)
+        if cached_conversations:
+            try:
+                conversation_list = json.loads(cached_conversations)
+            except (json.JSONDecodeError, TypeError):
+                conversation_list = conversations or []
+        else:
+            # Start with existing conversations from database
+            conversation_list = conversations or []
 
         # Create current conversation entries (user + assistant)
         current_time = datetime.now().isoformat() + "+00:00"
@@ -411,6 +418,9 @@ async def publish_plan_history_update(message_id, final_plan, history_params):
             "plans": final_plan,
             "finish_reason": history_params.get("finish_reason", "stop"),
             "status": history_params.get("status", True),
+            "usage_summary": history_params.get("usage_summary") or {},
+            "tokens": history_params.get("tokens") or {},
+            "latency": history_params.get("latency") or {},
         }
         message = make_json_serializable({"update_history": update_data})
         await sub_queue_obj.publish_message(message)

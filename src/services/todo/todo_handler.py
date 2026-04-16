@@ -94,6 +94,23 @@ def _build_plan_dataset(parsed_data):
     }
 
 
+def _build_plan_history_update_params(plan, message, finish_reason, status=None):
+    usage_summary = (plan or {}).get("usage_summary", {}) or {}
+    totals = usage_summary.get("totals", {}) or {}
+    return {
+        "message": message,
+        "finish_reason": finish_reason,
+        "status": (plan or {}).get("state") == "completed" if status is None else status,
+        "usage_summary": usage_summary,
+        "tokens": {
+            "input_tokens": totals.get("input_tokens", 0) or 0,
+            "output_tokens": totals.get("output_tokens", 0) or 0,
+            "total_tokens": totals.get("total_tokens", 0) or 0,
+            "cost": totals.get("cost", 0) or 0,
+        },
+    }
+
+
 async def _stream_plan_action(streamer, action, parsed_data, bridge_configurations, existing_plan):
     """Background task: execute the plan action and emit SSE events."""
     org_id = parsed_data["org_id"]
@@ -116,12 +133,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             return
 
         if action == "approve":
-            # Reset previously failed tasks so they retry
-            for task in existing_plan.get("tasks", {}).values():
-                if task["status"] == "failed":
-                    task["status"] = "pending"
-                    task["retry"] = 0
-                    task["error"] = None
+            executor_service.reset_tasks_for_reexecution(existing_plan.get("tasks", {}))
             existing_plan["state"] = "approved"
             await plan_store.update_plan(existing_plan)
             await streamer.emit_delta(json.dumps({"event": "execution_started", "state": "executing"}))
@@ -144,11 +156,11 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 publish_plan_history_update(
                     message_id=plan_message_id,
                     final_plan=final_plan,
-                    history_params={
-                        "message": formatted["data"]["content"],
-                        "finish_reason": "stop",
-                        "status": (final_plan or {}).get("state") == "completed",
-                    },
+                    history_params=_build_plan_history_update_params(
+                        final_plan,
+                        formatted["data"]["content"],
+                        "stop",
+                    ),
                 )
             )
 
@@ -216,11 +228,11 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 publish_plan_history_update(
                     message_id=plan_message_id,
                     final_plan=final_plan,
-                    history_params={
-                        "message": formatted["data"]["content"],
-                        "finish_reason": "stop",
-                        "status": (final_plan or {}).get("state") == "completed",
-                    },
+                    history_params=_build_plan_history_update_params(
+                        final_plan,
+                        formatted["data"]["content"],
+                        "stop",
+                    ),
                 )
             )
 
@@ -236,12 +248,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 await streamer.emit_error(f"Task {task_id} not found")
                 return
             
-            # Reset task state
-            task["status"] = "pending"
-            task["retry"] = 0
-            task["result"] = None
-            task["error"] = None
-            task["is_error"] = False
+            executor_service.reset_tasks_for_reexecution(existing_plan.get("tasks", {}), root_task_ids={task_id})
             existing_plan["state"] = "approved"
             await plan_store.update_plan(existing_plan)
             
@@ -265,22 +272,36 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 publish_plan_history_update(
                     message_id=plan_message_id,
                     final_plan=final_plan,
-                    history_params={
-                        "message": formatted["data"]["content"],
-                        "finish_reason": "stop",
-                        "status": (final_plan or {}).get("state") == "completed",
-                    },
+                    history_params=_build_plan_history_update_params(
+                        final_plan,
+                        formatted["data"]["content"],
+                        "stop",
+                    ),
                 )
             )
 
         elif action == "cancel":
             existing_plan["state"] = "failed"
             await plan_store.update_plan(existing_plan)
+            formatted = _format_plan_response(existing_plan, message_id, model, finish_reason="cancelled")
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
                 finish_reason="stop",
-                accumulated_data=_format_plan_response(existing_plan, message_id, model, finish_reason="cancelled"),
+                accumulated_data=formatted,
+            )
+            plan_message_id = existing_plan.get("message_id") or message_id
+            asyncio.create_task(
+                publish_plan_history_update(
+                    message_id=plan_message_id,
+                    final_plan=existing_plan,
+                    history_params=_build_plan_history_update_params(
+                        existing_plan,
+                        formatted["data"]["content"],
+                        "cancelled",
+                        status=False,
+                    ),
+                )
             )
 
         elif not existing_plan:
@@ -344,11 +365,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 publish_plan_history_update(
                     message_id=plan_message_id,
                     final_plan=plan,
-                    history_params={
-                        "message": "",
-                        "finish_reason": "planning",
-                        "status": True,
-                    },
+                    history_params=_build_plan_history_update_params(plan, "", "planning", status=True),
                 )
             )
 

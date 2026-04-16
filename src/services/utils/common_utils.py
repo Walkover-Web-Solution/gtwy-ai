@@ -1307,7 +1307,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
         "parent_id": parsed_data.get("parent_bridge_id", ""),
         "child_id": None,
         "prompt": parsed_data["configuration"].get("prompt"),
-        "plans": parsed_data.get("plans"),
+        "plans": None if parsed_data.get("skip_history") else parsed_data.get("plans"),
         "llm_urls": [],
         "user_urls": (
             [{"url": u, "type": "image"} for u in parsed_data.get("images", [])]
