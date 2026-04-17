@@ -253,13 +253,19 @@ async def _call_planner_streaming(planner_message, parsed_data, bridge_configura
 def _build_planner_system_prompt(prompt, agent_context):
     return f"{prompt}\n\n ***user agent system prompt*** : {agent_context}"
 
+
+def _prepare_planner_prompt(parsed_data, bridge_configurations):
+    """Build the planner system prompt with agent context. Reusable across create_plan and update_plan."""
+    agent_context = _build_agent_context(parsed_data, bridge_configurations)
+    return _build_planner_system_prompt(PLANNER_PROMPT, agent_context)
+
+
 async def create_plan(parsed_data, bridge_configurations, streamer):
     """Create a new plan, streaming tokens to `streamer`."""
     user_goal = parsed_data["user"]
-    agent_context = _build_agent_context(parsed_data, bridge_configurations)
+    planner_prompt = _prepare_planner_prompt(parsed_data, bridge_configurations)
     planner_message = _build_planner_message(user_goal, "")
-    planner_prompt = _build_planner_system_prompt(PLANNER_PROMPT,agent_context)
-    print('\nnn planner_prompt: ', planner_prompt, )
+    print('\nnn planner_prompt: ', planner_prompt,)
     plan_data = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer, planner_prompt)
 
     plan = {
@@ -280,6 +286,7 @@ async def create_plan(parsed_data, bridge_configurations, streamer):
 
 async def update_plan(existing_plan, user_feedback, parsed_data, bridge_configurations, streamer):
     """Update an existing plan based on user feedback, streaming tokens to `streamer`."""
+    planner_prompt = _prepare_planner_prompt(parsed_data, bridge_configurations)
     agent_context = _build_agent_context(parsed_data, bridge_configurations)
     planner_message = _build_planner_message(
         existing_plan["goal"],
