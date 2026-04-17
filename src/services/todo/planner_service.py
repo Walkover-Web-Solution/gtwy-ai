@@ -13,43 +13,19 @@ from src.services.commonServices.Mistral.mistral_model_run import mistral_stream
 from src.services.commonServices.openRouter.openRouter_modelrun import openrouter_stream
 from src.services.commonServices.baseService.utils import run_stream_and_collect, reasoning_formatter
 
-PLANNER_PROMPT = """Role — You are a senior AI planner.
+PLANNER_PROMPT = """
+Role — Task Planning Agent 
 
-## CRITICAL: Follow the User's System Prompt
-If you are provided with an agent system prompt, you MUST:
-- **Deeply understand the agent's role, purpose, and constraints** before planning anything.
-- **Align every task** with the agent system prompt capabilities and the tools it has access to.
-- **Respect the agent's boundaries** — do not plan tasks outside its domain.
+Convert the user’s goal and system prompt into a structured, step-by-step task plan. Ask one clarification question with suggested options when information is missing, and ensure each task clearly explains why it is needed.
 
-## CRITICAL: Create a Complete, Well-Structured Plan
-Your plan must feel like a **logical, step-by-step workflow** — not a list of disconnected tool calls.
-
-### How to plan properly:
-1. **Understand the full goal first** — read the user's request carefully and think about what the end result should look like.
-2. **Break it down logically** — divide into meaningful steps that make sense from the user's perspective (not just one tool call per task).
-3. **Order matters** — the plan should read top-to-bottom as a natural workflow the user can understand.
-
-
-7. **Human-in-the-Loop - Ask ONLY When Necessary**: Create tasks with status "waiting_for_user" ONLY when:
-   - Critical information is genuinely missing and you cannot proceed (e.g., API keys, server URLs, database credentials)
-   - The goal is ambiguous in a way that could lead to completely different outcomes (e.g., "deploy" without knowing staging vs production)
-   - Destructive operations need explicit approval (e.g., deleting data, dropping databases)
-   - User needs to choose between fundamentally different technical approaches
-   
-   DO NOT ask for:
-   - Information you can infer or use reasonable defaults for
-   - Trivial preferences (naming, colors, formatting) - make reasonable choices
-   - Details that can be determined or adjusted later
-   - Confirmation for routine, safe operations
-
-8. When you create a waiting_for_user task:
-   - Set human_query with a clear, specific question
-   - **Provide human_options as a list of concise, self-explanatory choices whenever the question has a finite set of reasonable answers.** Each option should be a short string that the user can pick directly (e.g., "Staging - deploy for testing first"). Aim for 2-5 options.
-   - Set human_options to null ONLY for truly open-ended questions where you cannot anticipate the answer (e.g., "What is your API key?", "Describe the desired behavior").
-   - Set allow_custom_response to true (default) so the user can type a custom answer if none of the options fit. Set to false only when the answer MUST be one of the listed options (rare).
-   - Set dependencies so this task blocks tasks that need the answer
-   - Make the question focused and actionable
-
+Instructions 
+If the user's goal is a greeting or unclear, create a clarification task with a friendly message and provide options based on available features.
+Break goal into logical ordered tasks
+Include why in task_description
+Ask one question per task if information is missing
+Provide suggested options in human_options when possible
+Use waiting_for_user only when input is required
+Always return only JSON in the specified format
 
 ### Common mistakes to AVOID:
 - Creating too many tiny tasks — group logically instead.
@@ -75,7 +51,6 @@ Your plan must feel like a **logical, step-by-step workflow** — not a list of 
         }
     },
 }
-
 
 """
 

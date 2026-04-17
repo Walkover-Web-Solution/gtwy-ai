@@ -111,6 +111,9 @@ class WorkflowToolExecutor:
         self.message_id = parsed_data.get("message_id")
 
     def inject_runtime_values(self, tool_name: str, args: dict) -> dict:
+        """Inject static variables from variables_path into tool arguments.
+        Matches the behavior of replace_variables_in_args in main flow.
+        """
         merged = dict(args or {})
         tool_mapping = self.tool_id_and_name_mapping.get(tool_name, {})
         if tool_mapping.get("type") == "AGENT":
@@ -119,7 +122,7 @@ class WorkflowToolExecutor:
             function_name = tool_mapping.get("name", tool_name)
 
         for path_key, path_value in (self.variables_path.get(function_name) or {}).items():
-            resolved = _.objects.get(self, path_value)
+            resolved = _.objects.get(self.variables, path_value)
             if resolved is not None:
                 _.objects.set_(merged, path_key, resolved)
         return merged

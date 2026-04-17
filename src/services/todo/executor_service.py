@@ -206,7 +206,35 @@ def _is_plan_complete(tasks):
     return all(t["status"] in TERMINAL_STATUSES for t in tasks.values())
 
 
-async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, plan, streamer=None, main_agent_metrics=None):
+def _inject_variables_into_tool_args(tool_name, args, variables, variables_path, tool_id_and_name_mapping):
+    """Inject static variables into tool arguments based on variables_path mapping.
+    Matches the behavior of replace_variables_in_args in main flow.
+    """
+    if not variables_path or not variables:
+        return args
+    
+    import pydash as _
+    
+    # Get the function name for variable path lookup
+    tool_mapping = tool_id_and_name_mapping.get(tool_name, {})
+    if tool_mapping.get("type") == "AGENT":
+        function_name = tool_mapping.get("bridge_id", "")
+    else:
+        function_name = tool_mapping.get("name", tool_name)
+    
+    # Inject variables based on variables_path mapping
+    enriched_args = dict(args or {})
+    function_variables_path = variables_path.get(function_name, {})
+    
+    for path_key, path_value in function_variables_path.items():
+        value_to_set = _.objects.get(variables, path_value)
+        if value_to_set is not None:
+            _.objects.set_(enriched_args, path_key, value_to_set)
+    
+    return enriched_args
+
+
+async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, plan, streamer=None, main_agent_metrics=None, variables=None, variables_path=None):
     """Execute a single task by calling the appropriate agent directly.
     
     When `streamer` is provided, delta/reasoning/tool events from the agent's
@@ -241,7 +269,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             service=None,
             bridge_id=assigned_agent,
             apikey=None,
-            variables={},
+            variables=variables or {},
             org_id=org_id,
             version_id=current_agent_config.get("version_id"),
             override_fields={},
@@ -256,7 +284,8 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             "thread_id": thread_id,
             "sub_thread_id": sub_thread_id,
             "org_id": org_id,
-            "variables": {},
+            "variables": variables or {},
+            "variables_path": variables_path or {},
             "bridge_configurations": copy.deepcopy(resolved_config.get("bridge_configurations", {})),
             "plans": plan,
             # Skip per-sub-task history for the primary agent; its final
@@ -316,18 +345,33 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                     elif evt_type == "tool_call":
                         call_id = event.get("call_id", "")
                         if aggregate_metrics is not None:
-                            entry = {
-                                "task_id": task_id,
-                                "call_id": call_id,
-                                "name": event.get("name", ""),
-                                "args": event.get("args", {}),
-                                "result": None,
-                            }
-                            if call_id and call_id not in tool_calls_by_id:
-                                tool_calls_by_id[call_id] = entry
-                                tool_calls_order.append(entry)
-                            elif not call_id:
-                                tool_calls_order.append(entry)
+                            # Format matches main flow: {call_id: {name, args, data, id}}
+                            if not call_id:
+                                # Generate fallback ID if missing
+                                call_id = f"tool_{task_id}_{len(tool_calls_order)}"
+                            
+                            if call_id not in tool_calls_by_id:
+                                # Inject static variables into args before storing in history
+                                # This matches main flow where replace_variables_in_args is called
+                                # before process_data_and_run_tools builds tool history
+                                raw_args = event.get("args", {})
+                                tool_name = event.get("name", "")
+                                tool_id_and_name_mapping = (bridge_configurations.get(assigned_agent, {}) or {}).get("tool_id_and_name_mapping", {})
+                                enriched_args = _inject_variables_into_tool_args(
+                                    tool_name, raw_args, variables, variables_path, tool_id_and_name_mapping
+                                )
+                                
+                                # Create entry matching main flow format
+                                tool_entry = {
+                                    call_id: {
+                                        "name": tool_name,
+                                        "args": enriched_args,  # Store enriched args with injected variables
+                                        "data": None,  # Will be updated when tool_result arrives
+                                        "id": tool_name,  # Tool identifier
+                                    }
+                                }
+                                tool_calls_by_id[call_id] = tool_entry[call_id]
+                                tool_calls_order.append(tool_entry)
                         if streamer:
                             await streamer.emit_task_tool_call(
                                 task_id,
@@ -341,15 +385,29 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                         result_content = event.get("content", "")
                         if aggregate_metrics is not None:
                             if call_id and call_id in tool_calls_by_id:
-                                tool_calls_by_id[call_id]["result"] = result_content
+                                # Update the data field in existing entry
+                                tool_calls_by_id[call_id]["data"] = {
+                                    "response": result_content,
+                                    "status": 1,
+                                    "metadata": {"type": "function"}
+                                }
                             else:
-                                tool_calls_order.append({
-                                    "task_id": task_id,
-                                    "call_id": call_id,
-                                    "name": event.get("name", ""),
-                                    "args": {},
-                                    "result": result_content,
-                                })
+                                # Tool result without prior tool_call - create standalone entry
+                                if not call_id:
+                                    call_id = f"tool_{task_id}_{len(tool_calls_order)}"
+                                tool_entry = {
+                                    call_id: {
+                                        "name": event.get("name", ""),
+                                        "args": {},
+                                        "data": {
+                                            "response": result_content,
+                                            "status": 1,
+                                            "metadata": {"type": "function"}
+                                        },
+                                        "id": event.get("name", ""),
+                                    }
+                                }
+                                tool_calls_order.append(tool_entry)
                         if streamer:
                             await streamer.emit_task_tool_result(
                                 task_id,
@@ -399,7 +457,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
         return {"success": False, "error": str(e)}
 
 
-async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, streamer=None):
+async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=None):
     """
     Execute all tasks respecting dependencies and parallelism.
     If `streamer` is provided, task progress events are emitted live via SSE.
@@ -460,12 +518,18 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
         await plan_store.update_plan(plan)
 
         # Execute runnable tasks in parallel (streamer forwarded for live events)
+        # Extract variables from parsed_data for connected agent calls
+        plan_variables = parsed_data.get("variables") or {}
+        plan_variables_path = parsed_data.get("variables_path") or {}
+        
         coroutines = [
             _execute_single_task(
                 task_id, tasks[task_id],
                 org_id, bridge_id, thread_id, sub_thread_id,
                 bridge_configurations, plan, streamer=streamer,
                 main_agent_metrics=main_agent_metrics,
+                variables=plan_variables,
+                variables_path=plan_variables_path,
             )
             for task_id in runnable
         ]
