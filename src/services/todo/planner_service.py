@@ -13,61 +13,29 @@ from src.services.commonServices.Mistral.mistral_model_run import mistral_stream
 from src.services.commonServices.openRouter.openRouter_modelrun import openrouter_stream
 from src.services.commonServices.baseService.utils import run_stream_and_collect, reasoning_formatter
 
-PLANNER_PROMPT = """You are a task planner agent. Your job is to break down a user's goal into a structured plan of tasks.
+PLANNER_PROMPT = """
+Role — Task Planning Agent 
 
-You will receive:
-- The user's goal
-- The main agent's capabilities (system prompt, tools, connected agents)
-- Optionally, an existing plan and user feedback to update it
+Convert the user’s goal and system prompt into a structured, step-by-step task plan. Ask one clarification question with suggested options when information is missing, and ensure each task clearly explains why it is needed.
 
-Rules:
-1. **IMPORTANT - Simplicity First**: For simple, straightforward goals, create a SINGLE task. Only break into multiple tasks when:
-   - The goal genuinely requires multiple distinct steps that depend on each other
-   - Different agents/tools are needed for different parts
-   - Parallel execution would provide real value
-   - The goal is complex and would benefit from granular tracking
-   Examples of single-task goals: "write a function", "analyze this data", "fix this bug", "summarize this document"
-   Examples of multi-task goals: "build and deploy application", "research, analyze, and present findings", "setup infrastructure across multiple services"
+Instructions 
+If the user's goal is a greeting or unclear, create a clarification task with a friendly message and provide options based on available features.
+Break goal into logical ordered tasks
+Include why in task_description
+Ask one question per task if information is missing
+Provide suggested options in human_options when possible
+Use waiting_for_user only when input is required
+Always return only JSON in the specified format
 
-2. Each task should be a clear, actionable unit of work with a specific outcome.
-
-3. Use the assigned_agent field to delegate tasks to specific connected agents when appropriate. Use their bridge_id.
-
-4. Use the assigned_tool field when a specific tool should be used for the task.
-
-5. Set dependencies between tasks using task_id references (e.g. ["task_1"]). Tasks with no dependencies can run in parallel.
-
-6. Set max_retry to 2 for tasks that might fail transiently, 0 for tasks that should not retry.
-
-7. **Human-in-the-Loop - Ask ONLY When Necessary**: Create tasks with status "waiting_for_user" ONLY when:
-   - Critical information is genuinely missing and you cannot proceed (e.g., API keys, server URLs, database credentials)
-   - The goal is ambiguous in a way that could lead to completely different outcomes (e.g., "deploy" without knowing staging vs production)
-   - Destructive operations need explicit approval (e.g., deleting data, dropping databases)
-   - User needs to choose between fundamentally different technical approaches
-   
-   DO NOT ask for:
-   - Information you can infer or use reasonable defaults for
-   - Trivial preferences (naming, colors, formatting) - make reasonable choices
-   - Details that can be determined or adjusted later
-   - Confirmation for routine, safe operations
-
-8. When you create a waiting_for_user task:
-   - Set human_query with a clear, specific question
-   - **Provide human_options as a list of concise, self-explanatory choices whenever the question has a finite set of reasonable answers.** Each option should be a short string that the user can pick directly (e.g., "Staging - deploy for testing first"). Aim for 2-5 options.
-   - Set human_options to null ONLY for truly open-ended questions where you cannot anticipate the answer (e.g., "What is your API key?", "Describe the desired behavior").
-   - Set allow_custom_response to true (default) so the user can type a custom answer if none of the options fit. Set to false only when the answer MUST be one of the listed options (rare).
-   - Set dependencies so this task blocks tasks that need the answer
-   - Make the question focused and actionable
-
-Respond with ONLY a valid JSON object. No markdown, no explanation, just the JSON."""
-
-PLAN_JSON_SCHEMA = {
+### Common mistakes to AVOID:
+- Creating too many tiny tasks — group logically instead.
+- Forgetting to explain WHY a step is needed.Always follow this Output JSON format:{
     "goal": "string - the user's original goal",
     "tasks": {
         "task_1": {
             "title": "short title",
             "task_description": "detailed description of what this task should accomplish",
-            "status": "pending | waiting_for_user",
+            "status": "pending | waiting_for_user -> This is for asking questions from the user with human_options — always ask a single question for each task.",
             "dependencies": ["array of task_ids that must complete before this task can start"],
             "assigned_agent": "bridge_id of the agent to handle this task, or null for the main agent",
             "assigned_tool": "tool_name if a specific tool should be used, or null",
@@ -83,6 +51,9 @@ PLAN_JSON_SCHEMA = {
         }
     },
 }
+
+"""
+
 
 # Streaming functions per service — all take (configuration, apikey) positional args
 STREAM_FUNCTIONS = {
@@ -162,7 +133,7 @@ def _build_planner_message(user_goal, agent_context, existing_plan=None, user_fe
     else:
         parts.append("\nCreate a structured plan to accomplish this goal.")
 
-    parts.append(f"\nRespond with ONLY a valid JSON object matching this schema:\n{json.dumps(PLAN_JSON_SCHEMA, indent=2)}")
+    # parts.append(f"\nRespond with ONLY a valid JSON object matching this schema:\n{json.dumps(PLAN_JSON_SCHEMA, indent=2)}")
     parts.append("\nIMPORTANT: Use actual bridge_ids from the context above for assigned_agent. "
                  "Set dependencies as task_id references (e.g. [\"task_1\"]). "
                  "Tasks with no dependencies can run in parallel.")
@@ -170,12 +141,12 @@ def _build_planner_message(user_goal, agent_context, existing_plan=None, user_fe
     return "\n".join(parts)
 
 
-def _build_llm_config(model, service, planner_message, reasoning_config=None):
+def _build_llm_config(model, service, planner_message, reasoning_config=None, planner_prompt=None):
     """Build a minimal streaming LLM configuration."""
     if service == service_name["anthropic"]:
         config = {
             "model": model,
-            "system": PLANNER_PROMPT,
+            "system": planner_prompt,
             "messages": [{"role": "user", "content": planner_message}],
             "max_tokens": 4096,
         }
@@ -183,20 +154,20 @@ def _build_llm_config(model, service, planner_message, reasoning_config=None):
         config = {
             "model": model,
             "contents": [
-                {"role": "user", "parts": [{"text": PLANNER_PROMPT + "\n\n" + planner_message}]},
+                {"role": "user", "parts": [{"text": planner_prompt + "\n\n" + planner_message}]},
             ],
         }
     elif service == service_name["openai"]:
         config = {
             "model": model,
-            "instructions": PLANNER_PROMPT,
+            "instructions": planner_prompt,
             "input": [{"type": "message", "role": "user", "content": planner_message}],
         }
     else:
         config = {
             "model": model,
             "messages": [
-                {"role": "system", "content": PLANNER_PROMPT},
+                {"role": "system", "content": planner_prompt},
                 {"role": "user", "content": planner_message},
             ],
         }
@@ -222,7 +193,7 @@ def _parse_plan_json(content):
         raise ValueError(f"Planner returned invalid JSON: {e}\nContent: {content[:500]}")
 
 
-async def _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer):
+async def _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer, planner_prompt):
     """
     Call the LLM in streaming mode. Tokens are emitted to `streamer` as they arrive.
     Returns the parsed plan JSON dict after the stream completes.
@@ -239,7 +210,7 @@ async def _call_planner_streaming(planner_message, parsed_data, bridge_configura
     if not stream_fn:
         raise ValueError(f"Unsupported service for planner: {service}")
 
-    config = _build_llm_config(model, service, planner_message, reasoning_config=reasoning_config)
+    config = _build_llm_config(model, service, planner_message, reasoning_config=reasoning_config, planner_prompt=planner_prompt)
 
     # All stream functions take (configuration, apikey) as positional args
     generator = stream_fn(config, apikey)
@@ -254,14 +225,22 @@ async def _call_planner_streaming(planner_message, parsed_data, bridge_configura
 
     return _parse_plan_json(content)
 
+def _build_planner_system_prompt(prompt, agent_context):
+    return f"{prompt}\n\n ***user agent system prompt*** : {agent_context}"
+
+
+def _prepare_planner_prompt(parsed_data, bridge_configurations):
+    """Build the planner system prompt with agent context. Reusable across create_plan and update_plan."""
+    agent_context = _build_agent_context(parsed_data, bridge_configurations)
+    return _build_planner_system_prompt(PLANNER_PROMPT, agent_context)
+
 
 async def create_plan(parsed_data, bridge_configurations, streamer):
     """Create a new plan, streaming tokens to `streamer`."""
     user_goal = parsed_data["user"]
-    agent_context = _build_agent_context(parsed_data, bridge_configurations)
-    planner_message = _build_planner_message(user_goal, agent_context)
-
-    plan_data = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer)
+    planner_prompt = _prepare_planner_prompt(parsed_data, bridge_configurations)
+    planner_message = _build_planner_message(user_goal, "")
+    plan_data = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer, planner_prompt)
 
     plan = {
         "goal": plan_data.get("goal", user_goal),
@@ -281,6 +260,7 @@ async def create_plan(parsed_data, bridge_configurations, streamer):
 
 async def update_plan(existing_plan, user_feedback, parsed_data, bridge_configurations, streamer):
     """Update an existing plan based on user feedback, streaming tokens to `streamer`."""
+    planner_prompt = _prepare_planner_prompt(parsed_data, bridge_configurations)
     agent_context = _build_agent_context(parsed_data, bridge_configurations)
     planner_message = _build_planner_message(
         existing_plan["goal"],
@@ -289,7 +269,7 @@ async def update_plan(existing_plan, user_feedback, parsed_data, bridge_configur
         user_feedback=user_feedback,
     )
 
-    plan_data = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer)
+    plan_data = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer, planner_prompt)
 
     existing_plan["tasks"] = plan_data.get("tasks", existing_plan["tasks"])
     existing_plan["goal"] = plan_data.get("goal", existing_plan["goal"])

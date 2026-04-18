@@ -128,7 +128,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             await streamer.emit_execution()
             # Run executor — stream stays open, task events emitted per task
             main_agent_metrics = await executor_service.execute_plan(
-                org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, streamer=streamer
+                org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
@@ -201,7 +201,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             plan["state"] = "approved"
             await plan_store.update_plan(plan)
             main_agent_metrics = await executor_service.execute_plan(
-                org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, streamer=streamer
+                org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
@@ -249,7 +249,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             await streamer.emit_delta(json.dumps({"event": "execution_started", "state": "executing"}))
             await streamer.emit_execution()
             main_agent_metrics = await executor_service.execute_plan(
-                org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, streamer=streamer
+                org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
