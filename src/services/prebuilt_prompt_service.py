@@ -29,3 +29,22 @@ async def get_specific_prebuilt_prompt_service(org_id: str, prompt_key: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}") from e
+
+
+async def get_specific_prebuilt_prompt_without_org_service(prompt_key: str):
+    try:
+        query = {
+            "$or": [
+                {prompt_key: {"$exists": True}},
+            ]
+        }
+        projection = {"_id": 0, prompt_key: 1}
+        document = await prebuilt_db.find_one(query, projection, sort=[("_id", -1)])
+
+        if document and document.get(prompt_key):
+            return {prompt_key: document[prompt_key]}
+
+        return None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}") from e

@@ -1,7 +1,9 @@
 import json
 
 from globals import logger
+from src.services.utils.helper import Helper
 from src.configs.constant import service_name
+from src.services.prebuilt_prompt_service import get_specific_prebuilt_prompt_without_org_service
 from src.services.todo import plan_store
 
 from src.services.commonServices.openAI.runModel import openai_response_stream
@@ -79,6 +81,9 @@ def _build_agent_context(parsed_data, bridge_configurations):
 
     # Main agent info
     main_prompt = main_config.get("configuration", {}).get("prompt", "")
+    main_prompt, _ = Helper.replace_variables_in_prompt(
+            main_prompt or "", parsed_data["variables"]
+        )
     context_parts.append(f"Main Agent (bridge_id: {main_bridge_id}):")
     if main_prompt:
         context_parts.append(f"  System Prompt: {main_prompt[:500]}")
@@ -235,10 +240,24 @@ def _prepare_planner_prompt(parsed_data, bridge_configurations):
     return _build_planner_system_prompt(PLANNER_PROMPT, agent_context)
 
 
+async def _get_planner_prompt_from_db(default_prompt):
+    try:
+        prompt_data = await get_specific_prebuilt_prompt_without_org_service("planner_prompt")
+        prompt_override = (prompt_data or {}).get("planner_prompt")
+        if isinstance(prompt_override, str) and prompt_override.strip():
+            return prompt_override
+    except Exception as err:
+        logger.error(f"Error fetching planner_prompt from preBuiltPrompts: {err}")
+    return default_prompt
+
+
 async def create_plan(parsed_data, bridge_configurations, streamer):
     """Create a new plan, streaming tokens to `streamer`."""
     user_goal = parsed_data["user"]
-    planner_prompt = _prepare_planner_prompt(parsed_data, bridge_configurations)
+    db_planner_prompt = await _get_planner_prompt_from_db(PLANNER_PROMPT)
+    planner_prompt = _build_planner_system_prompt(
+        db_planner_prompt, _build_agent_context(parsed_data, bridge_configurations)
+    )
     planner_message = _build_planner_message(user_goal, "")
     plan_data = await _call_planner_streaming(planner_message, parsed_data, bridge_configurations, streamer, planner_prompt)
 
@@ -260,7 +279,10 @@ async def create_plan(parsed_data, bridge_configurations, streamer):
 
 async def update_plan(existing_plan, user_feedback, parsed_data, bridge_configurations, streamer):
     """Update an existing plan based on user feedback, streaming tokens to `streamer`."""
-    planner_prompt = _prepare_planner_prompt(parsed_data, bridge_configurations)
+    db_planner_prompt = await _get_planner_prompt_from_db(PLANNER_PROMPT)
+    planner_prompt = _build_planner_system_prompt(
+        db_planner_prompt, _build_agent_context(parsed_data, bridge_configurations)
+    )
     agent_context = _build_agent_context(parsed_data, bridge_configurations)
     planner_message = _build_planner_message(
         existing_plan["goal"],
