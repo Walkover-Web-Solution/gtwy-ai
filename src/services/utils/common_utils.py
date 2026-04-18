@@ -238,6 +238,27 @@ def parse_request_body(request_body):
     }
 
 
+def build_internal_task_result(result=None, parsed_data=None, success=True, error=None, finish_reason=None):
+    response = (result or {}).get("response", {}) if isinstance(result, dict) else {}
+    history_params = (
+        (result or {}).get("historyParams", {}) if isinstance(result, dict) else {}
+    ) or ((parsed_data or {}).get("historyParams") or {})
+    response_data = response.get("data", {}) if isinstance(response, dict) else {}
+
+    return {
+        "success": success,
+        "result": response_data.get("content", ""),
+        "response": response,
+        "historyParams": history_params,
+        "usage_data": (parsed_data or {}).get("usage", {}),
+        "error": error or ((result or {}).get("error") if isinstance(result, dict) else None),
+        "message_id": (parsed_data or {}).get("message_id"),
+        "finish_reason": finish_reason
+        or ((result or {}).get("stream_finish_reason") if isinstance(result, dict) else None)
+        or response_data.get("finish_reason"),
+    }
+
+
 def render_template_if_applicable(parsed_data, result):
     response_type = parsed_data.get("response_type", {})
     template_data = None
@@ -1388,7 +1409,7 @@ async def update_cost_usage_and_apikey_status_in_background(original_service, pa
     asyncio.create_task(mark_apikey_status_from_response(original_service, parsed_data, code))
 
 
-async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations, request_body=None, chat_function=None):
+async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations, request_body=None, chat_function=None, return_result=False):
     import traceback as tb
     original_service = parsed_data["service"]
     original_model = parsed_data["model"]
@@ -1454,11 +1475,23 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 if class_obj.streamer:
                     await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
                     await class_obj.streamer.close()
+                if return_result:
+                    return build_internal_task_result(
+                        parsed_data=parsed_data,
+                        success=False,
+                        error=f"{original_error}; fallback_error={str(retry_err)}",
+                    )
                 return
         else:
             if class_obj.streamer:
                 await class_obj.streamer.emit_error(original_error)
                 await class_obj.streamer.close()
+            if return_result:
+                return build_internal_task_result(
+                    parsed_data=parsed_data,
+                    success=False,
+                    error=original_error,
+                )
             return
 
     template_data = render_template_if_applicable(parsed_data, result)
@@ -1512,17 +1545,33 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                     "state": request_body.get("state", {}).copy(),
                     "path_params": request_body.get("path_params", {}),
                 }
-                await chat_function(transfer_request_body)
+                transfer_result = await chat_function(transfer_request_body)
+                if return_result:
+                    return transfer_result
             else:
                 logger.warning(f"SSE transfer: target agent {target_agent_id} not found, closing stream")
                 if class_obj.streamer:
                     await class_obj.streamer.emit_error(f"Transfer target agent {target_agent_id} not found in bridge_configurations")
                     await class_obj.streamer.close()
+                if return_result:
+                    return build_internal_task_result(
+                        result=result,
+                        parsed_data=parsed_data,
+                        success=False,
+                        error=f"Transfer target agent {target_agent_id} not found in bridge_configurations",
+                    )
         except Exception as transfer_err:
             logger.error(f"SSE transfer handling error: {transfer_err}, {tb.format_exc()}")
             if class_obj.streamer:
                 await class_obj.streamer.emit_error(str(transfer_err))
                 await class_obj.streamer.close()
+            if return_result:
+                return build_internal_task_result(
+                    result=result,
+                    parsed_data=parsed_data,
+                    success=False,
+                    error=str(transfer_err),
+                )
         return  # Agent B owns emit_done + close from here
 
     try:
@@ -1575,8 +1624,21 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 accumulated_data=accumulated_payload,
             )
             await class_obj.streamer.close()
+            if return_result:
+                return build_internal_task_result(
+                    result=result,
+                    parsed_data=parsed_data,
+                    success=True,
+                    finish_reason=finish_reason,
+                )
     except Exception as err:
         logger.error(f"SSE finalization error: {str(err)}, {tb.format_exc()}")
         if class_obj.streamer:
             await class_obj.streamer.emit_error(str(err))
             await class_obj.streamer.close()
+        if return_result:
+            return build_internal_task_result(
+                parsed_data=parsed_data,
+                success=False,
+                error=str(err),
+            )

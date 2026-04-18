@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import json
 import time
 import uuid
@@ -43,9 +42,7 @@ def _init_main_agent_metrics():
 def _merge_task_metrics(
     metrics,
     task_id,
-    done_event,
-    collected_tool_calls,
-    reasoning_buf,
+    task_result,
     task_success,
     error,
     *,
@@ -57,23 +54,30 @@ def _merge_task_metrics(
 ):
     """Fold a single primary-agent task's telemetry into the shared aggregate.
 
-    `agent_config`, `fallback_model`, `service`, `model`, `elapsed_seconds`
-    come from the executor context (bridge_configurations + wall-clock timing)
-    because the inner chat's SSE `done` event only carries `response.data`
-    and `response.usage`.  AiConfig / fallback_model / latency / firstAttemptError
-    live in `result.historyParams` inside baseService and are never streamed.
+    `task_result` is the internal structured result returned by `chat()`.
+    It contains the final response, historyParams, and normalized usage data.
     """
     if metrics is None:
         return
 
-    usage = (done_event or {}).get("usage") or {}
-    response = (done_event or {}).get("response") or {}
+    task_result = task_result or {}
+    usage_data = task_result.get("usage_data") or {}
+    response = task_result.get("response") or {}
     data = response.get("data") or {}
+    history_params = task_result.get("historyParams") or {}
 
-    input_t = usage.get("input_tokens") or 0
-    output_t = usage.get("output_tokens") or 0
-    total_t = usage.get("total_tokens") or (input_t + output_t)
-    cost = usage.get("cost") or usage.get("expected_cost") or 0
+    input_t = usage_data.get("inputTokens")
+    if input_t is None:
+        input_t = (response.get("usage") or {}).get("input_tokens") or 0
+    output_t = usage_data.get("outputTokens")
+    if output_t is None:
+        output_t = (response.get("usage") or {}).get("output_tokens") or 0
+    total_t = usage_data.get("total_tokens")
+    if total_t is None:
+        total_t = (response.get("usage") or {}).get("total_tokens") or (input_t + output_t)
+    cost = usage_data.get("expectedCost")
+    if cost is None:
+        cost = (response.get("usage") or {}).get("cost") or (response.get("usage") or {}).get("expected_cost") or 0
 
     metrics["input_tokens"] += input_t
     metrics["output_tokens"] += output_t
@@ -84,7 +88,12 @@ def _merge_task_metrics(
         pass
 
     # Latency: prefer the provider-reported figure, fall back to wall-clock.
-    provider_latency = data.get("latency")
+    provider_latency = usage_data.get("latency") or data.get("latency") or {}
+    if isinstance(provider_latency, str):
+        try:
+            provider_latency = json.loads(provider_latency)
+        except (TypeError, ValueError):
+            provider_latency = {}
     if isinstance(provider_latency, dict):
         over_all = provider_latency.get("over_all_time") or 0
     elif isinstance(provider_latency, (int, float)):
@@ -106,31 +115,41 @@ def _merge_task_metrics(
     effective_model = data.get("model") or model
     if effective_model and not metrics["model"]:
         metrics["model"] = effective_model
-    effective_service = response.get("service") or service
+    effective_service = history_params.get("service") or response.get("service") or service
     if effective_service and not metrics["service"]:
         metrics["service"] = effective_service
 
-    if response.get("firstAttemptError"):
+    if history_params.get("firstAttemptError"):
+        metrics["firstAttemptError"] = history_params["firstAttemptError"]
+    elif response.get("firstAttemptError"):
         metrics["firstAttemptError"] = response["firstAttemptError"]
 
     # AiConfig = the bridge's customConfig sent to the LLM.  Pulled from the
     # bridge configuration we already have in hand.
-    if agent_config and not metrics["AiConfig"]:
+    if history_params.get("AiConfig") and not metrics["AiConfig"]:
+        metrics["AiConfig"] = history_params.get("AiConfig")
+    elif agent_config and not metrics["AiConfig"]:
         metrics["AiConfig"] = agent_config
 
-    if fallback_model and not metrics["fallback_model"]:
+    if history_params.get("fallback_model") and not metrics["fallback_model"]:
+        metrics["fallback_model"] = history_params.get("fallback_model")
+    elif fallback_model and not metrics["fallback_model"]:
         metrics["fallback_model"] = fallback_model
 
-    if response.get("llm_urls"):
-        metrics["llm_urls"].extend(response["llm_urls"])
-    if response.get("annotations"):
-        metrics["annotations"].extend(response["annotations"])
+    if history_params.get("llm_urls"):
+        metrics["llm_urls"].extend(history_params["llm_urls"])
+    if history_params.get("annotations"):
+        metrics["annotations"].extend(history_params["annotations"])
 
-    if reasoning_buf:
-        metrics["reasoning_parts"].append("".join(reasoning_buf))
+    if history_params.get("reasoning"):
+        metrics["reasoning_parts"].append(history_params["reasoning"])
 
-    if collected_tool_calls:
-        metrics["tools_call_data"].extend(collected_tool_calls)
+    if history_params.get("tools_call_data"):
+        metrics["tools_call_data"].extend(history_params["tools_call_data"])
+
+    finish_reason = task_result.get("finish_reason")
+    if finish_reason:
+        metrics["finish_reason"] = finish_reason
 
     if not task_success:
         metrics["success"] = False
@@ -206,35 +225,47 @@ def _is_plan_complete(tasks):
     return all(t["status"] in TERMINAL_STATUSES for t in tasks.values())
 
 
-def _inject_variables_into_tool_args(tool_name, args, variables, variables_path, tool_id_and_name_mapping):
-    """Inject static variables into tool arguments based on variables_path mapping.
-    Matches the behavior of replace_variables_in_args in main flow.
-    """
-    if not variables_path or not variables:
-        return args
-    
-    import pydash as _
-    
-    # Get the function name for variable path lookup
-    tool_mapping = tool_id_and_name_mapping.get(tool_name, {})
-    if tool_mapping.get("type") == "AGENT":
-        function_name = tool_mapping.get("bridge_id", "")
-    else:
-        function_name = tool_mapping.get("name", tool_name)
-    
-    # Inject variables based on variables_path mapping
-    enriched_args = dict(args or {})
-    function_variables_path = variables_path.get(function_name, {})
-    
-    for path_key, path_value in function_variables_path.items():
-        value_to_set = _.objects.get(variables, path_value)
-        if value_to_set is not None:
-            _.objects.set_(enriched_args, path_key, value_to_set)
-    
-    return enriched_args
+class TaskExecutionStreamer:
+    """Adapt agent-level stream events into task-scoped plan events."""
+
+    def __init__(self, plan_streamer, task_id):
+        self.plan_streamer = plan_streamer
+        self.task_id = task_id
+        self._started = False
+
+    async def emit_start(self, model: str, service: str, bridge_id: str, message_id: str):
+        self._started = True
+
+    async def emit_delta(self, content: str):
+        if self.plan_streamer:
+            await self.plan_streamer.emit_task_delta(self.task_id, content)
+
+    async def emit_reasoning(self, content: str):
+        if self.plan_streamer:
+            await self.plan_streamer.emit_task_reasoning(self.task_id, content)
+
+    async def emit_tool_call(self, name: str, args: dict, call_id: str):
+        if self.plan_streamer:
+            await self.plan_streamer.emit_task_tool_call(self.task_id, name=name, args=args, call_id=call_id)
+
+    async def emit_tool_result(self, name: str, content: str, call_id: str):
+        if self.plan_streamer:
+            await self.plan_streamer.emit_task_tool_result(self.task_id, name=name, content=content, call_id=call_id)
+
+    async def emit_template_response(self, message_id: str, content: dict, metadata: dict | None = None):
+        return
+
+    async def emit_done(self, usage: dict, message_id: str, finish_reason: str, accumulated_data: dict = None):
+        return
+
+    async def emit_error(self, error: str, fallback_error: str = None):
+        return
+
+    async def close(self):
+        return
 
 
-async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, plan, streamer=None, main_agent_metrics=None, variables=None, variables_path=None):
+async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, plan, parsed_data, streamer=None, main_agent_metrics=None, variables=None, variables_path=None):
     """Execute a single task by calling the appropriate agent directly.
     
     When `streamer` is provided, delta/reasoning/tool events from the agent's
@@ -258,171 +289,59 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
         task_description = f"{task_description}\n\nHuman Response: {human_response}"
 
     task_started_at = time.perf_counter() if aggregate_metrics is not None else None
+    task_streamer = TaskExecutionStreamer(streamer, task_id) if streamer else None
 
     try:
-        from src.services.commonServices.common import chat_multiple_agents
-        from src.services.utils.getConfiguration import getConfiguration
+        from src.services.commonServices.common import build_agent_request, chat
 
         current_agent_config = bridge_configurations.get(assigned_agent, {})
-        resolved_config = await getConfiguration(
-            configuration=None,
-            service=None,
-            bridge_id=assigned_agent,
-            apikey=None,
-            variables=variables or {},
-            org_id=org_id,
-            version_id=current_agent_config.get("version_id"),
-            override_fields={},
+        if not current_agent_config:
+            return {"success": False, "error": f"Agent configuration not found for {assigned_agent}"}
+
+        task_request = build_agent_request(
+            {
+                "body": parsed_data.get("body", {}),
+                "state": parsed_data.get("state", {}),
+                "path_params": parsed_data.get("path_params", {}),
+            },
+            assigned_agent,
+            bridge_configurations,
+            body_overrides={
+                "user": task_description,
+                "message_id": str(uuid.uuid1()),
+                "thread_id": thread_id,
+                "sub_thread_id": sub_thread_id,
+                "org_id": org_id,
+                "variables": variables or {},
+                "variables_path": variables_path or {},
+                "bridge_configurations": bridge_configurations,
+                "plans": plan,
+                "_return_task_result": True,
+                # Skip per-sub-task history for the primary agent; its final
+                # response is saved once by todo_handler after full execution.
+                "skip_history": is_primary_agent_task,
+            },
+            body_exclusions={"mode", "action", "task_id"},
+            path_params_override={
+                key: value
+                for key, value in (parsed_data.get("path_params", {}) or {}).items()
+                if key != "bridge_id"
+            },
         )
-        if not resolved_config.get("success"):
-            return {"success": False, "error": resolved_config.get("error", "Failed to resolve agent configuration")}
 
-        request_body = {
-            "user": task_description,
-            "bridge_id": assigned_agent,
-            "message_id": str(uuid.uuid1()),
-            "thread_id": thread_id,
-            "sub_thread_id": sub_thread_id,
-            "org_id": org_id,
-            "variables": variables or {},
-            "variables_path": variables_path or {},
-            "bridge_configurations": copy.deepcopy(resolved_config.get("bridge_configurations", {})),
-            "plans": plan,
-            # Skip per-sub-task history for the primary agent; its final
-            # response is saved once by todo_handler after full execution.
-            "skip_history": is_primary_agent_task,
-        }
-
-        # Match the direct request path by going through chat_multiple_agents,
-        # which applies the DB-backed agent config before entering chat().
+        task_request["body"].setdefault("configuration", {})
+        task_request["body"].setdefault("settings", {})["response_format"] = {"type": "default"}
         if streamer:
-            request_body.setdefault("configuration", {})["stream"] = True
+            task_request["body"]["configuration"]["stream"] = True
+            task_request["body"]["_injected_streamer"] = task_streamer
+        else:
+            task_request["body"]["configuration"].pop("stream", None)
 
-        data_to_send = {"body": request_body, "state": {}}
-        response = await chat_multiple_agents(data_to_send)
-        
-        if hasattr(response, "body"):
-            response_data = json.loads(response.body.decode("utf-8"))
-            if response_data.get("success"):
-                content = response_data.get("response", {}).get("data", {}).get("content", "")
-                return {"success": True, "result": content}
-            else:
-                return {"success": False, "error": response_data.get("error") or response_data.get("message") or "Task execution failed"}
+        response = await chat(task_request)
+        if not isinstance(response, dict):
+            return {"success": False, "error": "Task execution did not return structured data"}
 
-        elif hasattr(response, "body_iterator"):
-            accumulated_content = []
-            done_event = None
-            reasoning_parts = []
-            tool_calls_by_id = {}
-            tool_calls_order = []
-            async for chunk in response.body_iterator:
-                if isinstance(chunk, bytes):
-                    chunk = chunk.decode("utf-8")
-                for line in chunk.split("\n"):
-                    line = line.strip()
-                    if not line.startswith("data: "):
-                        continue
-                    try:
-                        event = json.loads(line[6:])
-                    except json.JSONDecodeError:
-                        continue
-
-                    evt_type = event.get("event")
-
-                    if evt_type == "delta":
-                        content_piece = event.get("content", "")
-                        accumulated_content.append(content_piece)
-                        if streamer:
-                            await streamer.emit_task_delta(task_id, content_piece)
-
-                    elif evt_type == "reasoning":
-                        reasoning_piece = event.get("content", "")
-                        if aggregate_metrics is not None and reasoning_piece:
-                            reasoning_parts.append(reasoning_piece)
-                        if streamer:
-                            await streamer.emit_task_reasoning(task_id, reasoning_piece)
-
-                    elif evt_type == "tool_call":
-                        call_id = event.get("call_id", "")
-                        if aggregate_metrics is not None:
-                            # Format matches main flow: {call_id: {name, args, data, id}}
-                            if not call_id:
-                                # Generate fallback ID if missing
-                                call_id = f"tool_{task_id}_{len(tool_calls_order)}"
-                            
-                            if call_id not in tool_calls_by_id:
-                                # Inject static variables into args before storing in history
-                                # This matches main flow where replace_variables_in_args is called
-                                # before process_data_and_run_tools builds tool history
-                                raw_args = event.get("args", {})
-                                tool_name = event.get("name", "")
-                                tool_id_and_name_mapping = (bridge_configurations.get(assigned_agent, {}) or {}).get("tool_id_and_name_mapping", {})
-                                enriched_args = _inject_variables_into_tool_args(
-                                    tool_name, raw_args, variables, variables_path, tool_id_and_name_mapping
-                                )
-                                
-                                # Create entry matching main flow format
-                                tool_entry = {
-                                    call_id: {
-                                        "name": tool_name,
-                                        "args": enriched_args,  # Store enriched args with injected variables
-                                        "data": None,  # Will be updated when tool_result arrives
-                                        "id": tool_name,  # Tool identifier
-                                    }
-                                }
-                                tool_calls_by_id[call_id] = tool_entry[call_id]
-                                tool_calls_order.append(tool_entry)
-                        if streamer:
-                            await streamer.emit_task_tool_call(
-                                task_id,
-                                name=event.get("name", ""),
-                                args=event.get("args", {}),
-                                call_id=call_id,
-                            )
-
-                    elif evt_type == "tool_result":
-                        call_id = event.get("call_id", "")
-                        result_content = event.get("content", "")
-                        if aggregate_metrics is not None:
-                            if call_id and call_id in tool_calls_by_id:
-                                # Update the data field in existing entry
-                                tool_calls_by_id[call_id]["data"] = {
-                                    "response": result_content,
-                                    "status": 1,
-                                    "metadata": {"type": "function"}
-                                }
-                            else:
-                                # Tool result without prior tool_call - create standalone entry
-                                if not call_id:
-                                    call_id = f"tool_{task_id}_{len(tool_calls_order)}"
-                                tool_entry = {
-                                    call_id: {
-                                        "name": event.get("name", ""),
-                                        "args": {},
-                                        "data": {
-                                            "response": result_content,
-                                            "status": 1,
-                                            "metadata": {"type": "function"}
-                                        },
-                                        "id": event.get("name", ""),
-                                    }
-                                }
-                                tool_calls_order.append(tool_entry)
-                        if streamer:
-                            await streamer.emit_task_tool_result(
-                                task_id,
-                                name=event.get("name", ""),
-                                content=result_content,
-                                call_id=call_id,
-                            )
-
-                    elif evt_type == "done":
-                        done_event = event
-
-            content = "".join(accumulated_content)
-            if done_event and done_event.get("response", {}).get("data", {}).get("content"):
-                content = done_event["response"]["data"]["content"]
-
+        if response.get("success"):
             if aggregate_metrics is not None:
                 elapsed = (
                     time.perf_counter() - task_started_at
@@ -432,9 +351,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                 _merge_task_metrics(
                     aggregate_metrics,
                     task_id,
-                    done_event,
-                    tool_calls_order,
-                    reasoning_parts,
+                    response,
                     task_success=True,
                     error=None,
                     agent_config=current_agent_config.get("configuration"),
@@ -444,13 +361,28 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                     model=(current_agent_config.get("configuration") or {}).get("model"),
                 )
 
-            return {"success": True, "result": content}
-        else:
-            if response.get("success"):
-                content = response.get("response", {}).get("data", {}).get("content", "")
-                return {"success": True, "result": content}
-            else:
-                return {"success": False, "error": response.get("error") or response.get("message") or "Task execution failed"}
+            return {"success": True, "result": response.get("result", ""), "task_result": response}
+
+        if aggregate_metrics is not None:
+            elapsed = (
+                time.perf_counter() - task_started_at
+                if task_started_at is not None
+                else None
+            )
+            _merge_task_metrics(
+                aggregate_metrics,
+                task_id,
+                response,
+                task_success=False,
+                error=response.get("error"),
+                agent_config=current_agent_config.get("configuration"),
+                elapsed_seconds=elapsed,
+                fallback_model=current_agent_config.get("fall_back"),
+                service=current_agent_config.get("service"),
+                model=(current_agent_config.get("configuration") or {}).get("model"),
+            )
+
+        return {"success": False, "error": response.get("error") or "Task execution failed", "task_result": response}
 
     except Exception as e:
         logger.error(f"Error executing task {task_id}: {e}")
@@ -526,7 +458,7 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             _execute_single_task(
                 task_id, tasks[task_id],
                 org_id, bridge_id, thread_id, sub_thread_id,
-                bridge_configurations, plan, streamer=streamer,
+                bridge_configurations, plan, parsed_data, streamer=streamer,
                 main_agent_metrics=main_agent_metrics,
                 variables=plan_variables,
                 variables_path=plan_variables_path,

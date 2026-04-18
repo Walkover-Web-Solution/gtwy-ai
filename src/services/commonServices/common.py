@@ -17,6 +17,7 @@ from src.services.utils.common_utils import (
     add_files_to_parse_data,
     add_user_in_variables,
     apply_prompt_wrapper,
+    build_internal_task_result,
     build_service_params,
     build_service_params_for_batch,
     configure_custom_settings,
@@ -59,6 +60,58 @@ app = FastAPI()
 configurationModel = db["configurations"]
 
 
+def build_agent_request(
+    request_body,
+    target_bridge_id,
+    bridge_configurations,
+    *,
+    body_overrides=None,
+    body_exclusions=None,
+    path_params_override=None,
+):
+    """
+    Build a request payload for a specific resolved agent using the already
+    loaded `bridge_configurations` map.
+    """
+    body = request_body.get("body", {})
+
+    if not bridge_configurations:
+        raise ValueError("No bridge configurations found")
+    if not target_bridge_id or target_bridge_id not in bridge_configurations:
+        raise ValueError(f"Target agent {target_bridge_id} not found in bridge_configurations")
+
+    agent_config = bridge_configurations[target_bridge_id]
+    agent_body = body.copy()
+    wrapper_id = agent_body.get("wrapper_id")
+
+    # Preserve request-level fields that should survive the bridge-config merge.
+    original_response_format = (body.get("settings") or {}).get("response_format")
+
+    agent_body.update(agent_config)
+    agent_body["wrapper_id"] = wrapper_id
+    agent_body["bridge_id"] = target_bridge_id
+    agent_body["primary_bridge_id"] = target_bridge_id
+
+    if original_response_format is not None:
+        agent_body.setdefault("settings", {})["response_format"] = original_response_format
+
+    for key in body_exclusions or ():
+        agent_body.pop(key, None)
+
+    if body_overrides:
+        agent_body.update(body_overrides)
+
+    return {
+        "body": agent_body,
+        "state": request_body.get("state", {}).copy(),
+        "path_params": (
+            path_params_override.copy()
+            if isinstance(path_params_override, dict)
+            else request_body.get("path_params", {}).copy()
+        ),
+    }
+
+
 @handle_exceptions
 async def chat_multiple_agents(request_body):
     try:
@@ -96,35 +149,11 @@ async def chat_multiple_agents(request_body):
             # Use the first agent as primary
             primary_bridge_id = next(iter(bridge_configurations.keys()))
 
-        primary_config = bridge_configurations[primary_bridge_id]
-
-        # Create a new body for the primary agent
-        primary_body = body.copy()
-        wrapper_id = primary_body.get("wrapper_id")
-
-        # Save request-level values from "configuration" that must survive the
-        # bridge-config merge (primary_config["configuration"] is the raw DB config
-        # and will fully overwrite primary_body["configuration"] via .update()).
-        original_response_format = (body.get("settings") or {}).get("response_format")
-
-        primary_body.update(primary_config)
-        primary_body["wrapper_id"] = wrapper_id
-        primary_body["bridge_id"] = primary_bridge_id
-        # Store the original primary_bridge_id for Redis key consistency
-        primary_body["primary_bridge_id"] = primary_bridge_id
-
-        # Restore response_format set at request-level (e.g. RTLayer from playground/
-        # interface middleware) that was clobbered by the bridge-config merge above.
-        if original_response_format is not None:
-            primary_body.setdefault("settings", {})["response_format"] = original_response_format
-            print(f"[chat_multiple_agents] response_format restored: type={original_response_format.get('type')}, channel={original_response_format.get('cred', {}).get('channel')}")
-
-        # Create a complete request_body structure for the primary agent
-        primary_request_body = {
-            "body": primary_body,
-            "state": request_body.get("state", {}).copy(),
-            "path_params": request_body.get("path_params", {}),
-        }
+        primary_request_body = build_agent_request(
+            request_body,
+            primary_bridge_id,
+            bridge_configurations,
+        )
 
         # Call the chat function for the primary agent only
         result = await chat(primary_request_body)
@@ -151,12 +180,37 @@ async def chat(request_body):
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
+        return_task_result = bool(request_body.get("body", {}).get("_return_task_result"))
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
         
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
         
+        if parsed_data.get("settings", {}).get("guardrails", {}).get("is_enabled", False):
+            guardrails_result = await guardrails_check(parsed_data)
+            if guardrails_result is not None:
+                # Content was blocked by guardrails, return the blocked response
+                if return_task_result:
+                    return build_internal_task_result(
+                        parsed_data=parsed_data,
+                        success=False,
+                        error=guardrails_result.get("error") or guardrails_result.get("reason") or "Guardrails blocked request",
+                        result={"response": guardrails_result},
+                    )
+                return JSONResponse(status_code=200, content=guardrails_result)
+
+        parsed_data["variables"] = add_user_in_variables(parsed_data["variables"], parsed_data["user"])
+
+        # Plan mode does not need the standard chat preparation path. The request
+        # already contains the fully resolved bridge_configurations from the
+        # middleware, so hand off early and avoid model/thread/prompt work.
+        if parsed_data.get("mode") == "plan":
+            return await handle_todo_mode(
+                parsed_data=parsed_data,
+                bridge_configurations=bridge_configurations,
+            )
+
         # Setup pre_tools for the current agent with its own variables
         setup_agent_pre_tools(parsed_data, bridge_configurations)
         await apply_prompt_wrapper(parsed_data)
@@ -168,16 +222,10 @@ async def chat(request_body):
         # Initialize transfer history for this request if not exists
         if transfer_request_id not in TRANSFER_HISTORY:
             TRANSFER_HISTORY[transfer_request_id] = []
-        if parsed_data.get("settings", {}).get("guardrails", {}).get("is_enabled", False):
-            guardrails_result = await guardrails_check(parsed_data)
-            if guardrails_result is not None:
-                # Content was blocked by guardrails, return the blocked response
-                return JSONResponse(status_code=200, content=guardrails_result)
 
         parsed_data["configuration"]["prompt"] = add_default_template(
             parsed_data.get("configuration", {}).get("prompt", "")
         )
-        parsed_data["variables"] = add_user_in_variables(parsed_data["variables"], parsed_data["user"])
         # Step 2: Initialize Timer
         timer = initialize_timer(parsed_data["state"])
 
@@ -271,12 +319,6 @@ async def chat(request_body):
                 transfer_request_id=transfer_request_id,
             )
 
-        if parsed_data.get("mode") == "plan":
-            return await handle_todo_mode(
-                parsed_data=parsed_data,
-                bridge_configurations=bridge_configurations,
-            )
-
         # Execute with retry mechanism
         class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
@@ -287,6 +329,11 @@ async def chat(request_body):
 
         # Streaming is SSE-only: if stream=true return StreamingResponse.
         if getattr(class_obj, "stream_mode", False) and getattr(class_obj, "streamer", None):
+            if return_task_result:
+                return await sse_stream_and_finalize(
+                    class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
+                    request_body=request_body, chat_function=chat, return_result=True,
+                )
             if injected_streamer:
                 # Agent-transfer: existing SSE connection owned by the caller — background task, no new StreamingResponse
                 asyncio.create_task(sse_stream_and_finalize(
@@ -541,6 +588,9 @@ async def chat(request_body):
                 f"Cached agent {bridge_id} for thread {thread_id}_{sub_thread_id} with key based on original primary {original_primary_bridge_id}"
             )
 
+        if return_task_result:
+            return build_internal_task_result(result=result, parsed_data=parsed_data, success=True)
+
         return JSONResponse(status_code=200, content={"success": True, "response": result["response"]})
 
     except (Exception, ValueError, BadRequestException) as error:
@@ -587,6 +637,13 @@ async def chat(request_body):
                 variables=parsed_data.get("variables", {}),
             )
         completion_success = False
+        if return_task_result:
+            return build_internal_task_result(
+                result=result if isinstance(result, dict) else None,
+                parsed_data=parsed_data,
+                success=False,
+                error=error_object.get("error"),
+            )
         raise ValueError(error_object) from None
     finally:
         await update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, first_execution_error_code, completion_success)
