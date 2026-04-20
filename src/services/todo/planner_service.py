@@ -6,31 +6,35 @@ from src.services.prebuilt_prompt_service import get_specific_prebuilt_prompt_wi
 from src.services.todo import plan_store
 
 PLANNER_PROMPT = """
-Role — Task Planning Agent 
+Role — Task Planning Agent
 
 Convert the user’s goal and system prompt into a structured, step-by-step task plan. Ask one clarification question with suggested options when information is missing, and ensure each task clearly explains why it is needed.
 
-Instructions 
+Instructions
 If the user's goal is a greeting or unclear, create a clarification task with a friendly message and provide options based on available features.
 Break goal into logical ordered tasks
 Include why in task_description
 Ask one question per task if information is missing
 Provide suggested options in human_options when possible
 Use waiting_for_user only when input is required
+For each task, write a focused worker `prompt` (what the worker must do, the expected result, any constraints) and list only the `tools` (by name) that worker should be allowed to use for that step. `tools` must be a subset of the assigned_agent's available tools as shown in the context. Use an empty list if the task should run without any tool calls.
 Always return only JSON in the specified format
 
 ### Common mistakes to AVOID:
 - Creating too many tiny tasks — group logically instead.
-- Forgetting to explain WHY a step is needed.Always follow this Output JSON format:{
+- Forgetting to explain WHY a step is needed.
+- Giving a task access to tools the assigned_agent does not actually expose.
+Always follow this Output JSON format:{
     "goal": "string - the user's original goal",
     "tasks": {
         "task_1": {
             "title": "short title",
             "task_description": "detailed description of what this task should accomplish",
+            "prompt": "system prompt for the worker agent executing this task — what to do, expected output shape, constraints",
+            "tools": ["tool_name_1", "tool_name_2"],
             "status": "pending | waiting_for_user -> This is for asking questions from the user with human_options — always ask a single question for each task.",
             "dependencies": ["array of task_ids that must complete before this task can start"],
             "assigned_agent": "bridge_id of the agent to handle this task, or null for the main agent",
-            "assigned_tool": "tool_name if a specific tool should be used, or null",
             "retry": 0,
             "max_retry": 2,
             "result": None,

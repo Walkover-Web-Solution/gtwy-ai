@@ -10,6 +10,119 @@ from src.services.todo import plan_store
 
 TERMINAL_STATUSES = {"completed", "failed", "skipped", "waiting_for_user"}
 
+WORKER_RESPONSE_SCHEMA = """{
+  "status": "completed | needs_human | needs_planner | failed",
+  "result": "final answer when status=completed, else null",
+  "reasoning": "short explanation of what you did or why you need help",
+  "human_query": "question for the user when status=needs_human",
+  "human_options": ["option 1", "option 2"],
+  "allow_custom_response": true,
+  "replan_reason": "why the plan needs revision when status=needs_planner",
+  "error": "error string when status=failed"
+}"""
+
+WORKER_SYSTEM_PROMPT_TEMPLATE = """You are a worker agent executing ONE step of a larger plan.
+
+Task title: {title}
+Task goal: {task_description}
+
+Per-task instructions from the planner:
+{task_prompt}
+
+{human_response_block}Tools available to you for this task: {tool_list}
+
+You MUST respond ONLY with a single JSON object matching this exact schema. Do not wrap it in markdown fences or add any prose outside the JSON:
+{schema}
+
+How to choose `status`:
+- "completed": you finished the task; put the final answer in `result`.
+- "needs_human": you cannot finish without input from the user; fill `human_query` and optionally `human_options`.
+- "needs_planner": the plan itself needs to be revised (missing step, wrong dependency, impossible constraint); explain in `replan_reason`.
+- "failed": you tried and hit an unrecoverable error; describe it in `error`."""
+
+
+def _filter_tools_for_task(agent_config, task_tool_names):
+    """Return the subset of the agent's configured tools whose name is in
+    `task_tool_names`. If `task_tool_names` is None/missing -> full list
+    (backwards compatible with plans created before per-task tool scoping).
+    Empty list -> no tools.
+    """
+    all_tools = ((agent_config or {}).get("configuration") or {}).get("tools") or []
+    if task_tool_names is None:
+        return list(all_tools)
+    allow = set(task_tool_names)
+    filtered = []
+    for tool in all_tools:
+        name = tool.get("name") or (tool.get("function") or {}).get("name")
+        if name and name in allow:
+            filtered.append(tool)
+    return filtered
+
+
+def _build_worker_system_prompt(task, filtered_tool_names):
+    """Compose the worker's system prompt. task_description + planner-provided
+    prompt + JSON output contract all live here so the caller can send a short
+    trigger as the user message.
+    """
+    task_prompt = (task.get("prompt") or "").strip() or "(no per-task prompt provided; use the task goal above)"
+    tool_list = ", ".join(filtered_tool_names) if filtered_tool_names else "none"
+    human_response = task.get("human_response")
+    human_response_block = (
+        f"The user previously answered a clarification for this task: {human_response}\n\n"
+        if human_response
+        else ""
+    )
+    return WORKER_SYSTEM_PROMPT_TEMPLATE.format(
+        title=task.get("title", ""),
+        task_description=task.get("task_description", ""),
+        task_prompt=task_prompt,
+        human_response_block=human_response_block,
+        tool_list=tool_list,
+        schema=WORKER_RESPONSE_SCHEMA,
+    )
+
+
+def _build_worker_result(parsed):
+    """Shape a parsed worker response into the dict execute_plan expects.
+    `success` is False only for status=failed, so the existing retry path
+    kicks in; needs_human / needs_planner are handled as success with a
+    status the result handler branches on.
+    """
+    status = parsed.get("status") or "completed"
+    return {
+        "success": status != "failed",
+        "status": status,
+        "result": parsed.get("result"),
+        "reasoning": parsed.get("reasoning"),
+        "human_query": parsed.get("human_query"),
+        "human_options": parsed.get("human_options"),
+        "allow_custom_response": parsed.get("allow_custom_response", True),
+        "replan_reason": parsed.get("replan_reason"),
+        "error": parsed.get("error"),
+    }
+
+
+def _parse_worker_response(content):
+    """Parse a worker's JSON reply. Strips markdown fences like _parse_plan_json.
+    On failure, degrade to a completed-text response so a poorly-formatted model
+    reply still surfaces to the user instead of disappearing.
+    """
+    if not content:
+        return {"status": "completed", "result": ""}
+    raw = content
+    if "```json" in raw:
+        raw = raw.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in raw:
+        raw = raw.split("```", 1)[1].split("```", 1)[0].strip()
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict) or "status" not in parsed:
+            raise ValueError("missing status field")
+        return parsed
+    except (json.JSONDecodeError, ValueError) as err:
+        logger.warning(f"Worker response was not valid JSON, treating as completed text: {err}")
+        return {"status": "completed", "result": content}
+
 
 def _init_main_agent_metrics():
     """
@@ -252,11 +365,6 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
     is_primary_agent_task = not task.get("assigned_agent") or task.get("assigned_agent") == bridge_id
     aggregate_metrics = main_agent_metrics if is_primary_agent_task else None
 
-    task_description = task.get("task_description", task.get("title", ""))
-    human_response = task.get("human_response")
-    if human_response:
-        task_description = f"{task_description}\n\nHuman Response: {human_response}"
-
     task_started_at = time.perf_counter() if aggregate_metrics is not None else None
 
     try:
@@ -275,10 +383,35 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             override_fields={},
         )
         if not resolved_config.get("success"):
-            return {"success": False, "error": resolved_config.get("error", "Failed to resolve agent configuration")}
+            return {"success": False, "status": "failed", "error": resolved_config.get("error", "Failed to resolve agent configuration")}
+
+        # Per-task prompt + tool scoping: mutate a deep copy of the agent's
+        # bridge_configurations entry so only prompt/tools change for this
+        # single call; everything else (model, service, fallback, etc.) stays.
+        scoped_bridge_configurations = copy.deepcopy(resolved_config.get("bridge_configurations", {}))
+        scoped_agent_entry = scoped_bridge_configurations.setdefault(assigned_agent, {})
+        scoped_agent_config = scoped_agent_entry.setdefault("configuration", {})
+        filtered_tools = _filter_tools_for_task(scoped_agent_entry, task.get("tools"))
+        filtered_tool_names = [
+            t.get("name") or (t.get("function") or {}).get("name") or ""
+            for t in filtered_tools
+        ]
+        filtered_tool_names = [n for n in filtered_tool_names if n]
+        scoped_agent_config["tools"] = filtered_tools
+        scoped_agent_config["prompt"] = _build_worker_system_prompt(task, filtered_tool_names)
+        # Force JSON-object response. Live inside scoped_agent_config because
+        # chat_multiple_agents does `primary_body.update(primary_config)` which
+        # clobbers request_body["configuration"] with primary_config["configuration"];
+        # keys placed here survive that merge. parse_request_body then reads
+        # body.configuration.response_type into parsed_data.
+        scoped_agent_config["response_type"] = {"type": "json_object"}
+        if streamer:
+            scoped_agent_config["stream"] = True
 
         request_body = {
-            "user": task_description,
+            # The task description, planner prompt, and human_response all live
+            # in the system prompt now; user message is just a trigger.
+            "user": "Begin.",
             "bridge_id": assigned_agent,
             "message_id": str(uuid.uuid1()),
             "thread_id": thread_id,
@@ -286,17 +419,12 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             "org_id": org_id,
             "variables": variables or {},
             "variables_path": variables_path or {},
-            "bridge_configurations": copy.deepcopy(resolved_config.get("bridge_configurations", {})),
+            "bridge_configurations": scoped_bridge_configurations,
             "plans": plan,
             # Skip per-sub-task history for the primary agent; its final
             # response is saved once by todo_handler after full execution.
             "skip_history": is_primary_agent_task,
         }
-
-        # Match the direct request path by going through chat_multiple_agents,
-        # which applies the DB-backed agent config before entering chat().
-        if streamer:
-            request_body.setdefault("configuration", {})["stream"] = True
 
         data_to_send = {"body": request_body, "state": {}}
         response = await chat_multiple_agents(data_to_send)
@@ -305,9 +433,9 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             response_data = json.loads(response.body.decode("utf-8"))
             if response_data.get("success"):
                 content = response_data.get("response", {}).get("data", {}).get("content", "")
-                return {"success": True, "result": content}
+                return _build_worker_result(_parse_worker_response(content))
             else:
-                return {"success": False, "error": response_data.get("error") or response_data.get("message") or "Task execution failed"}
+                return {"success": False, "status": "failed", "error": response_data.get("error") or response_data.get("message") or "Task execution failed"}
 
         elif hasattr(response, "body_iterator"):
             accumulated_content = []
@@ -423,6 +551,8 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             if done_event and done_event.get("response", {}).get("data", {}).get("content"):
                 content = done_event["response"]["data"]["content"]
 
+            parsed = _parse_worker_response(content)
+
             if aggregate_metrics is not None:
                 elapsed = (
                     time.perf_counter() - task_started_at
@@ -435,8 +565,8 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                     done_event,
                     tool_calls_order,
                     reasoning_parts,
-                    task_success=True,
-                    error=None,
+                    task_success=parsed.get("status") != "failed",
+                    error=parsed.get("error") if parsed.get("status") == "failed" else None,
                     agent_config=current_agent_config.get("configuration"),
                     elapsed_seconds=elapsed,
                     fallback_model=current_agent_config.get("fall_back"),
@@ -444,17 +574,109 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                     model=(current_agent_config.get("configuration") or {}).get("model"),
                 )
 
-            return {"success": True, "result": content}
+            return _build_worker_result(parsed)
         else:
             if response.get("success"):
                 content = response.get("response", {}).get("data", {}).get("content", "")
-                return {"success": True, "result": content}
+                return _build_worker_result(_parse_worker_response(content))
             else:
-                return {"success": False, "error": response.get("error") or response.get("message") or "Task execution failed"}
+                return {"success": False, "status": "failed", "error": response.get("error") or response.get("message") or "Task execution failed"}
 
     except Exception as e:
         logger.error(f"Error executing task {task_id}: {e}")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "status": "failed", "error": str(e)}
+
+
+async def _trigger_replan(org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, replan_entry, emit):
+    """Call the planner again mid-execution with the worker's replan reason and
+    the current plan already in Redis. `prepare_planner_request` folds the
+    existing plan into the user message automatically, so the planner emits a
+    revised task set that accounts for what's already done. Completed tasks
+    are preserved; everything else is replaced.
+    """
+    from src.services.commonServices.common import chat_multiple_agents
+    from src.services.todo.planner_service import _parse_plan_json
+
+    worker_title = replan_entry.get("title", "")
+    worker_reason = replan_entry.get("reason", "")
+    feedback = (
+        f"Task '{worker_title}' reported the plan needs revision. "
+        f"Reason: {worker_reason}. "
+        "Please revise the plan to address this, keeping any already-completed "
+        "tasks unchanged and only rewriting the remaining work."
+    )
+
+    replan_body = copy.deepcopy(parsed_data)
+    replan_body["user"] = feedback
+    replan_body["mode"] = "plan"
+    replan_body.pop("action", None)
+    replan_body["message_id"] = str(uuid.uuid1())
+    replan_body.setdefault("configuration", {})["stream"] = False
+    replan_body["skip_history"] = True
+    # chat_multiple_agents does primary_body.update(primary_config), which
+    # overwrites body.configuration with bridge_configurations[bridge].configuration.
+    # Deep-copy the main bridge entry and force stream=False there so the
+    # planner call returns a single JSONResponse we can parse.
+    scoped_bridge_configurations = copy.deepcopy(bridge_configurations)
+    main_entry = scoped_bridge_configurations.get(bridge_id) or {}
+    main_entry.setdefault("configuration", {})["stream"] = False
+    scoped_bridge_configurations[bridge_id] = main_entry
+    replan_body["bridge_configurations"] = scoped_bridge_configurations
+
+    try:
+        response = await chat_multiple_agents({"body": replan_body, "state": {}})
+    except Exception as err:
+        logger.error(f"Replan planner call failed: {err}")
+        await emit("plan_revision_failed", {"error": str(err)})
+        return
+
+    content = ""
+    if hasattr(response, "body"):
+        try:
+            payload = json.loads(response.body.decode("utf-8"))
+        except (json.JSONDecodeError, AttributeError) as err:
+            logger.error(f"Replan response was not valid JSON: {err}")
+            await emit("plan_revision_failed", {"error": "planner returned invalid JSON"})
+            return
+        if not payload.get("success"):
+            logger.error(f"Replan planner returned error: {payload}")
+            await emit("plan_revision_failed", {"error": payload.get("error") or payload.get("message") or "planner failed"})
+            return
+        content = payload.get("response", {}).get("data", {}).get("content", "")
+    else:
+        logger.error("Replan planner returned a non-JSON response object")
+        await emit("plan_revision_failed", {"error": "unexpected planner response shape"})
+        return
+
+    try:
+        new_plan_obj = _parse_plan_json(content)
+    except ValueError as err:
+        logger.error(f"Replan JSON parse failed: {err}")
+        await emit("plan_revision_failed", {"error": str(err)})
+        return
+
+    plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+    if not plan:
+        return
+
+    preserved = {
+        tid: t for tid, t in plan.get("tasks", {}).items()
+        if t.get("status") == "completed"
+    }
+    merged_tasks = dict(new_plan_obj.get("tasks", {}))
+    # Completed tasks win on ID collision so their results are never lost.
+    merged_tasks.update(preserved)
+    plan["tasks"] = merged_tasks
+    if new_plan_obj.get("goal"):
+        plan["goal"] = new_plan_obj["goal"]
+    plan["state"] = "executing"
+    await plan_store.update_plan(plan)
+
+    await emit("plan_revised", {
+        "triggered_by_task": replan_entry.get("task_id"),
+        "replan_reason": worker_reason,
+        "plan": plan,
+    })
 
 
 async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=None):
@@ -539,19 +761,55 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
         plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
         tasks = plan.get("tasks", {})
 
+        replan_queue = []
         for task_id, result in zip(runnable, results):
             task = tasks[task_id]
 
             if isinstance(result, Exception):
-                result = {"success": False, "error": str(result)}
+                result = {"success": False, "status": "failed", "error": str(result)}
 
-            if result["success"]:
+            status = result.get("status") or ("completed" if result.get("success") else "failed")
+
+            if status == "completed":
                 task["status"] = "completed"
                 task["is_error"] = False
                 task["error"] = None
                 task["result"] = result.get("result")
                 await _emit("task_completed", {"task_id": task_id, "title": task.get("title", ""), "result": task["result"]})
-            else:
+
+            elif status == "needs_human":
+                task["status"] = "waiting_for_user"
+                task["is_error"] = False
+                task["error"] = None
+                task["human_query"] = result.get("human_query") or task.get("human_query")
+                task["human_options"] = result.get("human_options") or task.get("human_options")
+                task["allow_custom_response"] = result.get("allow_custom_response", True)
+                await _emit("task_waiting_for_user", {
+                    "task_id": task_id,
+                    "title": task.get("title", ""),
+                    "human_query": task["human_query"],
+                    "human_options": task["human_options"],
+                    "allow_custom_response": task["allow_custom_response"],
+                })
+
+            elif status == "needs_planner":
+                # Mark the task completed so the planner's revision can proceed
+                # without this task blocking dependents. Record the reason the
+                # worker gave so the planner sees it on the next call.
+                reason = result.get("replan_reason") or "worker requested a plan revision"
+                task["status"] = "completed"
+                task["is_error"] = False
+                task["error"] = None
+                task["result"] = f"Requested plan revision: {reason}"
+                task["replan_reason"] = reason
+                replan_queue.append({"task_id": task_id, "title": task.get("title", ""), "reason": reason})
+                await _emit("task_replan_requested", {
+                    "task_id": task_id,
+                    "title": task.get("title", ""),
+                    "replan_reason": reason,
+                })
+
+            else:  # failed
                 task["retry"] = task.get("retry", 0) + 1
                 task["is_error"] = True
                 task["error"] = result.get("error")
@@ -582,6 +840,22 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
                     })
 
         await plan_store.update_plan(plan)
+
+        # If any worker asked for a replan, call the planner now. The next loop
+        # iteration re-reads the plan and runs whatever tasks the planner
+        # produced in place of the pending ones.
+        if replan_queue:
+            for entry in replan_queue:
+                await _trigger_replan(
+                    org_id=org_id,
+                    bridge_id=bridge_id,
+                    thread_id=thread_id,
+                    sub_thread_id=sub_thread_id,
+                    bridge_configurations=bridge_configurations,
+                    parsed_data=parsed_data,
+                    replan_entry=entry,
+                    emit=_emit,
+                )
 
     # Final state check
     plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
