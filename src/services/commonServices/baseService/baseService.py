@@ -114,7 +114,7 @@ class BaseService:
 
     async def run_tool(self, responses, service):
         codes_mapping, function_list = make_code_mapping_by_service(responses, service)
-        if not self.playground:
+        if not self.playground and self.response_format["type"] != "webhook":
             asyncio.create_task(
                 sendResponse(self.response_format, data={"function_call": True, "Name": function_list}, success=True)
             )
@@ -253,7 +253,7 @@ class BaseService:
         configuration, tools = self.update_configration(
             model_response, func_response_data, configuration, mapping_response_data, service, tools
         )
-        if not self.playground and not self.stream_mode:
+        if not self.playground and not self.stream_mode and self.response_format["type"] != "webhook":
             asyncio.create_task(
                 sendResponse(
                     self.response_format,
