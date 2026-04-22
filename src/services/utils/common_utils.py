@@ -763,33 +763,110 @@ async def _update_history_redis(dataset, history_params, version_id, thread_info
 
 async def _save_plan_from_result(parsed_data, result):
     """Parse the planner LLM JSON out of `result` and persist the plan to Redis.
+
+    Safety guarantees:
+    - On replan, merge new tasks with existing plan so completed / answered
+      tasks are never lost even if the LLM forgets to re-emit them.
+    - The original goal is preserved once an existing plan is present.
+    - If the new output is malformed or contains no tasks while an existing
+      plan has tasks, the existing plan is kept intact (never wiped).
+    - Raw content is logged on any failure path so issues are debuggable.
+
     Also attaches the parsed plan to `historyParams["plans"]` so the history
-    row carries the same `plans` field the legacy todo_handler used to save.
+    row carries the same `plans` field todo_handler expects.
     """
     from src.services.todo import plan_store
     from src.services.todo.planner_service import _parse_plan_json
+
+    org_id = parsed_data["org_id"]
+    bridge_id = parsed_data["bridge_id"]
+    thread_id = parsed_data["thread_id"]
+    sub_thread_id = parsed_data.get("sub_thread_id") or thread_id
 
     try:
         response = (result.get("historyParams") or {}).get("response") or result.get("response") or {}
         content = (response.get("data") or {}).get("content") or ""
         if not content:
+            logger.warning(
+                f"Planner returned empty content for thread={thread_id}/sub={sub_thread_id}; keeping any existing plan."
+            )
             return
-        plan_json = _parse_plan_json(content)
+
+        try:
+            plan_json = _parse_plan_json(content)
+        except Exception as parse_err:
+            logger.error(
+                f"Planner JSON parse failed for thread={thread_id}/sub={sub_thread_id}: {parse_err}. "
+                f"Keeping existing plan if any. Raw content (truncated): {content[:1000]}"
+            )
+            return
+
+        if not isinstance(plan_json, dict):
+            logger.error(
+                f"Planner output is not an object for thread={thread_id}/sub={sub_thread_id}. Keeping existing plan. Got type={type(plan_json).__name__}"
+            )
+            return
+
+        new_tasks = plan_json.get("tasks", {}) or {}
+        existing_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+        existing_tasks = (existing_plan or {}).get("tasks") or {}
+
+        # Hard guard: do not wipe an existing non-empty plan with an empty one.
+        if not new_tasks and existing_tasks:
+            logger.warning(
+                f"Planner returned 0 tasks but existing plan has {len(existing_tasks)} task(s) "
+                f"for thread={thread_id}/sub={sub_thread_id}. Keeping existing plan intact. "
+                f"Raw content (truncated): {content[:500]}"
+            )
+            return
+
+        # Merge rules (safety net against LLM drift on replan):
+        if existing_plan:
+            goal = existing_plan.get("goal") or plan_json.get("goal") or parsed_data.get("user", "")
+            merged_tasks = dict(new_tasks)
+            for tid, old_task in existing_tasks.items():
+                if tid in merged_tasks:
+                    continue
+                if old_task.get("status") == "completed" or old_task.get("human_response") is not None:
+                    merged_tasks[tid] = old_task
+                    logger.warning(
+                        f"Planner dropped task '{tid}' on replan; preserved by merge "
+                        f"(status={old_task.get('status')})."
+                    )
+            tasks = merged_tasks
+            message_id = existing_plan.get("message_id") or parsed_data.get("message_id", "")
+        else:
+            goal = plan_json.get("goal") or parsed_data.get("user", "")
+            tasks = new_tasks
+            message_id = parsed_data.get("message_id", "")
+
+        if not tasks:
+            logger.error(
+                f"Refusing to save plan with no tasks for thread={thread_id}/sub={sub_thread_id}."
+            )
+            return
+
         plan = {
-            "goal": plan_json.get("goal", parsed_data.get("user", "")),
+            "goal": goal,
             "state": "planning",
-            "bridge_id": parsed_data["bridge_id"],
-            "org_id": parsed_data["org_id"],
-            "thread_id": parsed_data["thread_id"],
-            "sub_thread_id": parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
-            "tasks": plan_json.get("tasks", {}),
-            "message_id": parsed_data.get("message_id", ""),
+            "bridge_id": bridge_id,
+            "org_id": org_id,
+            "thread_id": thread_id,
+            "sub_thread_id": sub_thread_id,
+            "tasks": tasks,
+            "message_id": message_id,
         }
         await plan_store.save_plan(plan)
+        logger.info(
+            f"Plan saved for thread={thread_id}/sub={sub_thread_id} with {len(tasks)} task(s)."
+        )
         if result.get("historyParams") is not None:
             result["historyParams"]["plans"] = plan
     except Exception as err:
-        logger.error(f"Failed to save plan from chat result: {err}")
+        logger.error(
+            f"Failed to save plan from chat result for thread={thread_id}/sub={sub_thread_id}: {err}",
+            exc_info=True,
+        )
 
 
 async def process_background_tasks(
