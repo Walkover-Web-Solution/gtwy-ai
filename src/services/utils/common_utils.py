@@ -403,7 +403,7 @@ async def load_model_configuration(model, configuration, service):
             and (config["level"] == 0 or config["level"] == 1 or config["level"] == 2)
             or key in configuration
         ):
-            if config.get("level") == 0 or key not in configuration:
+            if config.get("level") == 0 and key not in configuration:
                 continue
             custom_config[key] = configuration.get(key, config["default"])
 
