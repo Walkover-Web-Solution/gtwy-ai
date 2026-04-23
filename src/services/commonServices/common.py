@@ -55,6 +55,7 @@ from .response_caching_service import handle_response_caching
 from workflow import execute_advanced_workflow
 from src.services.todo.todo_handler import handle_todo_mode
 from src.services.todo.planner_service import prepare_planner_request
+from src.services.utils.reviewer_service import run_reviewer_loop
 
 app = FastAPI()
 configurationModel = db["configurations"]
@@ -175,9 +176,9 @@ async def chat(request_body):
                 # Content was blocked by guardrails, return the blocked response
                 return JSONResponse(status_code=200, content=guardrails_result)
 
-        parsed_data["configuration"]["prompt"] = add_default_template(
-            parsed_data.get("configuration", {}).get("prompt", "")
-        )
+        # parsed_data["configuration"]["prompt"] = add_default_template(
+        #     parsed_data.get("configuration", {}).get("prompt", "")
+        # )
         parsed_data["variables"] = add_user_in_variables(parsed_data["variables"], parsed_data["user"])
         # Step 2: Initialize Timer
         timer = initialize_timer(parsed_data["state"])
@@ -364,6 +365,18 @@ async def chat(request_body):
                 if transfer_result is not None:
                     return transfer_result
 
+            # Reviewer agent loop: runs only for non-transfer, non-streaming successful responses
+            if result.get("success") and not result.get("transfer_agent_config"):
+                result = await run_reviewer_loop(
+                    result=result,
+                    parsed_data=parsed_data,
+                    params=params,
+                    class_obj=class_obj,
+                    handle_response_caching_fn=handle_response_caching,
+                    Helper=Helper,
+                    request_body=request_body,
+                    bridge_configurations=bridge_configurations,
+                )
             result["response"]["usage"] = params["token_calculator"].get_total_usage()
             execution_failed = not result["success"]
             original_error = result.get("error", "Unknown error") if execution_failed else None
