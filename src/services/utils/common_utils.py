@@ -1522,6 +1522,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
     import traceback as tb
     original_service = parsed_data["service"]
     original_model = parsed_data["model"]
+    is_nested_stream_call = bool(
+        (request_body.get("body", {}) if isinstance(request_body, dict) else {}).get("_nested_stream_call")
+    )
     timer.start()
     original_error = None
     template_data = None
@@ -1583,20 +1586,26 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 logger.error(f"SSE fallback attempt also failed ({parsed_data['service']}/{parsed_data['model']}): {retry_err}, {tb.format_exc()}")
                 if class_obj.streamer:
                     await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
-                    await class_obj.streamer.close()
+                    if not is_nested_stream_call:
+                        await class_obj.streamer.close()
                 if not parsed_data.get("is_playground"):
                     await sendResponse(
                         parsed_data.get("response_format"), str(retry_err), variables=parsed_data.get("variables", {})
                     ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+                if is_nested_stream_call:
+                    return {"success": False, "message": str(retry_err), "response": {}}
                 return
         else:
             if class_obj.streamer:
                 await class_obj.streamer.emit_error(original_error)
-                await class_obj.streamer.close()
+                if not is_nested_stream_call:
+                    await class_obj.streamer.close()
             if not parsed_data.get("is_playground"):
                 await sendResponse(
                     parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {})
                 ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+            if is_nested_stream_call:
+                return {"success": False, "message": str(original_error), "response": {}}
             return
 
     template_data = render_template_if_applicable(parsed_data, result)
@@ -1644,23 +1653,32 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 transfer_body["bridge_configurations"] = bridge_configurations
                 # Inject the live streamer so agent B writes to the same SSE connection
                 transfer_body["_injected_streamer"] = class_obj.streamer
+                if is_nested_stream_call:
+                    transfer_body["_nested_stream_call"] = True
+                    transfer_body["_sync_injected_stream_call"] = True
 
                 transfer_request_body = {
                     "body": transfer_body,
                     "state": request_body.get("state", {}).copy(),
                     "path_params": request_body.get("path_params", {}),
                 }
-                await chat_function(transfer_request_body)
+                transfer_result = await chat_function(transfer_request_body)
+                if is_nested_stream_call:
+                    return transfer_result
             else:
                 logger.warning(f"SSE transfer: target agent {target_agent_id} not found, closing stream")
                 if class_obj.streamer:
                     await class_obj.streamer.emit_error(f"Transfer target agent {target_agent_id} not found in bridge_configurations")
-                    await class_obj.streamer.close()
+                    if not is_nested_stream_call:
+                        await class_obj.streamer.close()
         except Exception as transfer_err:
             logger.error(f"SSE transfer handling error: {transfer_err}, {tb.format_exc()}")
             if class_obj.streamer:
                 await class_obj.streamer.emit_error(str(transfer_err))
-                await class_obj.streamer.close()
+                if not is_nested_stream_call:
+                    await class_obj.streamer.close()
+            if is_nested_stream_call:
+                return {"success": False, "message": str(transfer_err), "response": {}}
         return  # Agent B owns emit_done + close from here
 
     try:
@@ -1733,16 +1751,20 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 or model_response.get("status")
                 or ""
             )
-            accumulated_payload = None if template_data else formatted_response
-            await class_obj.streamer.emit_done(
-                usage=formatted_response.get("usage", {}),
-                message_id=str(parsed_data.get("message_id") or ""),
-                finish_reason=finish_reason,
-                accumulated_data=accumulated_payload,
-            )
-            await class_obj.streamer.close()
+            if not is_nested_stream_call:
+                accumulated_payload = None if template_data else formatted_response
+                await class_obj.streamer.emit_done(
+                    usage=formatted_response.get("usage", {}),
+                    message_id=str(parsed_data.get("message_id") or ""),
+                    finish_reason=finish_reason,
+                    accumulated_data=accumulated_payload,
+                )
+                await class_obj.streamer.close()
+        return {"success": True, "response": result.get("response", {})}
     except Exception as err:
         logger.error(f"SSE finalization error: {str(err)}, {tb.format_exc()}")
         if class_obj.streamer:
             await class_obj.streamer.emit_error(str(err))
-            await class_obj.streamer.close()
+            if not is_nested_stream_call:
+                await class_obj.streamer.close()
+        return {"success": False, "message": str(err), "response": {}}

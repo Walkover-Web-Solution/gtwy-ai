@@ -58,6 +58,8 @@ async def call_gtwy_agent(args):
         org_id = args.get("org_id")
         user_message = args.get("user")
         variables = args.get("variables") or {}
+        injected_streamer = args.get("injected_streamer")
+        nested_stream_call = bool(args.get("nested_stream_call") and injected_streamer)
 
         # Step 1: Update request body with core data
         request_body.update({"user": user_message, "bridge_id": bridge_id, "message_id": message_id})
@@ -78,6 +80,12 @@ async def call_gtwy_agent(args):
         request_body["variables"] = variables
         request_body["org_id"] = org_id
         request_body["bridge_configurations"] = bridge_configurations
+        request_body["configuration"] = {**(request_body.get("configuration") or {})}
+        request_body["configuration"]["stream"] = True if nested_stream_call else False
+        if nested_stream_call:
+            request_body["_injected_streamer"] = injected_streamer
+            request_body["_nested_stream_call"] = True
+            request_body["_sync_injected_stream_call"] = True
 
         # Step 4: Create data structure for chat function
         # Pass timer state from parent request to maintain latency tracking in recursive calls
@@ -92,8 +100,6 @@ async def call_gtwy_agent(args):
         # Handle JSONResponse object - extract the actual response data
         if hasattr(response, "body"):
             # For JSONResponse, get the body content
-            import json
-
             response_data = json.loads(response.body.decode("utf-8"))
         else:
             # If it's already a dict, use it directly

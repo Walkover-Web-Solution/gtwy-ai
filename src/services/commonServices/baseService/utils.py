@@ -361,6 +361,10 @@ async def process_data_and_run_tools(codes_mapping, self):
                         "message_id": self.message_id,
                     }
 
+                    if self.stream_mode and self.streamer:
+                        agent_args["injected_streamer"] = self.streamer
+                        agent_args["nested_stream_call"] = True
+
                     # Add thread_id and sub_thread_id if bridge requires it
                     if self.tool_id_and_name_mapping[name].get("requires_thread_id", False):
                         agent_args["thread_id"] = self.thread_id

@@ -319,7 +319,15 @@ async def chat(request_body):
                     message_id=str(parsed_data.get("message_id") or ""),
                 )
                 await class_obj.streamer.emit_planning()
+            sync_injected_stream_call = bool(
+                (request_body.get("body", {}) if isinstance(request_body, dict) else {}).get("_sync_injected_stream_call")
+            )
             if injected_streamer:
+                if sync_injected_stream_call:
+                    return await sse_stream_and_finalize(
+                        class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
+                        request_body=request_body, chat_function=chat,
+                    )
                 # Agent-transfer: existing SSE connection owned by the caller — background task, no new StreamingResponse
                 asyncio.create_task(sse_stream_and_finalize(
                     class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
