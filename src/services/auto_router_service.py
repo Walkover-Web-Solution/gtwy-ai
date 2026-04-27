@@ -12,10 +12,17 @@ client = AsyncNotDiamond(api_key=Config.NOT_DIAMOND_API_KEY) if Config.NOT_DIAMO
 INTERNAL_TO_NOTDIAMOND_PROVIDER = {value: key for key, value in PROVIDER_NAME_OVERRIDES.items()}
 
 async def apply_auto_model_selection(parsed_data, timer):
+    service_apikeys = parsed_data.get("service_apikeys") or {}
+
+    if service_apikeys and parsed_data.get("is_request_apikey"):
+        # Only allow the configured service to auto selection
+        service = parsed_data["service"]
+        service_apikeys = {key: value for key, value in service_apikeys.items() if key == service}
+
     configuration = parsed_data.get("configuration", {})
     execution_time_logs = parsed_data.setdefault("execution_time_logs", [])
     best_model, best_service = await find_best_model(
-        service_apikeys=parsed_data.get("service_apikeys") or {},
+        service_apikeys=service_apikeys,
         prompt=configuration.get("prompt", ""),
         user_message=parsed_data.get("user", ""),
         conversation=configuration.get("conversation", []),
