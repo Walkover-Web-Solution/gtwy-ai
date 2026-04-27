@@ -112,6 +112,7 @@ async def _prepare_configuration_response(
 
     
     apikey_src = apikeys_dict or folder_apikeys_dict or {}
+    is_request_apikey = bool(apikey)
     apikey = setup_api_key(service, result, apikey, chatbot)
     apikey_object_id = result.get("bridges", {}).get("apikey_object_id")
     
@@ -144,6 +145,7 @@ async def _prepare_configuration_response(
             "configuration": configuration,
             "service": service,
             "apikey": apikey,
+            "is_request_apikey": is_request_apikey,
             "apikey_object_id": apikey_object_id,
             "RTLayer": False,
             "settings": result.get("bridges", {}).get("settings", {}),
@@ -217,6 +219,7 @@ async def _prepare_configuration_response(
         "apikey": apikey,
         "auto_model_select": auto_model_select,
         "service_apikeys": service_apikeys,
+        "is_request_apikey": is_request_apikey,
         "apikey_object_id": apikey_object_id,
         "apikey_status": apikey_status,
         "RTLayer": RTLayer,

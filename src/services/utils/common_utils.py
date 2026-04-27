@@ -189,6 +189,7 @@ def parse_request_body(request_body):
         "type": body.get("configuration", {}).get("type"),
         "apikey_object_id": body.get("apikey_object_id"),
         "apikey_status": body.get('apikey_status'),
+        "is_request_apikey": body.get("is_request_apikey", False),
         "audios": [
             url.get("url")
             for url in body.get("user_urls", [])
@@ -1499,10 +1500,22 @@ async def update_cost_and_last_used(parsed_data):
         logger.error(f"Error updating cost and last used: {str(e)}")
 
 
-async def update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, code, completion_success):
+async def update_cost_usage_and_apikey_status_in_background(
+    original_service,
+    parsed_data,
+    code,
+    completion_success,
+    fallback_service=None,
+    fallback_code=None,
+):
     if completion_success:
         asyncio.create_task(update_cost_and_last_used(parsed_data))
-    asyncio.create_task(mark_apikey_status_from_response(original_service, parsed_data, code))
+
+    if fallback_service:
+        asyncio.create_task(mark_apikey_status_from_response(fallback_service, parsed_data, fallback_code))
+
+    if not parsed_data.get("is_request_apikey", False):
+        asyncio.create_task(mark_apikey_status_from_response(original_service, parsed_data, code))
 
 
 async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations, request_body=None, chat_function=None):

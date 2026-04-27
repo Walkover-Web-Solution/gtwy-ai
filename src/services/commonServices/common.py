@@ -147,6 +147,8 @@ async def chat(request_body):
     result = {}
     class_obj = {}
     first_execution_error_code = None
+    fallback_service = None
+    fallback_error_code = None
     completion_success = True
     original_service = None
     try:
@@ -442,6 +444,8 @@ async def chat(request_body):
                 logger.error(
                     f"Fallback attempt failed with {parsed_data['service']}/{parsed_data['model']}: {retry_error}"
                 )
+                fallback_service = parsed_data["service"]
+                fallback_error_code = getattr(retry_error, "status_code", None)
                 # Restore original configuration before raising
                 parsed_data["model"] = original_model
                 parsed_data["service"] = original_service
@@ -606,7 +610,14 @@ async def chat(request_body):
         completion_success = False
         raise ValueError(error_object) from None
     finally:
-        await update_cost_usage_and_apikey_status_in_background(original_service, parsed_data, first_execution_error_code, completion_success)
+        await update_cost_usage_and_apikey_status_in_background(
+            original_service,
+            parsed_data,
+            first_execution_error_code,
+            completion_success,
+            fallback_service,
+            fallback_error_code,
+        )
 
 
 @handle_exceptions
