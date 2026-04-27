@@ -1673,6 +1673,28 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             if result.get("response") and result["response"].get("data"):
                 result["response"]["data"]["message_id"] = parsed_data["message_id"]
             update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+
+            # Reviewer-agent loop on the streaming path: reviewer + any re-runs
+            # share the same SSE connection (class_obj.streamer) so deltas keep
+            # flowing to the user. Phase events (review_phase) are emitted
+            # between rounds. emit_done is owned by this finalizer below — the
+            # review loop must not call it.
+            if parsed_data.get("_reviewer_bridge_id"):
+                from src.services.commonServices.reviewer_service import run_review_loop
+                result, _reviewer_summary = await run_review_loop(
+                    parsed_data=parsed_data,
+                    params=params,
+                    timer=timer,
+                    thread_info=thread_info,
+                    bridge_configurations=bridge_configurations,
+                    main_result=result,
+                    memory=params.get("memory"),
+                    streamer=class_obj.streamer,
+                )
+                # Refresh client-visible cost field after summing rounds.
+                result.setdefault("response", {}).setdefault("usage", {})
+                result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
+
             await sendResponse(
                 parsed_data.get("response_format"),
                 result["response"],

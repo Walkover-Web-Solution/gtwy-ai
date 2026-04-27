@@ -95,6 +95,18 @@ class StreamingService:
         """Emit a planning mode event."""
         await self._emit({"event": "planning"})
 
+    async def emit_review_phase(self, phase: str, round: int, **kwargs):
+        """
+        Emit a review-loop phase marker so frontends can display what the
+        backend is doing between rounds (reviewing vs revising).
+
+        phase ∈ {"reviewer_start", "reviewer_done", "main_rerun_start"}
+        Optional kwargs flow into the payload (e.g. passed=bool, reason=str).
+        """
+        payload = {"event": "review_phase", "phase": phase, "round": round}
+        payload.update(kwargs)
+        await self._emit(payload)
+
     async def emit_execution(self):
         """Emit an execution mode event."""
         await self._emit({"event": "execution"})
