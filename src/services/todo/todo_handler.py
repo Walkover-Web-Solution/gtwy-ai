@@ -79,6 +79,18 @@ def _format_plan_response(plan, message_id, model="", finish_reason="completed",
     }
 
 
+def _derive_done_finish_reason(plan):
+    """Map plan state to done finish_reason for accurate client semantics."""
+    state = (plan or {}).get("state")
+    if state == "completed":
+        return "stop"
+    if state == "paused":
+        return "paused"
+    if state == "failed":
+        return "error"
+    return "stop"
+
+
 async def _stream_plan_action(streamer, action, parsed_data, bridge_configurations, existing_plan):
     """Background task: execute the plan action and emit SSE events."""
     org_id = parsed_data["org_id"]
@@ -116,11 +128,18 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
-            formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
+            final_finish_reason = _derive_done_finish_reason(final_plan)
+            formatted = _format_plan_response(
+                final_plan,
+                message_id,
+                model,
+                finish_reason=final_finish_reason,
+                extract_final_result=True,
+            )
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
-                finish_reason="stop",
+                finish_reason=final_finish_reason,
                 accumulated_data=formatted,
             )
             # Update the history entry that was created during planning, enriched
@@ -132,18 +151,24 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                     main_agent_metrics=main_agent_metrics,
                     history_params_extra={
                         "message": formatted["data"]["content"],
-                        "finish_reason": "stop",
+                        "finish_reason": final_finish_reason,
                         "status": (final_plan or {}).get("state") == "completed",
                     },
                 )
             )
 
         elif action == "status":
+            status_finish_reason = _derive_done_finish_reason(existing_plan)
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
-                finish_reason="stop",
-                accumulated_data=_format_plan_response(existing_plan, message_id, model),
+                finish_reason=status_finish_reason,
+                accumulated_data=_format_plan_response(
+                    existing_plan,
+                    message_id,
+                    model,
+                    finish_reason=status_finish_reason,
+                ),
             )
 
         elif action == "respond":
@@ -189,11 +214,18 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
-            formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
+            final_finish_reason = _derive_done_finish_reason(final_plan)
+            formatted = _format_plan_response(
+                final_plan,
+                message_id,
+                model,
+                finish_reason=final_finish_reason,
+                extract_final_result=True,
+            )
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
-                finish_reason="stop",
+                finish_reason=final_finish_reason,
                 accumulated_data=formatted,
             )
             asyncio.create_task(
@@ -203,7 +235,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                     main_agent_metrics=main_agent_metrics,
                     history_params_extra={
                         "message": formatted["data"]["content"],
-                        "finish_reason": "stop",
+                        "finish_reason": final_finish_reason,
                         "status": (final_plan or {}).get("state") == "completed",
                     },
                 )
@@ -237,11 +269,18 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
-            formatted = _format_plan_response(final_plan, message_id, model, extract_final_result=True)
+            final_finish_reason = _derive_done_finish_reason(final_plan)
+            formatted = _format_plan_response(
+                final_plan,
+                message_id,
+                model,
+                finish_reason=final_finish_reason,
+                extract_final_result=True,
+            )
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
-                finish_reason="stop",
+                finish_reason=final_finish_reason,
                 accumulated_data=formatted,
             )
             asyncio.create_task(
@@ -251,7 +290,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                     main_agent_metrics=main_agent_metrics,
                     history_params_extra={
                         "message": formatted["data"]["content"],
-                        "finish_reason": "stop",
+                        "finish_reason": final_finish_reason,
                         "status": (final_plan or {}).get("state") == "completed",
                     },
                 )
