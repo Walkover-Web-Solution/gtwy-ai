@@ -87,6 +87,43 @@ def setup_agent_pre_tools(parsed_data, bridge_configurations):
 
     parsed_data["pre_tools"] = resolved_pre_tools
 
+def setup_agent_post_tool(parsed_data, bridge_configurations):
+    """
+    Setup post_tool for the current agent with its own variables.
+    Resolves args from agent variables and sets parsed_data["post_tool_data"].
+    """
+    current_bridge_id = parsed_data.get("bridge_id")
+    if not current_bridge_id or not bridge_configurations:
+        return
+
+    current_config = bridge_configurations.get(current_bridge_id, {})
+    post_tool_data = current_config.get("post_tool_data")
+    if not post_tool_data:
+        return
+
+    tool_config = post_tool_data.get("config", {})
+    tool_args_mapping = post_tool_data.get("args", {})
+    agent_variables = parsed_data.get("variables", {})
+
+    resolved_args = dict(tool_config)
+    required_params = tool_config.get("required_params", [])
+
+    for param, var_name in tool_args_mapping.items():
+        if var_name in agent_variables:
+            resolved_args[param] = agent_variables[var_name]
+        else:
+            resolved_args[param] = var_name
+
+    for param in required_params:
+        if param not in resolved_args and param in agent_variables:
+            resolved_args[param] = agent_variables[param]
+
+    parsed_data["post_tool_data"] = {
+        **post_tool_data,
+        "args": resolved_args,
+        "config": tool_config,
+    }
+
 async def handle_agent_transfer(
     result, request_body, bridge_configurations, chat_function, current_bridge_id=None, transfer_request_id=None
 ):
@@ -220,6 +257,7 @@ def parse_request_body(request_body):
         "guardrails": body.get("settings", {}).get("guardrails") or {},
         "testcase_data": body.get("testcase_data") or {},
         "is_embed": body.get("is_embed"),
+        "post_tool_data": body.get("post_tool_data"),
         "user_id": body.get("user_id"),
         "file_data": body.get("video_data") or {},
         "youtube_url": body.get("youtube_url") or None,
@@ -497,6 +535,42 @@ async def handle_pre_tools(parsed_data, custom_config):
                 response = web_response.get('response')
                 error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
                 parsed_data["variables"]["web_search_pre_result"] = error_msg
+
+async def handle_post_tool(parsed_data, result):
+    """Execute the folder-level post_tool after every AI call (embed only).
+    Awaited directly; returns the post function response to allow the caller to override the AI response."""
+
+    post_tool_data = parsed_data.get("post_tool_data")
+    if not post_tool_data:
+        return
+
+
+    script_id = post_tool_data.get("script_id") or post_tool_data.get("function_name") or post_tool_data.get("endpoint_name")
+    if not script_id:
+        logger.warning("post_tool configured but no script_id / function_name found; skipping")
+        return
+
+    try:
+        args = {
+            **dict(post_tool_data.get("args", {})),
+            "user": parsed_data.get("user"),
+            "_response_type": parsed_data.get("configuration", {}).get("response_type"),
+            "bridge_id": parsed_data.get("bridge_id"),
+            "thread_id": parsed_data.get("thread_id"),
+            "org_id": parsed_data.get("org_id"),
+        }
+        response_data = (result or {}).get("response", {}).get("data") if isinstance(result, dict) else None
+        if response_data:
+            args["ai_response"] = response_data.get("content") or response_data
+
+        post_function_response = await axios_work(
+            args,
+            {"url": f"https://flow.sokt.io/func/{script_id}"},
+        )
+    except Exception as err:
+        logger.error(f"post_tool execution error (script_id={script_id}): {err}")
+    return post_function_response
+
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
     sub_thread_id = parsed_data["sub_thread_id"]
@@ -1698,6 +1772,12 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 or model_response.get("status")
                 or ""
             )
+            post_tool_response = await handle_post_tool(parsed_data, result)
+            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                if formatted_response.get("data") is not None:
+                    formatted_response["data"]["content"] = post_tool_response.get("response")
+                if result.get("response", {}).get("data") is not None:
+                    result["response"]["data"]["content"] = post_tool_response.get("response")
             accumulated_payload = None if template_data else formatted_response
             await class_obj.streamer.emit_done(
                 usage=formatted_response.get("usage", {}),

@@ -25,6 +25,7 @@ from src.services.utils.common_utils import (
     filter_missing_vars,
     handle_agent_transfer,
     handle_fine_tune_model,
+    handle_post_tool,
     handle_pre_tools,
     initialize_timer,
     load_model_configuration,
@@ -37,6 +38,7 @@ from src.services.utils.common_utils import (
     process_variable_state,
     restructure_json_schema,
     validate_json_schema_configuration,
+    setup_agent_post_tool,
     setup_agent_pre_tools,
     update_usage_metrics,
     process_batch_background_tasks,
@@ -160,6 +162,7 @@ async def chat(request_body):
         
         # Setup pre_tools for the current agent with its own variables
         setup_agent_pre_tools(parsed_data, bridge_configurations)
+        setup_agent_post_tool(parsed_data, bridge_configurations)
         await apply_prompt_wrapper(parsed_data)
 
         # Initialize or retrieve transfer_request_id for tracking transfers
@@ -526,6 +529,9 @@ async def chat(request_body):
             await process_background_tasks(
                 parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
             )
+            post_tool_response = await handle_post_tool(parsed_data, result)
+            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                result["response"]["data"]["content"] = post_tool_response.get("response")
         else:
             if parsed_data.get("testcase_data", {}).get("run_testcase", False):
                 from src.services.commonServices.testcases import process_single_testcase_result
