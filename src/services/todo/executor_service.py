@@ -17,6 +17,10 @@ PROTECTED_STATUSES = {"completed"}
 REPLAN_PRESERVE_STATUSES = {"completed", "pending", "in_progress", "waiting_for_user", "failed"}
 INTERRUPTED_TASK_RECOVERY_NOTE = "Task was in_progress when execution was interrupted; reset to pending for retry"
 
+MAX_EXECUTION_ITERATIONS = 25
+DEFAULT_MAX_RETRY = 2
+EXECUTION_SLEEP_INTERVAL = 1
+
 WORKER_RESPONSE_SCHEMA = """
 {
   "status": "completed | waiting_for_user | failed",
@@ -87,13 +91,18 @@ async def _get_worker_prompt_template_from_db(default_prompt):
             prompt_data = await get_specific_prebuilt_prompt_without_org_service("worker_prompt")
             prompt_override = (prompt_data or {}).get("worker_prompt")
             if isinstance(prompt_override, str) and prompt_override.strip():
-                _WORKER_PROMPT_TEMPLATE_CACHE = prompt_override
+                _WORKER_PROMPT_TEMPLATE_CACHE = default_prompt
         except Exception as err:
             logger.error(f"Error fetching worker_prompt from preBuiltPrompts: {err}")
         finally:
             _WORKER_PROMPT_TEMPLATE_FETCHED = True
 
     return _WORKER_PROMPT_TEMPLATE_CACHE or default_prompt
+
+
+def _get_tool_name(tool):
+    """Extract tool name from tool definition."""
+    return tool.get("name") or (tool.get("function") or {}).get("name")
 
 
 def _filter_tools_for_task(agent_config, task_tool_names):
@@ -105,35 +114,27 @@ def _filter_tools_for_task(agent_config, task_tool_names):
     worker isn't blocked by the planner capitalizing a tool name.
     """
     all_tools = ((agent_config or {}).get("configuration") or {}).get("tools") or []
-    if task_tool_names is None or task_tool_names == "":
+    if not task_tool_names:
         return []
-    if isinstance(task_tool_names, str):
-        allow = {task_tool_names}
-    else:
-        allow = set(task_tool_names)
-
-    def _tool_name(tool):
-        return tool.get("name") or (tool.get("function") or {}).get("name")
-
-    # Exact match first.
-    filtered = [t for t in all_tools if _tool_name(t) in allow]
+    
+    allow = {task_tool_names} if isinstance(task_tool_names, str) else set(task_tool_names)
+    
+    filtered = [t for t in all_tools if _get_tool_name(t) in allow]
     if filtered:
         return filtered
 
-    # Case-insensitive fallback.
     allow_lower = {a.lower() for a in allow if isinstance(a, str)}
-    ci_filtered = [t for t in all_tools if (_tool_name(t) or "").lower() in allow_lower]
+    ci_filtered = [t for t in all_tools if (_get_tool_name(t) or "").lower() in allow_lower]
     if ci_filtered:
-        matched = [_tool_name(t) for t in ci_filtered]
+        matched = [_get_tool_name(t) for t in ci_filtered]
         logger.warning(
             f"Tool filter matched case-insensitively: requested={sorted(allow)} matched={matched}"
         )
         return ci_filtered
 
-    available = [_tool_name(t) for t in all_tools if _tool_name(t)]
     logger.error(
         f"Tool filter found NO match. Requested={sorted(allow)}. "
-        f"Available on agent={available}."
+        f"Available on agent={[_get_tool_name(t) for t in all_tools if _get_tool_name(t)]}."
     )
     return []
 
@@ -144,18 +145,17 @@ def _build_dependency_context(task, all_tasks):
     if not dependencies:
         return ""
     
-    context_parts = ["DEPENDENCY_RESULTS\n"]
-    context_parts.append("Use these completed task results when execution_details references them:\n")
+    context_parts = [
+        "DEPENDENCY_RESULTS",
+        "Use these completed task results when execution_details references them:"
+    ]
     
     for dep_id in dependencies:
         dep_task = all_tasks.get(dep_id)
-        if not dep_task or dep_task.get("status") != "completed":
-            continue
-        
-        dep_title = dep_task.get("title", dep_id)
-        dep_result = dep_task.get("result", "No result")
-        context_parts.append(f"- {dep_id} ({dep_title}):")
-        context_parts.append(f"  Result: {dep_result}\n")
+        if dep_task and dep_task.get("status") == "completed":
+            dep_title = dep_task.get("title", dep_id)
+            dep_result = dep_task.get("result", "No result")
+            context_parts.append(f"- {dep_id} ({dep_title}): Result: {dep_result}")
     
     return "\n".join(context_parts) if len(context_parts) > 2 else ""
 
@@ -230,21 +230,22 @@ def _build_worker_user_message(task_id, task):
 def _build_worker_result(parsed):
     """Shape a parsed worker response into the dict execute_plan expects.
 
-    Workers can now directly request user input via waiting_for_user status.
+    Workers directly request user input via waiting_for_user status.
+    Worker CANNOT call the planner - all questions go to the user.
     `success` is False only for status=failed so the retry path kicks in;
     waiting_for_user is handled as success with a status that pauses execution.
     """
     status = parsed.get("status") or "completed"
-    if status == "needs_planner":
-        status = "waiting_for_user"
+    
     if status not in {"completed", "waiting_for_user", "failed"}:
         status = "waiting_for_user"
+    
     return {
         "success": status != "failed",
         "status": status,
         "result": parsed.get("result"),
         "reasoning": parsed.get("reasoning"),
-        "human_query": parsed.get("human_query") or parsed.get("replan_reason"),
+        "human_query": parsed.get("human_query"),
         "error": parsed.get("error"),
     }
 
@@ -336,14 +337,14 @@ def _merge_task_metrics(
     response = (done_event or {}).get("response") or {}
     data = response.get("data") or {}
 
-    input_t = usage.get("input_tokens") or 0
-    output_t = usage.get("output_tokens") or 0
-    total_t = usage.get("total_tokens") or (input_t + output_t)
+    input_tokens = usage.get("input_tokens") or 0
+    output_tokens = usage.get("output_tokens") or 0
+    total_tokens = usage.get("total_tokens") or (input_tokens + output_tokens)
     cost = usage.get("cost") or usage.get("expected_cost") or 0
 
-    metrics["input_tokens"] += input_t
-    metrics["output_tokens"] += output_t
-    metrics["total_tokens"] += total_t
+    metrics["input_tokens"] += input_tokens
+    metrics["output_tokens"] += output_tokens
+    metrics["total_tokens"] += total_tokens
     try:
         metrics["expected_cost"] += float(cost or 0)
     except (TypeError, ValueError):
@@ -433,6 +434,7 @@ def finalize_main_agent_metrics(metrics):
     }
 
 
+<<<<<<< Updated upstream
 def _init_main_agent_metrics():
     """
     Aggregate container for main-agent task telemetry. Primary-agent sub-tasks
@@ -587,21 +589,20 @@ def finalize_main_agent_metrics(metrics):
         "annotations": metrics["annotations"],
         "last_error": metrics["last_error"],
     }
+=======
+def _are_dependencies_met(task, tasks):
+    """Check if all task dependencies are completed."""
+    deps = task.get("dependencies", [])
+    return all(tasks.get(dep, {}).get("status") == "completed" for dep in deps)
+>>>>>>> Stashed changes
 
 
 def _get_runnable_tasks(tasks):
     """Find tasks that are pending and have all dependencies completed."""
-    runnable = []
-    for task_id, task in tasks.items():
-        if task["status"] != "pending":
-            continue
-        deps = task.get("dependencies", [])
-        all_deps_met = all(
-            tasks.get(dep, {}).get("status") == "completed" for dep in deps
-        )
-        if all_deps_met:
-            runnable.append(task_id)
-    return runnable
+    return [
+        task_id for task_id, task in tasks.items()
+        if task["status"] == "pending" and _are_dependencies_met(task, tasks)
+    ]
 
 
 def _is_plan_blocked(tasks):
@@ -609,35 +610,22 @@ def _is_plan_blocked(tasks):
 
     Blocking conditions (any one triggers a pause):
       - A task is `waiting_for_user` (user must reply).
-      - A task is `needs_replan` and no work is in progress (the planner's
-        revision did not resolve it; the plan cannot advance without another
-        planner pass or user input).
       - There are pending tasks but none have their dependencies met and
         nothing is running.
     """
-    has_waiting_for_user = any(t["status"] == "waiting_for_user" for t in tasks.values())
-    if has_waiting_for_user:
+    if any(t["status"] == "waiting_for_user" for t in tasks.values()):
         return True
 
     has_in_progress = any(t["status"] == "in_progress" for t in tasks.values())
-    has_needs_replan = any(t["status"] == "needs_replan" for t in tasks.values())
-    if has_needs_replan and not has_in_progress:
-        return True
-
-    for task_id, task in tasks.items():
-        if task["status"] == "pending":
-            deps = task.get("dependencies", [])
-            all_deps_met = all(
-                tasks.get(dep, {}).get("status") == "completed" for dep in deps
-            )
-            if all_deps_met:
-                return False  # At least one task can still run
-
+    
     if has_in_progress:
-        return False  # Still executing
+        return False
 
-    has_pending = any(t["status"] == "pending" for t in tasks.values())
-    return has_pending
+    for task in tasks.values():
+        if task["status"] == "pending" and _are_dependencies_met(task, tasks):
+            return False
+
+    return any(t["status"] == "pending" for t in tasks.values())
 
 
 def _is_plan_complete(tasks):
@@ -673,6 +661,100 @@ def _inject_variables_into_tool_args(tool_name, args, variables, variables_path,
     return enriched_args
 
 
+async def _handle_stream_event(event, task_id, accumulated_content, reasoning_parts, tool_calls_by_id, tool_calls_order, 
+                                aggregate_metrics, streamer, assigned_agent, bridge_configurations, variables, variables_path):
+    """Handle a single streaming event from the agent."""
+    evt_type = event.get("event")
+    
+    if evt_type == "delta":
+        content_piece = event.get("content", "")
+        accumulated_content.append(content_piece)
+        if streamer:
+            await streamer.emit_task_delta(task_id, content_piece)
+        return None
+    
+    if evt_type == "reasoning":
+        reasoning_piece = event.get("content", "")
+        if aggregate_metrics is not None and reasoning_piece:
+            reasoning_parts.append(reasoning_piece)
+        if streamer:
+            await streamer.emit_task_reasoning(task_id, reasoning_piece)
+        return None
+    
+    if evt_type == "tool_call":
+        call_id = event.get("call_id", "")
+        if aggregate_metrics is not None:
+            if not call_id:
+                call_id = f"tool_{task_id}_{len(tool_calls_order)}"
+            
+            if call_id not in tool_calls_by_id:
+                raw_args = event.get("args", {})
+                tool_name = event.get("name", "")
+                tool_id_and_name_mapping = (bridge_configurations.get(assigned_agent, {}) or {}).get("tool_id_and_name_mapping", {})
+                enriched_args = _inject_variables_into_tool_args(
+                    tool_name, raw_args, variables, variables_path, tool_id_and_name_mapping
+                )
+                
+                tool_entry = {
+                    call_id: {
+                        "name": tool_name,
+                        "args": enriched_args,
+                        "data": None,
+                        "id": tool_name,
+                    }
+                }
+                tool_calls_by_id[call_id] = tool_entry[call_id]
+                tool_calls_order.append(tool_entry)
+        if streamer:
+            await streamer.emit_task_tool_call(
+                task_id,
+                name=event.get("name", ""),
+                args=event.get("args", {}),
+                call_id=call_id,
+            )
+        return None
+    
+    if evt_type == "tool_result":
+        call_id = event.get("call_id", "")
+        result_content = event.get("content", "")
+        if aggregate_metrics is not None:
+            if call_id and call_id in tool_calls_by_id:
+                tool_calls_by_id[call_id]["data"] = {
+                    "response": result_content,
+                    "status": 1,
+                    "metadata": {"type": "function"}
+                }
+            else:
+                if not call_id:
+                    call_id = f"tool_{task_id}_{len(tool_calls_order)}"
+                tool_entry = {
+                    call_id: {
+                        "name": event.get("name", ""),
+                        "args": {},
+                        "data": {
+                            "response": result_content,
+                            "status": 1,
+                            "metadata": {"type": "function"}
+                        },
+                        "id": event.get("name", ""),
+                    }
+                }
+                tool_calls_order.append(tool_entry)
+        if streamer:
+            await streamer.emit_task_tool_result(
+                task_id,
+                name=event.get("name", ""),
+                content=result_content,
+                call_id=call_id,
+            )
+        return None
+    
+    if evt_type == "done":
+        return event
+    
+    return None
+
+
 async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, plan, streamer=None, main_agent_metrics=None, variables=None, variables_path=None):
     """Execute a single task by calling the appropriate agent directly.
     
@@ -698,19 +780,13 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
         if not current_agent_config:
             return {"success": False, "status": "failed", "error": f"Agent configuration not found for {assigned_agent}"}
 
-        # Per-task prompt + tool scoping: copy only what we mutate.
-        # Keep a cheap top-level map copy and deep-copy the assigned agent entry
-        # so this task cannot leak prompt/tool changes to siblings.
         scoped_bridge_configurations = dict(bridge_configurations)
-        scoped_agent_entry = copy.deepcopy(scoped_bridge_configurations.get(assigned_agent) or {})
+        scoped_agent_entry = copy.copy(scoped_bridge_configurations.get(assigned_agent) or {})
+        scoped_agent_entry["configuration"] = copy.copy(scoped_agent_entry.get("configuration") or {})
         scoped_bridge_configurations[assigned_agent] = scoped_agent_entry
-        scoped_agent_config = scoped_agent_entry.setdefault("configuration", {})
+        scoped_agent_config = scoped_agent_entry["configuration"]
         filtered_tools = _filter_tools_for_task(scoped_agent_entry, task.get("assigned_tool"))
-        filtered_tool_names = [
-            t.get("name") or (t.get("function") or {}).get("name") or ""
-            for t in filtered_tools
-        ]
-        filtered_tool_names = [n for n in filtered_tool_names if n]
+        filtered_tool_names = [name for t in filtered_tools if (name := _get_tool_name(t))]
         scoped_agent_config["tools"] = filtered_tools
         worker_prompt_template = await _get_worker_prompt_template_from_db(WORKER_SYSTEM_PROMPT_TEMPLATE)
         scoped_agent_config["prompt"] = _build_worker_system_prompt(
@@ -762,6 +838,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
             reasoning_parts = []
             tool_calls_by_id = {}
             tool_calls_order = []
+            
             async for chunk in response.body_iterator:
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
@@ -774,97 +851,13 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
                     except json.JSONDecodeError:
                         continue
 
-                    evt_type = event.get("event")
-
-                    if evt_type == "delta":
-                        content_piece = event.get("content", "")
-                        accumulated_content.append(content_piece)
-                        if streamer:
-                            await streamer.emit_task_delta(task_id, content_piece)
-
-                    elif evt_type == "reasoning":
-                        reasoning_piece = event.get("content", "")
-                        if aggregate_metrics is not None and reasoning_piece:
-                            reasoning_parts.append(reasoning_piece)
-                        if streamer:
-                            await streamer.emit_task_reasoning(task_id, reasoning_piece)
-
-                    elif evt_type == "tool_call":
-                        call_id = event.get("call_id", "")
-                        if aggregate_metrics is not None:
-                            # Format matches main flow: {call_id: {name, args, data, id}}
-                            if not call_id:
-                                # Generate fallback ID if missing
-                                call_id = f"tool_{task_id}_{len(tool_calls_order)}"
-                            
-                            if call_id not in tool_calls_by_id:
-                                # Inject static variables into args before storing in history
-                                # This matches main flow where replace_variables_in_args is called
-                                # before process_data_and_run_tools builds tool history
-                                raw_args = event.get("args", {})
-                                tool_name = event.get("name", "")
-                                tool_id_and_name_mapping = (bridge_configurations.get(assigned_agent, {}) or {}).get("tool_id_and_name_mapping", {})
-                                enriched_args = _inject_variables_into_tool_args(
-                                    tool_name, raw_args, variables, variables_path, tool_id_and_name_mapping
-                                )
-                                
-                                # Create entry matching main flow format
-                                tool_entry = {
-                                    call_id: {
-                                        "name": tool_name,
-                                        "args": enriched_args,  # Store enriched args with injected variables
-                                        "data": None,  # Will be updated when tool_result arrives
-                                        "id": tool_name,  # Tool identifier
-                                    }
-                                }
-                                tool_calls_by_id[call_id] = tool_entry[call_id]
-                                tool_calls_order.append(tool_entry)
-                        if streamer:
-                            await streamer.emit_task_tool_call(
-                                task_id,
-                                name=event.get("name", ""),
-                                args=event.get("args", {}),
-                                call_id=call_id,
-                            )
-
-                    elif evt_type == "tool_result":
-                        call_id = event.get("call_id", "")
-                        result_content = event.get("content", "")
-                        if aggregate_metrics is not None:
-                            if call_id and call_id in tool_calls_by_id:
-                                # Update the data field in existing entry
-                                tool_calls_by_id[call_id]["data"] = {
-                                    "response": result_content,
-                                    "status": 1,
-                                    "metadata": {"type": "function"}
-                                }
-                            else:
-                                # Tool result without prior tool_call - create standalone entry
-                                if not call_id:
-                                    call_id = f"tool_{task_id}_{len(tool_calls_order)}"
-                                tool_entry = {
-                                    call_id: {
-                                        "name": event.get("name", ""),
-                                        "args": {},
-                                        "data": {
-                                            "response": result_content,
-                                            "status": 1,
-                                            "metadata": {"type": "function"}
-                                        },
-                                        "id": event.get("name", ""),
-                                    }
-                                }
-                                tool_calls_order.append(tool_entry)
-                        if streamer:
-                            await streamer.emit_task_tool_result(
-                                task_id,
-                                name=event.get("name", ""),
-                                content=result_content,
-                                call_id=call_id,
-                            )
-
-                    elif evt_type == "done":
-                        done_event = event
+                    result = await _handle_stream_event(
+                        event, task_id, accumulated_content, reasoning_parts,
+                        tool_calls_by_id, tool_calls_order, aggregate_metrics,
+                        streamer, assigned_agent, bridge_configurations, variables, variables_path
+                    )
+                    if result is not None:
+                        done_event = result
 
             content = "".join(accumulated_content)
             if done_event and done_event.get("response", {}).get("data", {}).get("content"):
@@ -922,120 +915,6 @@ def _recover_interrupted_in_progress_tasks(plan):
     return recovered
 
 
-async def _trigger_replan(org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, replan_entry, emit):
-    """Call the planner again mid-execution with the worker's replan reason and
-    the current plan already in Redis. `prepare_planner_request` folds the
-    existing plan into the user message automatically, so the planner emits a
-    revised task set that accounts for what's already done. Completed tasks
-    are preserved; everything else is replaced.
-    """
-    from src.services.commonServices.common import chat_multiple_agents
-    from src.services.todo.planner_service import _parse_plan_json
-
-    worker_title = replan_entry.get("title", "")
-    worker_reason = replan_entry.get("reason", "")
-    feedback = (
-        f"Task '{worker_title}' reported the plan needs revision. "
-        f"Reason: {worker_reason}. "
-        "Use CURRENT PLAN statuses/results to decide the fix. "
-        "If this looks like a tool/system error, first try an alternative implementation/tool path. "
-        "If no reliable alternative is possible, keep the plan stable and add a clear user-facing "
-        "message task (waiting_for_user) explaining there is an internal issue while performing the task. "
-        "Keep completed tasks unchanged and only rewrite remaining work."
-    )
-
-    replan_body = copy.deepcopy(parsed_data)
-    replan_body["user"] = feedback
-    replan_body["mode"] = "plan"
-    replan_body.pop("action", None)
-    replan_body["message_id"] = str(uuid.uuid1())
-    replan_body.setdefault("configuration", {})["stream"] = False
-    replan_body["skip_history"] = True
-    # chat_multiple_agents does primary_body.update(primary_config), which
-    # overwrites body.configuration with bridge_configurations[bridge].configuration.
-    # Deep-copy the main bridge entry and force stream=False there so the
-    # planner call returns a single JSONResponse we can parse.
-    scoped_bridge_configurations = copy.deepcopy(bridge_configurations)
-    main_entry = scoped_bridge_configurations.get(bridge_id) or {}
-    main_entry.setdefault("configuration", {})["stream"] = False
-    scoped_bridge_configurations[bridge_id] = main_entry
-    replan_body["bridge_configurations"] = scoped_bridge_configurations
-
-    try:
-        response = await chat_multiple_agents({"body": replan_body, "state": {}})
-    except Exception as err:
-        logger.error(f"Replan planner call failed: {err}")
-        await emit("plan_revision_failed", {"error": str(err)})
-        return
-
-    content = ""
-    if hasattr(response, "body"):
-        try:
-            payload = json.loads(response.body.decode("utf-8"))
-        except (json.JSONDecodeError, AttributeError) as err:
-            logger.error(f"Replan response was not valid JSON: {err}")
-            await emit("plan_revision_failed", {"error": "planner returned invalid JSON"})
-            return
-        if not payload.get("success"):
-            logger.error(f"Replan planner returned error: {payload}")
-            await emit("plan_revision_failed", {"error": payload.get("error") or payload.get("message") or "planner failed"})
-            return
-        content = payload.get("response", {}).get("data", {}).get("content", "")
-    else:
-        logger.error("Replan planner returned a non-JSON response object")
-        await emit("plan_revision_failed", {"error": "unexpected planner response shape"})
-        return
-
-    try:
-        new_plan_obj = _parse_plan_json(content)
-    except ValueError as err:
-        logger.error(f"Replan JSON parse failed: {err}")
-        await emit("plan_revision_failed", {"error": str(err)})
-        return
-
-    plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
-    if not plan:
-        return
-
-    new_tasks = new_plan_obj.get("tasks", {}) or {}
-    existing_tasks = plan.get("tasks", {}) or {}
-
-    # Guard: if the planner came back with an empty task set, keep the old
-    # plan rather than wiping it (same safety net as _save_plan_from_result).
-    if not new_tasks and existing_tasks:
-        logger.warning(
-            f"Replan returned 0 tasks but existing plan has {len(existing_tasks)}. "
-            f"Keeping existing plan intact."
-        )
-        await emit("plan_revision_failed", {"error": "planner returned empty plan"})
-        return
-
-    merged_tasks = dict(new_tasks)
-    # Re-inject tasks the planner dropped that must not be lost.
-    # This prevents accidental truncation of remaining work (e.g., task_5..task_7
-    # disappearing after a replan focused on task_3). `needs_replan` is still
-    # intentionally NOT preserved — the planner owns its resolution.
-    for tid, old_task in existing_tasks.items():
-        if tid in merged_tasks:
-            continue
-        if old_task.get("status") in REPLAN_PRESERVE_STATUSES or old_task.get("human_response") is not None:
-            merged_tasks[tid] = old_task
-            logger.warning(
-                f"Replan: planner omitted protected task '{tid}' (status={old_task.get('status')}); preserved by patch merge."
-            )
-    plan["tasks"] = merged_tasks
-    if new_plan_obj.get("goal"):
-        plan["goal"] = new_plan_obj["goal"]
-    plan["state"] = "executing"
-    await plan_store.update_plan(plan)
-
-    await emit("plan_revised", {
-        "triggered_by_task": replan_entry.get("task_id"),
-        "replan_reason": worker_reason,
-        "plan": plan,
-    })
-
-
 async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=None):
     """
     Execute all tasks respecting dependencies and parallelism.
@@ -1074,19 +953,11 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             "reason": INTERRUPTED_TASK_RECOVERY_NOTE,
         })
 
-    tasks = plan.get("tasks", {})
-
-    max_iterations = 1000
     iteration = 0
-    while iteration < max_iterations:
+    while iteration < MAX_EXECUTION_ITERATIONS:
         iteration += 1
-        plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
-        if not plan:
-            logger.warning(f"Plan disappeared during execution at iteration {iteration}")
-            return finalize_main_agent_metrics(main_agent_metrics)
         tasks = plan.get("tasks", {})
 
-        # Check if all tasks are done
         if _is_plan_complete(tasks):
             has_failures = any(t.get("status") == "failed" for t in tasks.values())
             plan["state"] = "failed" if has_failures else "completed"
@@ -1098,7 +969,6 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             await _emit("plan_completed", {"state": plan["state"], "plan": plan})
             break
 
-        # Check if plan is blocked
         if _is_plan_blocked(tasks):
             plan["state"] = "paused"
             await plan_store.update_plan(plan)
@@ -1106,25 +976,25 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             await _emit("plan_paused", {"state": "paused", "plan": plan})
             break
 
-        # Find runnable tasks
         runnable = _get_runnable_tasks(tasks)
         if not runnable:
-            await asyncio.sleep(1)
+            await asyncio.sleep(EXECUTION_SLEEP_INTERVAL)
+            plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+            if not plan:
+                logger.warning(f"Plan disappeared during execution at iteration {iteration}")
+                return finalize_main_agent_metrics(main_agent_metrics)
             continue
 
-        # Mark runnable tasks as in_progress and notify
         for task_id in runnable:
             tasks[task_id]["status"] = "in_progress"
             tasks[task_id]["started_at"] = time.time()
             await _emit("task_started", {"task_id": task_id, "title": tasks[task_id].get("title", "")})
         await plan_store.update_plan(plan)
 
-        # Execute runnable tasks in parallel (streamer forwarded for live events)
-        # Extract variables from parsed_data for connected agent calls
         plan_variables = parsed_data.get("variables") or {}
         plan_variables_path = parsed_data.get("variables_path") or {}
         
-        coroutines = [
+        results = await asyncio.gather(*[
             _execute_single_task(
                 task_id, tasks[task_id],
                 org_id, bridge_id, thread_id, sub_thread_id,
@@ -1134,15 +1004,18 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
                 variables_path=plan_variables_path,
             )
             for task_id in runnable
-        ]
-        results = await asyncio.gather(*coroutines, return_exceptions=True)
+        ], return_exceptions=True)
 
-        # Process results
         plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+        if not plan:
+            logger.warning(f"Plan disappeared after task execution at iteration {iteration}")
+            return finalize_main_agent_metrics(main_agent_metrics)
         tasks = plan.get("tasks", {})
 
         for task_id, result in zip(runnable, results):
-            task = tasks[task_id]
+            task = tasks.get(task_id)
+            if not task:
+                continue
 
             if isinstance(result, Exception):
                 result = {"success": False, "status": "failed", "error": str(result)}
@@ -1157,23 +1030,33 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
                 await _emit("task_completed", {"task_id": task_id, "title": task.get("title", ""), "result": task["result"]})
 
             elif status == "waiting_for_user":
-                # Worker needs user help to proceed
                 human_query = result.get("human_query") or "The task needs additional information to proceed. Please provide guidance."
                 task["status"] = "waiting_for_user"
                 task["is_error"] = False
                 task["human_query"] = human_query
                 task["human_response"] = None
+                task["asked_at"] = time.time()
+                task["reasoning"] = result.get("reasoning")
+                task["partial_result"] = result.get("result")
+                
+                logger.info(f"Task {task_id} waiting for user input: {human_query[:100]}")
                 await _emit("task_waiting_for_user", {
                     "task_id": task_id,
                     "title": task.get("title", ""),
                     "human_query": human_query,
+                    "reasoning": result.get("reasoning"),
+                    "context": {
+                        "execution_details": task.get("execution_details"),
+                        "assigned_tool": task.get("assigned_tool"),
+                        "partial_result": result.get("result")
+                    }
                 })
 
             else:  # failed
                 task["retry"] = task.get("retry", 0) + 1
                 task["is_error"] = True
                 task["error"] = result.get("error")
-                max_retry = task.get("max_retry", 2)
+                max_retry = task.get("max_retry", DEFAULT_MAX_RETRY)
                 if task["retry"] < max_retry:
                     task["status"] = "pending"
                     logger.info(f"Task {task_id} failed, retry {task['retry']}/{max_retry}")
@@ -1204,8 +1087,8 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
     # Final state check
     plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
     if plan and plan["state"] == "executing":
-        if iteration >= max_iterations:
-            logger.error(f"Plan execution hit max iterations ({max_iterations}) - possible infinite loop")
+        if iteration >= MAX_EXECUTION_ITERATIONS:
+            logger.error(f"Plan execution hit max iterations ({MAX_EXECUTION_ITERATIONS}) - possible infinite loop")
             plan["state"] = "failed"
             await plan_store.update_plan(plan)
             await _emit("plan_failed", {"state": "failed", "reason": "max_iterations_reached", "plan": plan})
@@ -1223,6 +1106,7 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
 async def resume_task(org_id, bridge_id, thread_id, sub_thread_id, task_id, human_response):
     """
     Store human response and reset the task to pending.
+    Worker will receive the response in the next execution attempt.
     The caller is responsible for driving execute_plan so that execution
     events are streamed back to the client.
     """
@@ -1239,14 +1123,18 @@ async def resume_task(org_id, bridge_id, thread_id, sub_thread_id, task_id, huma
 
     task["human_response"] = human_response
     task["status"] = "pending"
+    task["responded_at"] = time.time()
+    task["retry"] = 0
+    
+    response_time = task.get("responded_at", 0) - task.get("asked_at", 0)
+    logger.info(f"Task {task_id} received user response (response time: {response_time:.2f}s)")
+    
     await plan_store.update_plan(plan)
 
-    # Save Q&A to session memory so planner doesn't ask again.
-    # Scoped per (thread_id, sub_thread_id) to match the plan's scope.
     question = task.get("human_query")
     if question:
         await plan_store.add_to_planner_session(
             org_id, bridge_id, thread_id, sub_thread_id, question, human_response
         )
 
-    return {"success": True, "plan": plan}
+    return {"success": True, "plan": plan, "task": task}

@@ -809,12 +809,45 @@ async def _save_plan_from_result(parsed_data, result):
             )
             return
 
-        new_tasks = plan_json.get("tasks", {}) or {}
+        # Check if this is a delta update (modified_tasks) or full plan (tasks)
+        is_delta_update = "modified_tasks" in plan_json and "tasks" not in plan_json
+        
         existing_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
         existing_tasks = (existing_plan or {}).get("tasks") or {}
+        
+        if is_delta_update:
+            # Delta update: merge modified tasks into existing plan
+            modified_tasks = plan_json.get("modified_tasks", {}) or {}
+            
+            if not modified_tasks:
+                logger.warning(
+                    f"Delta update returned 0 modified tasks for thread={thread_id}/sub={sub_thread_id}. "
+                    f"Keeping existing plan intact."
+                )
+                return
+            
+            logger.info(
+                f"Delta update: merging {len(modified_tasks)} modified task(s) into existing plan "
+                f"with {len(existing_tasks)} total tasks"
+            )
+            
+            # Merge modified tasks into existing tasks
+            new_tasks = dict(existing_tasks)
+            for task_id, modified_task in modified_tasks.items():
+                if task_id in new_tasks:
+                    # Update existing task with modified fields
+                    new_tasks[task_id].update(modified_task)
+                    logger.info(f"Updated task {task_id} via delta")
+                else:
+                    # New task added by planner
+                    new_tasks[task_id] = modified_task
+                    logger.info(f"Added new task {task_id} via delta")
+        else:
+            # Full plan update
+            new_tasks = plan_json.get("tasks", {}) or {}
 
         # Hard guard: do not wipe an existing non-empty plan with an empty one.
-        if not new_tasks and existing_tasks:
+        if not new_tasks and existing_tasks and not is_delta_update:
             logger.warning(
                 f"Planner returned 0 tasks but existing plan has {len(existing_tasks)} task(s) "
                 f"for thread={thread_id}/sub={sub_thread_id}. Keeping existing plan intact. "
@@ -823,7 +856,7 @@ async def _save_plan_from_result(parsed_data, result):
             return
 
         # Merge rules (safety net against LLM drift on replan):
-        if existing_plan:
+        if existing_plan and not is_delta_update:
             goal = existing_plan.get("goal") or plan_json.get("goal") or parsed_data.get("user", "")
             merged_tasks = dict(new_tasks)
             for tid, old_task in existing_tasks.items():
