@@ -510,6 +510,14 @@ async def run_review_loop(
             )
         except Exception as exc:
             logger.error(f"Reviewer call failed on round {round_num}: {exc}")
+            # Surface the failure to the SSE client so they don't see a silent
+            # truncation (e.g. provider 429s on the reviewer call). Wrap in
+            # try/except so a streaming-side failure can't shadow the original.
+            if streamer is not None:
+                try:
+                    await streamer.emit_error(f"Reviewer call failed on round {round_num}: {exc}")
+                except Exception as emit_exc:
+                    logger.error(f"emit_error(reviewer_failed) failed: {emit_exc}")
             # Abort the review loop on hard failure — keep the latest main response
             # so the user still gets an answer.
             break
@@ -579,6 +587,13 @@ async def run_review_loop(
             )
         except Exception as exc:
             logger.error(f"Main-agent re-run failed on round {round_num}: {exc}")
+            # Surface the failure on the SSE stream — same rationale as the
+            # reviewer-failure branch above.
+            if streamer is not None:
+                try:
+                    await streamer.emit_error(f"Main-agent re-run failed on round {round_num}: {exc}")
+                except Exception as emit_exc:
+                    logger.error(f"emit_error(rerun_failed) failed: {emit_exc}")
             # Keep the previous main response; abort further review rounds.
             break
 
