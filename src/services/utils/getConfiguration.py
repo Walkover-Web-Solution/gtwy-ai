@@ -247,7 +247,9 @@ async def _prepare_configuration_response(
         "chatbot_auto_answers": chatbot_auto_answers,
         "cache_on": cache_on,
         "richui_templates": result.get("bridges", {}).get("richui_templates"),
-        "reviewer_agent": result.get("bridges", {}).get("reviewer_agent") or "",
+        "reviewer_agent": str(
+            result.get("bridges", {}).get("settings", {}).get("reviewer_agent") or ""
+        ),
         "api_collection":apikey_src,
         "limit": {
             "bridge": {
@@ -349,7 +351,8 @@ async def _collect_connected_agent_configs(result, org_id, visited):
         nested = await _collect_connected_agent_configs(child_result, org_id, visited)
         aggregated_configs.update(nested)
 
-    reviewer_bridge_id = bridge_payload.get("reviewer_agent")
+    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("reviewer_agent")
+    reviewer_bridge_id = str(reviewer_bridge_id_raw) if reviewer_bridge_id_raw else ""
     if reviewer_bridge_id and reviewer_bridge_id not in visited:
         try:
             error, reviewer_config, reviewer_result, resolved_reviewer_id = await _prepare_configuration_response(
