@@ -52,6 +52,7 @@ from ..utils.helper import Helper
 from .baseService.utils import sendResponse
 from src.send_alert import send_alert
 from .response_caching_service import handle_response_caching
+from .reviewer_service import run_review_loop
 from workflow import execute_advanced_workflow
 from src.services.todo.todo_handler import handle_todo_mode
 from src.services.todo.planner_service import prepare_planner_request
@@ -154,7 +155,19 @@ async def chat(request_body):
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-        
+
+        # Reviewer agent: if this bridge has a configured reviewer, stash its
+        # bridge_id on parsed_data. The review loop runs after the main agent
+        # fully resolves — both the streaming finalizer and the non-streaming
+        # path invoke run_review_loop just before history publish. Streaming is
+        # preserved when requested; the reviewer's tokens flow onto the same
+        # SSE connection so the user sees the verdict in real time.
+        reviewer_bridge_id = (
+            bridge_configurations.get(parsed_data["bridge_id"], {}).get("reviewer_agent") or ""
+        )
+        if reviewer_bridge_id and reviewer_bridge_id in bridge_configurations:
+            parsed_data["_reviewer_bridge_id"] = reviewer_bridge_id
+
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
         
@@ -496,7 +509,38 @@ async def chat(request_body):
         # Add template data to historyParams chatbot_message if template was used and not playground
         if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
             result['historyParams']['chatbot_message'] = json.dumps(result['response']['data']['content'])
-        # Send data to playground
+
+        # Create latency object using utility function
+        latency = create_latency_object(timer, params)
+        # Update usage metrics for round 1 (and run the reviewer loop) BEFORE the
+        # playground/non-playground split so both paths see the final, reviewed
+        # response with summed tokens. Webhook / RTLayer / playground sendResponse
+        # destinations downstream get the *final* response, not the round-1 draft.
+        update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+        result.setdefault("response", {}).setdefault("usage", {})
+        result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
+
+        # Reviewer agent loop: if a reviewer is configured for this bridge,
+        # iterate up to MAX_REVIEW_ROUNDS (review → optional re-run → review).
+        # Tokens from all main-agent attempts are summed into parsed_data["usage"]
+        # so the main agent's conversation_log row reflects cumulative cost.
+        # The reviewer publishes its own conversation_log row from inside
+        # run_review_loop — independent of process_background_tasks below.
+        if parsed_data.get("_reviewer_bridge_id"):
+            result, _reviewer_summary = await run_review_loop(
+                parsed_data=parsed_data,
+                params=params,
+                timer=timer,
+                thread_info=thread_info,
+                bridge_configurations=bridge_configurations,
+                main_result=result,
+                memory=memory,
+            )
+            # Refresh client-visible cost field after summing rounds.
+            result.setdefault("response", {}).setdefault("usage", {})
+            result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
+
+        # Send data to playground (after review so playground sees final response)
         if parsed_data.get("is_playground") and parsed_data.get("body", {}).get("bridge_configurations", {}).get(
             "playground_response_format"
         ):
@@ -507,8 +551,6 @@ async def chat(request_body):
                 variables=parsed_data.get("variables", {}),
             )
 
-        # Create latency object using utility function
-        latency = create_latency_object(timer, params)
         if not parsed_data["is_playground"]:
             if result.get("response") and result["response"].get("data"):
                 result["response"]["data"]["message_id"] = parsed_data["message_id"]
@@ -518,9 +560,6 @@ async def chat(request_body):
                 success=True,
                 variables=parsed_data.get("variables", {}),
             )
-            # Update usage metrics for successful API calls
-            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
-            result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
 
             # Process background tasks (handles both transfer and non-transfer cases)
             await process_background_tasks(

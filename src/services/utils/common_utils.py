@@ -1669,10 +1669,32 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 metadata=template_data,
             )
 
+        # Update usage and run the reviewer loop BEFORE the playground/non-
+        # playground split so both paths see the final, reviewed response with
+        # summed tokens. Reviewer + any re-runs share the same SSE connection
+        # (class_obj.streamer); emit_done is owned by this finalizer below.
+        if not parsed_data["is_playground"] and result.get("response") and result["response"].get("data"):
+            result["response"]["data"]["message_id"] = parsed_data["message_id"]
+        update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+        result.setdefault("response", {}).setdefault("usage", {})
+        result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
+
+        if parsed_data.get("_reviewer_bridge_id"):
+            from src.services.commonServices.reviewer_service import run_review_loop
+            result, _reviewer_summary = await run_review_loop(
+                parsed_data=parsed_data,
+                params=params,
+                timer=timer,
+                thread_info=thread_info,
+                bridge_configurations=bridge_configurations,
+                main_result=result,
+                memory=params.get("memory"),
+                streamer=class_obj.streamer,
+            )
+            result.setdefault("response", {}).setdefault("usage", {})
+            result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
+
         if not parsed_data["is_playground"]:
-            if result.get("response") and result["response"].get("data"):
-                result["response"]["data"]["message_id"] = parsed_data["message_id"]
-            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
             await sendResponse(
                 parsed_data.get("response_format"),
                 result["response"],
