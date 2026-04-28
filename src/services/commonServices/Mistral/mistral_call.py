@@ -15,13 +15,11 @@ class Mistral(BaseService):
             openAIResponse = await self.image(self.customConfig, self.apikey, service_name["openai"])
             modelResponse = openAIResponse.get("modelResponse", {})
             if not openAIResponse.get("success"):
-                if not self.playground:
-                    await self.handle_failure(openAIResponse)
+                await self.handle_failure(openAIResponse)
                 raise ValueError(openAIResponse.get("error"))
-            if not self.playground:
-                historyParams = self.prepare_history_params(modelResponse, tools)
-                historyParams["message"] = "image generated successfully"
-                historyParams["type"] = "assistant"
+            historyParams = self.prepare_history_params(modelResponse, tools)
+            historyParams["message"] = "image generated successfully"
+            historyParams["type"] = "assistant"
         else:
             conversation = ConversationService.create_mistral_ai_conversation(
                 self.configuration.get("conversation"), self.memory
@@ -72,8 +70,7 @@ class Mistral(BaseService):
                 mistral_response = await self.chats(self.customConfig, self.apikey, service_name["mistral"])
             model_response = mistral_response.get("modelResponse", {})
             if not mistral_response.get("success"):
-                if not self.playground:
-                    await self.handle_failure(mistral_response)
+                await self.handle_failure(mistral_response)
                 raise ValueError(mistral_response.get("error"))
             tool_calls = model_response.get("choices", [])[0].get("message", {}).get("tool_calls", [])
             if len(tool_calls) > 0 if tool_calls is not None else False:
@@ -88,9 +85,8 @@ class Mistral(BaseService):
             response = await Response_formatter(
                 model_response, service_name["mistral"], tools, self.type, self.image_data
             )
-            if not self.playground:
-                transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
-                historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
+            transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
+            historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
         # Add transfer_agent_config to return if transfer was detected
         result = {
             "success": True,

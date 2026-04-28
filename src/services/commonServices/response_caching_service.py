@@ -15,7 +15,6 @@ def _is_cache_eligible(parsed_data: dict) -> bool:
         and parsed_data.get("chatbot_auto_answers", False)
         and parsed_data.get("configuration", {}).get("type") == "chat"
         and parsed_data.get("user")
-        and not parsed_data.get("is_playground", False)
     )
 
 

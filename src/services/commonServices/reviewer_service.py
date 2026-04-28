@@ -21,7 +21,6 @@ from copy import deepcopy
 from globals import logger
 from src.db_services.metrics_service import build_history_and_metrics_payload
 from src.services.cache_service import make_json_serializable
-from src.services.commonServices.baseService.utils import make_request_data_and_publish_sub_queue
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.utils.common_utils import (
     build_service_params,
@@ -159,44 +158,31 @@ def _add_tokens(accum, delta):
     accum["expected_cost"] += delta["expected_cost"] or 0.0
 
 
-async def _publish_reviewer_data(
-    reviewer_summary,
-    reviewer_parsed_data,
-    reviewer_params,
-    reviewer_result,
-):
+async def _publish_reviewer_history(reviewer_summary):
     """
-    Publish the reviewer agent's full queue payload.
+    Publish the reviewer's conversation_log row as its own queue message.
 
-    Mirrors the main agent's process_background_tasks publish path: builds the
-    same payload via make_request_data_and_publish_sub_queue (save_sub_thread_id_and_name,
-    metrics_service, validateResponse, total_token_calculation, etc.) and appends
-    save_history. The reviewer therefore gets its own sub_thread record, metrics,
-    and history saved on the Node side — same as the main agent.
-
-    Independent of the main agent's publish so a reviewer-side failure can't
-    block the main agent's history.
+    Independent of the main agent's process_background_tasks call so the reviewer
+    save can succeed/fail on its own and shows up as a distinct payload in queue
+    logs. Node-side `save_history` consumer handles a single-element list the same
+    way it handles batched ones — no Node changes needed.
     """
     if not reviewer_summary or not reviewer_summary.get("history_params"):
         return
     try:
-        data = await make_request_data_and_publish_sub_queue(
-            reviewer_parsed_data, reviewer_result, reviewer_params, thread_info=None
-        )
-        history_payload = build_history_and_metrics_payload(
+        payload = build_history_and_metrics_payload(
             reviewer_summary.get("dataset") or [],
             reviewer_summary["history_params"],
             reviewer_summary.get("version_id"),
         )
-        data["save_history"] = [history_payload]
-        message = make_json_serializable(data)
+        message = make_json_serializable({"save_history": [payload]})
         await sub_queue_obj.publish_message(message)
         logger.info(
-            f"Published reviewer payload for bridge {reviewer_summary.get('bridge_id')} "
+            f"Published reviewer history for bridge {reviewer_summary.get('bridge_id')} "
             f"(rounds={reviewer_summary.get('rounds')}, passed={reviewer_summary.get('passed')})"
         )
     except Exception as exc:
-        logger.error(f"Failed to publish reviewer payload: {exc}")
+        logger.error(f"Failed to publish reviewer history: {exc}")
 
 
 async def _call_reviewer(
@@ -615,16 +601,6 @@ async def run_review_loop(
     if last_reviewer_result is None or last_reviewer_parsed_data is None:
         return main_result, None
 
-    # The reviewer gets its own sub_thread namespace so its conversation_log row
-    # and metrics aren't co-mingled with the main agent's. Deterministic naming
-    # (reviewer_<main_sub_thread>) means follow-up turns within the same main
-    # sub_thread reuse one reviewer sub_thread.
-    main_sub_thread_id = parsed_data.get("sub_thread_id")
-    reviewer_sub_thread_id = (
-        f"reviewer_{main_sub_thread_id}" if main_sub_thread_id else str(uuid.uuid4())
-    )
-    last_reviewer_parsed_data["sub_thread_id"] = reviewer_sub_thread_id
-
     # Pin the reviewer's history shape so process_background_tasks can build a
     # standalone conversation_log row from it.
     reviewer_history_params = last_reviewer_result.get("historyParams") or {}
@@ -632,7 +608,7 @@ async def run_review_loop(
     reviewer_history_params["parent_id"] = parsed_data.get("bridge_id")
     reviewer_history_params["child_id"] = None
     reviewer_history_params["thread_id"] = parsed_data.get("thread_id")
-    reviewer_history_params["sub_thread_id"] = reviewer_sub_thread_id
+    reviewer_history_params["sub_thread_id"] = parsed_data.get("sub_thread_id")
     reviewer_history_params["org_id"] = parsed_data.get("org_id")
     reviewer_history_params["user"] = original_user_query
 
@@ -667,16 +643,9 @@ async def run_review_loop(
         "bridge_id": reviewer_bridge_id,
     }
 
-    # Publish the reviewer's full payload as its own queue message (separate from
-    # the main agent's process_background_tasks publish). Mirrors the main
-    # agent's publish shape so the reviewer's sub_thread, metrics, validation,
-    # and history are saved alongside save_history. Decouples the two saves so
-    # a reviewer-side failure can't block the main agent's history.
-    await _publish_reviewer_data(
-        reviewer_summary,
-        last_reviewer_parsed_data,
-        last_reviewer_params,
-        last_reviewer_result,
-    )
+    # Publish the reviewer's row as its own queue message (separate from the main
+    # agent's process_background_tasks publish). Decouples the two saves so a
+    # reviewer-side failure can't block the main agent's history.
+    await _publish_reviewer_history(reviewer_summary)
 
     return main_result, reviewer_summary

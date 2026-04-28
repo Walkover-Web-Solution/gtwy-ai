@@ -27,8 +27,7 @@ class Groq(BaseService):
         model_response = groq_response.get("modelResponse", {})
 
         if not groq_response.get("success"):
-            if not self.playground:
-                await self.handle_failure(groq_response)
+            await self.handle_failure(groq_response)
             raise ValueError(groq_response.get("error"))
 
         if len(model_response.get("choices", [])[0].get("message", {}).get("tool_calls", [])) > 0:
@@ -42,9 +41,8 @@ class Groq(BaseService):
             tools = functionCallRes.get("tools", {})
 
         response = await Response_formatter(model_response, service_name["groq"], tools, self.type, self.image_data)
-        if not self.playground:
-            transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
-            historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
+        transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
+        historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
 
         # Add transfer_agent_config to return if transfer was detected
         result = {

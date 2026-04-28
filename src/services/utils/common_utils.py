@@ -169,7 +169,6 @@ def parse_request_body(request_body):
         "plans": body.get("plans"),
         "model": body.get("configuration", {}).get("model"),
         "auto_model_select": body.get("auto_model_select", False),
-        "is_playground": state.get("is_playground") or body.get("is_playground") or False,
         "bridge": body.get("bridge"),
         "pre_tools": body.get("pre_tools"),
         "version": state.get("version"),
@@ -622,7 +621,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             custom_config["response_type"] = {"type": "json_object"}
 
-        if not parsed_data["is_playground"] and bridge_type is None and model_config.get("response_type"):
+        if bridge_type is None and model_config.get("response_type"):
             res = parsed_data["body"].get("response_type") or parsed_data["body"].get("configuration", {}).get(
                 "response_type", {"type": "json_object"}
             )
@@ -672,7 +671,6 @@ def build_service_params(
         "model": parsed_data["model"],
         "service": parsed_data["service"],
         "modelOutputConfig": model_output_config,
-        "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data.get("response_format") or {},
         "execution_time_logs": parsed_data.get("execution_time_logs", []),
@@ -1099,7 +1097,6 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "model": parsed_data["model"],
         "service": parsed_data["service"],
         "modelOutputConfig": model_output_config,
-        "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data["response_format"],
         "execution_time_logs": [],

@@ -15,16 +15,14 @@ class OpenaiCompletion(BaseService):
             gemini_response = await self.image(self.customConfig, self.apikey, service_name["openai_completion"])
             model_response = gemini_response.get("modelResponse", {})
             if not gemini_response.get("success"):
-                if not self.playground:
-                    await self.handle_failure(gemini_response)
+                await self.handle_failure(gemini_response)
                 raise ValueError(gemini_response.get("error"))
             response = await Response_formatter(
                 model_response, service_name["openai_completion"], tools, self.type, self.image_data
             )
-            if not self.playground:
-                historyParams = self.prepare_history_params(response, model_response, tools, None)
-                historyParams["message"] = "image generated successfully"
-                historyParams["type"] = "assistant"
+            historyParams = self.prepare_history_params(response, model_response, tools, None)
+            historyParams["message"] = "image generated successfully"
+            historyParams["type"] = "assistant"
         else:
             conversation = ConversationService.createOpenaiCompletionConversation(
                 self.configuration.get("conversation"), self.memory
@@ -57,8 +55,7 @@ class OpenaiCompletion(BaseService):
             gemini_response = await self.chats(self.customConfig, self.apikey, service_name["openai_completion"])
             model_response = gemini_response.get("modelResponse", {})
             if not gemini_response.get("success"):
-                if not self.playground:
-                    await self.handle_failure(gemini_response)
+                await self.handle_failure(gemini_response)
                 raise ValueError(gemini_response.get("error"))
             if len(model_response.get("choices", [])[0].get("message", {}).get("tool_calls", [])) > 0:
                 functionCallRes = await self.function_call(
@@ -72,9 +69,8 @@ class OpenaiCompletion(BaseService):
             response = await Response_formatter(
                 model_response, service_name["openai_completion"], tools, self.type, self.image_data
             )
-            if not self.playground:
-                transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
-                historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
+            transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
+            historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
         # Add transfer_agent_config to return if transfer was detected
         result = {
             "success": True,

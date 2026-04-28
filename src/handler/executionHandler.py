@@ -21,9 +21,6 @@ def handle_exceptions(func):
             exc_type, exc_obj, exc_tb = sys.exc_info()
             path_params = request_body.get("path_params", {})
             state = request_body.get("state", {})
-            state.get("is_playground")
-
-            # Extract error location details
             tb = traceback.extract_tb(exc_tb)
             last_frame = tb[-1] if tb else None
             (f"{last_frame.filename.split('/')[-1]}:{last_frame.lineno}" if last_frame else "unknown location")
