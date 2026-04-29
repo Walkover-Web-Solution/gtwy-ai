@@ -1112,8 +1112,11 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             await asyncio.sleep(1)
             continue
 
+        logger.info(f"[EXECUTE] Runnable tasks: {runnable}")
         # Mark runnable tasks as in_progress and notify
         for task_id in runnable:
+            task = tasks[task_id]
+            logger.info(f"[EXECUTE] Starting task {task_id}, has human_response: {bool(task.get('human_response'))}")
             tasks[task_id]["status"] = "in_progress"
             tasks[task_id]["started_at"] = time.time()
             await _emit("task_started", {"task_id": task_id, "title": tasks[task_id].get("title", "")})
@@ -1237,9 +1240,12 @@ async def resume_task(org_id, bridge_id, thread_id, sub_thread_id, task_id, huma
     if task["status"] != "waiting_for_user":
         return {"success": False, "error": f"Task {task_id} is not waiting for user input (status: {task['status']})"}
 
+    logger.info(f"[RESPOND] Updating task {task_id}: status waiting_for_user -> pending, human_response set")
     task["human_response"] = human_response
     task["status"] = "pending"
+    task["retry"] = 0  # Reset retry counter
     await plan_store.update_plan(plan)
+    logger.info(f"[RESPOND] Task {task_id} updated and saved to DB")
 
     # Save Q&A to session memory so planner doesn't ask again.
     # Scoped per (thread_id, sub_thread_id) to match the plan's scope.
