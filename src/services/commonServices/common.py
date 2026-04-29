@@ -568,6 +568,9 @@ async def chat(request_body):
         if not parsed_data["is_playground"]:
             if result.get("response") and result["response"].get("data"):
                 result["response"]["data"]["message_id"] = parsed_data["message_id"]
+            post_tool_response = await handle_post_tool(parsed_data, result)
+            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                result["response"]["data"]["content"] = post_tool_response.get("response")
             await sendResponse(
                 parsed_data["response_format"],
                 result["response"],
@@ -579,9 +582,6 @@ async def chat(request_body):
             await process_background_tasks(
                 parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
             )
-            post_tool_response = await handle_post_tool(parsed_data, result)
-            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
-                result["response"]["data"]["content"] = post_tool_response.get("response")
         else:
             if parsed_data.get("testcase_data", {}).get("run_testcase", False):
                 from src.services.commonServices.testcases import process_single_testcase_result
