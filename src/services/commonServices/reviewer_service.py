@@ -180,20 +180,53 @@ async def _publish_reviewer_data(
     if not reviewer_summary or not reviewer_summary.get("history_params"):
         return
     try:
-        data = await make_request_data_and_publish_sub_queue(
-            reviewer_parsed_data, reviewer_result, reviewer_params, thread_info=None
-        )
         history_payload = build_history_and_metrics_payload(
             reviewer_summary.get("dataset") or [],
             reviewer_summary["history_params"],
             reviewer_summary.get("version_id"),
+        )
+
+        # Hard-error path (reviewer call never completed): we don't have the
+        # parsed_data/result/params needed for the full payload builder. Build
+        # a minimal payload covering the two persistence concerns: the failed
+        # conversation_log row AND the reviewer's sub_thread record (so the
+        # row has a sub_thread to live under).
+        if (
+            reviewer_parsed_data is None
+            or reviewer_result is None
+            or reviewer_params is None
+        ):
+            history_params = reviewer_summary.get("history_params") or {}
+            error_payload = {
+                "save_history": [history_payload],
+                "save_sub_thread_id_and_name": {
+                    "org_id": history_params.get("org_id"),
+                    "thread_id": history_params.get("thread_id"),
+                    "sub_thread_id": history_params.get("sub_thread_id"),
+                    "thread_flag": None,
+                    "response_format": {"type": "default"},
+                    "bridge_id": reviewer_summary.get("bridge_id"),
+                    "user": history_params.get("user"),
+                },
+            }
+            message = make_json_serializable(error_payload)
+            await sub_queue_obj.publish_message(message)
+            logger.info(
+                f"Published reviewer error history for bridge {reviewer_summary.get('bridge_id')} "
+                f"(error={reviewer_summary.get('error')!r}, sub_thread_id={history_params.get('sub_thread_id')!r})"
+            )
+            return
+
+        data = await make_request_data_and_publish_sub_queue(
+            reviewer_parsed_data, reviewer_result, reviewer_params, thread_info=None
         )
         data["save_history"] = [history_payload]
         message = make_json_serializable(data)
         await sub_queue_obj.publish_message(message)
         logger.info(
             f"Published reviewer payload for bridge {reviewer_summary.get('bridge_id')} "
-            f"(rounds={reviewer_summary.get('rounds')}, passed={reviewer_summary.get('passed')})"
+            f"(rounds={reviewer_summary.get('rounds')}, passed={reviewer_summary.get('passed')}, "
+            f"error={reviewer_summary.get('error')!r})"
         )
     except Exception as exc:
         logger.error(f"Failed to publish reviewer payload: {exc}")
@@ -344,7 +377,19 @@ async def _call_reviewer(
         result["response"]["usage"]["cost"] = reviewer_parsed_data["tokens"].get("total_cost") or 0
 
     latency = create_latency_object(timer, params)
-    update_usage_metrics(reviewer_parsed_data, params, latency, result=result, success=True)
+    # Honor the actual success flag from execute() — passing success=True
+    # unconditionally would mask soft failures and skip the error field on the
+    # dataset row, leaving us with a saved reviewer log that has no error.
+    reviewer_success = bool(result.get("success", True))
+    reviewer_error = result.get("error") if not reviewer_success else None
+    update_usage_metrics(
+        reviewer_parsed_data,
+        params,
+        latency,
+        result=result if reviewer_success else None,
+        error=reviewer_error,
+        success=reviewer_success,
+    )
 
     tokens = _read_usage_tokens(reviewer_parsed_data["usage"])
     return result, reviewer_parsed_data, tokens, latency, params
@@ -478,6 +523,7 @@ async def run_review_loop(
     last_reviewer_latency = None
     last_reviewer_params = None
     last_verdict = {"passed": False, "reason": ""}
+    last_reviewer_error = None  # captured on hard exception OR soft success=False
     rounds_run = 0
 
     for round_num in range(1, MAX_REVIEW_ROUNDS + 1):
@@ -510,6 +556,9 @@ async def run_review_loop(
             )
         except Exception as exc:
             logger.error(f"Reviewer call failed on round {round_num}: {exc}")
+            # Capture the error so a reviewer conversation_log row gets saved
+            # below with status=false and the error string in `error`.
+            last_reviewer_error = str(exc)
             # Surface the failure to the SSE client so they don't see a silent
             # truncation (e.g. provider 429s on the reviewer call). Wrap in
             # try/except so a streaming-side failure can't shadow the original.
@@ -527,6 +576,21 @@ async def run_review_loop(
         last_reviewer_parsed_data = reviewer_parsed_data
         last_reviewer_latency = round_latency
         last_reviewer_params = round_params
+
+        # Soft failure: execute() returned success=False (provider error,
+        # apikey limit, etc). Capture the error and stop the loop so we save
+        # the reviewer's failed row instead of looping into re-runs based on a
+        # bogus parsed verdict.
+        if not reviewer_result.get("success", True):
+            last_reviewer_error = (
+                reviewer_result.get("error")
+                or reviewer_result.get("response", {}).get("error")
+                or "<reviewer call returned success=false>"
+            )
+            logger.error(
+                f"Reviewer round {round_num} returned soft failure: {last_reviewer_error}"
+            )
+            break
 
         verdict = parse_reviewer_json(_extract_response_text(reviewer_result))
         last_verdict = verdict
@@ -627,7 +691,10 @@ async def run_review_loop(
         history_params["AiConfig"] = ai_config
     main_result["historyParams"] = history_params
 
-    if last_reviewer_result is None or last_reviewer_parsed_data is None:
+    # If we have neither a successful reviewer call NOR an error to report, no
+    # reviewer row is needed (e.g. reviewer_bridge_id was set but the loop
+    # bailed out before the very first call ever ran).
+    if last_reviewer_result is None and last_reviewer_parsed_data is None and not last_reviewer_error:
         return main_result, None
 
     # The reviewer gets its own sub_thread namespace so its conversation_log row
@@ -638,47 +705,105 @@ async def run_review_loop(
     reviewer_sub_thread_id = (
         f"reviewer_{main_sub_thread_id}" if main_sub_thread_id else str(uuid.uuid4())
     )
-    last_reviewer_parsed_data["sub_thread_id"] = reviewer_sub_thread_id
+
+    reviewer_cfg = bridge_configurations.get(reviewer_bridge_id, {}) or {}
 
     # Pin the reviewer's history shape so process_background_tasks can build a
-    # standalone conversation_log row from it.
-    reviewer_history_params = last_reviewer_result.get("historyParams") or {}
-    reviewer_history_params = dict(reviewer_history_params)
+    # standalone conversation_log row from it. On hard error (no reviewer call
+    # ever returned) we synthesize a minimal historyParams from the reviewer's
+    # bridge config so the saved row still has model/service/AiConfig/prompt.
+    if last_reviewer_result is not None:
+        reviewer_history_params = dict(last_reviewer_result.get("historyParams") or {})
+    else:
+        reviewer_cfg_configuration = reviewer_cfg.get("configuration") or {}
+        reviewer_history_params = {
+            "thread_id": parsed_data.get("thread_id"),
+            "sub_thread_id": reviewer_sub_thread_id,
+            "user": original_user_query,
+            "message": "",
+            "model": reviewer_cfg_configuration.get("model", ""),
+            "service": reviewer_cfg.get("service", ""),
+            "bridge_id": reviewer_bridge_id,
+            "AiConfig": reviewer_cfg_configuration,
+            "prompt": reviewer_cfg_configuration.get("prompt", ""),
+            "channel": "chat",
+            "type": "assistant",
+            "actor": "user",
+            "tools": {},
+            "chatbot_message": "",
+            "tools_call_data": [],
+            "message_id": str(uuid.uuid4()),
+        }
+
+    if last_reviewer_parsed_data is not None:
+        last_reviewer_parsed_data["sub_thread_id"] = reviewer_sub_thread_id
+
     reviewer_history_params["parent_id"] = parsed_data.get("bridge_id")
     reviewer_history_params["child_id"] = None
     reviewer_history_params["thread_id"] = parsed_data.get("thread_id")
     reviewer_history_params["sub_thread_id"] = reviewer_sub_thread_id
     reviewer_history_params["org_id"] = parsed_data.get("org_id")
     reviewer_history_params["user"] = original_user_query
+    if last_reviewer_error:
+        # build_history_and_metrics_payload reads `history_params.error` only
+        # when dataset[0].success is True. We mirror it here so the field is
+        # present regardless of which branch the consumer hits.
+        reviewer_history_params["error"] = last_reviewer_error
 
     reviewer_ai_config = reviewer_history_params.get("AiConfig") or {}
     if isinstance(reviewer_ai_config, dict):
         reviewer_ai_config = dict(reviewer_ai_config)
-        reviewer_ai_config["review_meta"] = {
+        review_meta = {
             "rounds": rounds_run,
             "passed": bool(last_verdict.get("passed")),
             "target_main_message_id": parsed_data.get("message_id"),
         }
+        if last_reviewer_error:
+            review_meta["error"] = last_reviewer_error
+        reviewer_ai_config["review_meta"] = review_meta
         reviewer_history_params["AiConfig"] = reviewer_ai_config
 
-    reviewer_dataset_entry = dict(last_reviewer_parsed_data["usage"])
-    # Overwrite the per-round token fields with the summed totals across all
-    # reviewer rounds, so the saved row reflects total reviewer cost.
+    # Build the dataset entry. Either start from the reviewer's tracked usage
+    # (if at least one call landed) or synthesize a minimal one. Either way,
+    # final tokens are the summed totals across all rounds.
+    if last_reviewer_parsed_data is not None:
+        reviewer_dataset_entry = dict(last_reviewer_parsed_data.get("usage") or {})
+    else:
+        reviewer_dataset_entry = {
+            "orgId": parsed_data.get("org_id"),
+            "service": reviewer_history_params.get("service", ""),
+            "model": reviewer_history_params.get("model", ""),
+            "apikey_object_id": reviewer_cfg.get("apikey_object_id"),
+            "variables": {},
+            "latency": "{}",
+        }
+
     reviewer_dataset_entry["inputTokens"] = reviewer_tokens_accum["input"]
     reviewer_dataset_entry["outputTokens"] = reviewer_tokens_accum["output"]
     reviewer_dataset_entry["total_tokens"] = reviewer_tokens_accum["total"]
     reviewer_dataset_entry["expectedCost"] = reviewer_tokens_accum["expected_cost"]
 
+    if last_reviewer_error:
+        # Critical: dataset[0].success=False + dataset[0].error=<msg> is what
+        # build_history_and_metrics_payload uses to populate the row's `error`
+        # column and `status` flag. Without this the saved row would mask the
+        # failure as a successful reviewer pass.
+        reviewer_dataset_entry["success"] = False
+        reviewer_dataset_entry["error"] = last_reviewer_error
+
     reviewer_summary = {
         "rounds": rounds_run,
         "passed": bool(last_verdict.get("passed")),
         "final_reason": last_verdict.get("reason", ""),
+        "error": last_reviewer_error,
         "tokens": reviewer_tokens_accum,
         "latency": last_reviewer_latency or {},
         "history_params": reviewer_history_params,
         "dataset": [reviewer_dataset_entry],
-        "version_id": last_reviewer_parsed_data.get("version_id")
-            or bridge_configurations.get(reviewer_bridge_id, {}).get("version_id"),
+        "version_id": (
+            (last_reviewer_parsed_data.get("version_id") if last_reviewer_parsed_data else None)
+            or reviewer_cfg.get("version_id")
+        ),
         "bridge_id": reviewer_bridge_id,
     }
 
