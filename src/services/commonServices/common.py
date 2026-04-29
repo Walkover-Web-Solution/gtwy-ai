@@ -38,8 +38,7 @@ from src.services.utils.common_utils import (
     process_variable_state,
     restructure_json_schema,
     validate_json_schema_configuration,
-    setup_agent_post_tool,
-    setup_agent_pre_tools,
+    setup_agent_tools,
     update_usage_metrics,
     process_batch_background_tasks,
     update_cost_usage_and_apikey_status_in_background,
@@ -161,8 +160,8 @@ async def chat(request_body):
         original_service = parsed_data["service"]
         
         # Setup pre_tools for the current agent with its own variables
-        setup_agent_pre_tools(parsed_data, bridge_configurations)
-        setup_agent_post_tool(parsed_data, bridge_configurations)
+        setup_agent_tools(parsed_data, bridge_configurations, tool_phase="pre")
+        setup_agent_tools(parsed_data, bridge_configurations, tool_phase="post")
         await apply_prompt_wrapper(parsed_data)
 
         # Initialize or retrieve transfer_request_id for tracking transfers

@@ -38,91 +38,68 @@ from src.services.utils.rich_text_support import process_chatbot_response
 from src.db_services.orchestrator_history_service import orchestrator_collector
 from src.services.utils.api_key_status_helper import mark_apikey_status_from_response
 
-def setup_agent_pre_tools(parsed_data, bridge_configurations):
+def setup_agent_tools(parsed_data, bridge_configurations, tool_phase="pre"):
     """
-    Setup pre_tools for the current agent with its own variables.
-    Populates resolved args for each pre-tool from agent variables.
+    Setup pre or post tools for the current agent with its own variables.
+    tool_phase="pre"  → resolves pre_tools_data list → parsed_data["pre_tools"]
+    tool_phase="post" → resolves single post_tool_data → parsed_data["post_tool_data"]
     """
     current_bridge_id = parsed_data.get("bridge_id")
     if not current_bridge_id or not bridge_configurations:
         return
 
     current_config = bridge_configurations.get(current_bridge_id, {})
-    pre_tools_list = current_config.get("pre_tools_data") or []
     agent_variables = parsed_data.get("variables", {})
-    if not pre_tools_list:
-        return
-    resolved_pre_tools = []
-    for pre_tool in pre_tools_list:
-        tool_type = pre_tool.get("_type")
-        tool_config = pre_tool.get("config", {})
-        tool_args_mapping = pre_tool.get("args", {})  # param -> agent_variable_name
-        resolved_args = dict(tool_config)
 
+    def resolve_args(tool_config, tool_args_mapping, is_custom=False):
+        resolved = dict(tool_config)
         for param, var_name in tool_args_mapping.items():
             if var_name in agent_variables:
-                resolved_args[param] = agent_variables[var_name]
-            elif tool_type != "custom_function":
-                resolved_args[param] = var_name
-        if tool_type == "custom_function":
-            function_data = pre_tool.get("function_data", {})
-            required_params = tool_config.get("required_params", [])
-            for param in required_params:
-                if param not in resolved_args:
-                    if param in agent_variables:
-                        resolved_args[param] = agent_variables[param]
-            resolved_pre_tools.append({
-                "type": "custom_function",
-                "name":  tool_config.get("script_id"),
-                "args": resolved_args,
-            })
-        else:
-            resolved_pre_tools.append({
-                "type": tool_type,
-                "args": resolved_args,
-                "config": tool_config,
-                
-                
-            })
+                resolved[param] = agent_variables[var_name]
+            elif not is_custom:
+                resolved[param] = var_name
+        for param in tool_config.get("required_params", []):
+            if param not in resolved and param in agent_variables:
+                resolved[param] = agent_variables[param]
+        return resolved
 
-    parsed_data["pre_tools"] = resolved_pre_tools
+    if tool_phase == "pre":
+        pre_tools_list = current_config.get("pre_tools_data") or []
+        if not pre_tools_list:
+            return
+        resolved_pre_tools = []
+        for pre_tool in pre_tools_list:
+            tool_type = pre_tool.get("_type")
+            tool_config = pre_tool.get("config", {})
+            tool_args_mapping = pre_tool.get("args", {})
+            is_custom = tool_type == "custom_function"
+            resolved_args = resolve_args(tool_config, tool_args_mapping, is_custom)
+            if is_custom:
+                resolved_pre_tools.append({
+                    "type": "custom_function",
+                    "name": tool_config.get("script_id"),
+                    "args": resolved_args,
+                })
+            else:
+                resolved_pre_tools.append({
+                    "type": tool_type,
+                    "args": resolved_args,
+                    "config": tool_config,
+                })
+        parsed_data["pre_tools"] = resolved_pre_tools
 
-def setup_agent_post_tool(parsed_data, bridge_configurations):
-    """
-    Setup post_tool for the current agent with its own variables.
-    Resolves args from agent variables and sets parsed_data["post_tool_data"].
-    """
-    current_bridge_id = parsed_data.get("bridge_id")
-    if not current_bridge_id or not bridge_configurations:
-        return
-
-    current_config = bridge_configurations.get(current_bridge_id, {})
-    post_tool_data = current_config.get("post_tool_data")
-    if not post_tool_data:
-        return
-
-    tool_config = post_tool_data.get("config", {})
-    tool_args_mapping = post_tool_data.get("args", {})
-    agent_variables = parsed_data.get("variables", {})
-
-    resolved_args = dict(tool_config)
-    required_params = tool_config.get("required_params", [])
-
-    for param, var_name in tool_args_mapping.items():
-        if var_name in agent_variables:
-            resolved_args[param] = agent_variables[var_name]
-        else:
-            resolved_args[param] = var_name
-
-    for param in required_params:
-        if param not in resolved_args and param in agent_variables:
-            resolved_args[param] = agent_variables[param]
-
-    parsed_data["post_tool_data"] = {
-        **post_tool_data,
-        "args": resolved_args,
-        "config": tool_config,
-    }
+    elif tool_phase == "post":
+        post_tool_data = current_config.get("post_tool_data")
+        if not post_tool_data:
+            return
+        tool_config = post_tool_data.get("config", {})
+        tool_args_mapping = post_tool_data.get("args", {})
+        resolved_args = resolve_args(tool_config, tool_args_mapping)
+        parsed_data["post_tool_data"] = {
+            **post_tool_data,
+            "args": resolved_args,
+            "config": tool_config,
+        }
 
 async def handle_agent_transfer(
     result, request_body, bridge_configurations, chat_function, current_bridge_id=None, transfer_request_id=None
