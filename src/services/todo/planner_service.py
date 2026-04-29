@@ -201,8 +201,5 @@ async def prepare_planner_request(parsed_data, bridge_configurations, custom_con
             user_goal=user_input,
             user_system_prompt=original_prompt,
         )
-    else:
-        # First-time plan creation: just the user goal
-        parsed_data["user"] = _build_planner_message(user_goal=user_input)
 
 
