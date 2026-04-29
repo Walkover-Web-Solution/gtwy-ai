@@ -20,6 +20,7 @@ from src.services.cache_service import find_in_cache, store_in_cache, make_json_
 from src.configs.constant import bridge_ids, redis_keys, alert_types
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
+from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
 from src.send_alert import send_alert
 from src.services.utils.apiservice import fetch
@@ -712,13 +713,12 @@ async def _publish_history_to_queue(dataset, history_params, version_id, thread_
     """Build history/metrics payload and publish it to the log queue for Node.js to save."""
     try:
         payload = build_history_and_metrics_payload(dataset, history_params, version_id)
-        message = make_json_serializable({"save_history": [payload]})
-        await sub_queue_obj.publish_message(message)
-
-        asyncio.create_task(_send_history_to_rt_layer(history_params))
-
+        metrics_data = payload["metrics_data"]
+        history_data = payload["conversation_log_data"]
+        await sub_queue_obj.publish_message(make_json_serializable({"save_history": [history_data]}))
+        await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_data}))
     except Exception as err:
-        logger.error(f"Error publishing history to queue: {str(err)}")
+        logger.error(f"Error publishing history/metrics to queue: {str(err)}")
 
 
 async def _send_history_to_rt_layer(history_entry):
@@ -899,6 +899,7 @@ async def process_background_tasks(
     )
 
     history_entries = []
+    metrics_entries = []
     orchestrator_history_data = None
 
     if is_transfer_chain:
@@ -946,7 +947,8 @@ async def process_background_tasks(
                     history_entry["history_params"],
                     history_entry["version_id"],
                 )
-                history_entries.append(payload)
+                metrics_entries.extend(payload["metrics_data"])
+                history_entries.append(payload["conversation_log_data"])
 
                 asyncio.create_task(
                     _update_history_redis(
@@ -969,7 +971,8 @@ async def process_background_tasks(
             parsed_data["version_id"],
         )
 
-        history_entries.append(payload)
+        metrics_entries.extend(payload["metrics_data"])
+        history_entries.append(payload["conversation_log_data"])
 
         asyncio.create_task(
             _update_history_redis(
@@ -996,6 +999,7 @@ async def process_background_tasks(
     data = make_json_serializable(data)
     await sub_queue_obj.publish_message(data)
 
+    await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_entries}))
 
 async def process_background_tasks_for_error(parsed_data, error):
     # Primary-agent sub-tasks inside plan mode skip per-call history.

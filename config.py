@@ -51,6 +51,7 @@ class Config:
     CHATBOT_ACCESS_KEY = os.getenv("Chatbot_Access_key")
     PUBLIC_CHATBOT_TOKEN = os.getenv("public_chatbot_token")
     LOG_QUEUE_NAME = os.getenv("LOG_QUEUE_NAME")
+    METRICS_QUEUE_NAME = os.getenv("METRICS_QUEUE_NAME")
     DOCSTAR_ACCESS_KEY = os.getenv("DOCSTAR_ACCESS_KEY")
     DOCSTAR_ORG_ID = os.getenv("DOCSTAR_ORG_ID")
     DOCSTAR_COLLECTION_ID = os.getenv("DOCSTAR_COLLECTION_ID")

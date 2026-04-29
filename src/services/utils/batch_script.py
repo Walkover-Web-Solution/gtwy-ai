@@ -6,7 +6,8 @@ from src.configs.constant import redis_keys
 from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_prefix, make_json_serializable, release_lock
 from ..commonServices.baseService.baseService import sendResponse
 from ..commonServices.queueService.queueLogService import sub_queue_obj
-from src.utils.alert_template import create_response_format
+from ..commonServices.queueService.queueMetricsService import metrics_queue_obj
+from ..utils.send_error_webhook import create_response_format
 from .ai_middleware_format import process_batch_results
 from .batch_script_utils import get_batch_result_handler, is_finalized_batch_item
 from .helper import Helper
@@ -204,18 +205,20 @@ async def check_batch_status():
                                         'service': service
                                     })
 
-                            # Publish batch updates and metrics to queue for Node.js to save
-                            if batch_updates or metrics_data:
-                                queue_message = {}
-                                if batch_updates:
-                                    queue_message['update_batch_history'] = batch_updates
-                                if metrics_data:
-                                    queue_message['save_batch_metrics'] = metrics_data
+                            # Publish batch updates to log queue, metrics to metrics queue
+                            if batch_updates:
                                 try:
-                                    await sub_queue_obj.publish_message(make_json_serializable(queue_message))
-                                    logger.info(f"Published {len(batch_updates)} updates and {len(metrics_data)} metrics for batch {batch_id} to queue")
+                                    await sub_queue_obj.publish_message(make_json_serializable({"update_batch_history": batch_updates}))
+                                    logger.info(f"Published {len(batch_updates)} updates for batch {batch_id} to queue")
                                 except Exception as queue_error:
-                                    logger.error(f"Error publishing batch results to queue for batch {batch_id}: {str(queue_error)}")
+                                    logger.error(f"Error publishing batch updates to queue for batch {batch_id}: {str(queue_error)}")
+
+                            if metrics_data:
+                                try:
+                                    await metrics_queue_obj.publish_message(make_json_serializable({"save_batch_metrics": metrics_data}))
+                                    logger.info(f"Published {len(metrics_data)} metrics for batch {batch_id} to metrics queue")
+                                except Exception as queue_error:
+                                    logger.error(f"Error publishing batch metrics to metrics queue for batch {batch_id}: {str(queue_error)}")
                             
                             await delete_in_cache(cache_key)
                             logger.info(f"Batch {batch_id} completed and removed from cache")
