@@ -38,17 +38,10 @@ from src.services.utils.rich_text_support import process_chatbot_response
 from src.db_services.orchestrator_history_service import orchestrator_collector
 from src.services.utils.api_key_status_helper import mark_apikey_status_from_response
 
-def setup_agent_tools(parsed_data, bridge_configurations, tool_phase="pre"):
-    """
-    Setup pre or post tools for the current agent with its own variables.
-    tool_phase="pre"  → resolves pre_tools_data list → parsed_data["pre_tools"]
-    tool_phase="post" → resolves single post_tool_data → parsed_data["post_tool_data"]
-    """
+def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
     current_bridge_id = parsed_data.get("bridge_id")
-    if not current_bridge_id or not bridge_configurations:
+    if not current_bridge_id or not bridge_configurations or not tool_data:
         return
-
-    current_config = bridge_configurations.get(current_bridge_id, {})
     agent_variables = parsed_data.get("variables", {})
 
     def resolve_args(tool_config, tool_args_mapping, is_custom=False):
@@ -63,44 +56,38 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_phase="pre"):
                 resolved[param] = agent_variables[param]
         return resolved
 
-    if tool_phase == "pre":
-        pre_tools_list = current_config.get("pre_tools_data") or []
-        if not pre_tools_list:
-            return
-        resolved_pre_tools = []
-        for pre_tool in pre_tools_list:
-            tool_type = pre_tool.get("_type")
-            tool_config = pre_tool.get("config", {})
-            tool_args_mapping = pre_tool.get("args", {})
-            is_custom = tool_type == "custom_function"
-            resolved_args = resolve_args(tool_config, tool_args_mapping, is_custom)
-            if is_custom:
-                resolved_pre_tools.append({
-                    "type": "custom_function",
-                    "name": tool_config.get("script_id"),
-                    "args": resolved_args,
-                })
-            else:
-                resolved_pre_tools.append({
-                    "type": tool_type,
-                    "args": resolved_args,
-                    "config": tool_config,
-                })
-        parsed_data["pre_tools"] = resolved_pre_tools
-
-    elif tool_phase == "post":
-        post_tool_data = current_config.get("post_tool_data")
-        if not post_tool_data:
-            return
-        tool_config = post_tool_data.get("config", {})
-        tool_args_mapping = post_tool_data.get("args", {})
+    resolved_tools = []
+    if isinstance(tool_data, list):
+        tool = tool_data[0]
+    else:
+        tool_config = tool_data.get("config", {})
+        tool_args_mapping = tool_data.get("args", {})
         resolved_args = resolve_args(tool_config, tool_args_mapping)
-        parsed_data["post_tool_data"] = {
-            **post_tool_data,
+        return {
+            **tool_data,
+            "args": resolved_args,
+            "config": tool_config
+        }
+    tool_type = tool.get("_type")
+    tool_config = tool.get("config", {})
+    tool_args_mapping = tool.get("args", {})
+    is_custom = tool_type == "custom_function"
+    resolved_args = resolve_args(tool_config, tool_args_mapping, is_custom)
+    if is_custom:
+        resolved_tools.append({
+            "type": "custom_function",
+            "name": tool_config.get("script_id"),
+            "args": resolved_args,
+        })
+    else:
+        resolved_tools.append({
+            "type": tool_type,
             "args": resolved_args,
             "config": tool_config,
-        }
-
+        })
+    
+    return resolved_tools
+    
 async def handle_agent_transfer(
     result, request_body, bridge_configurations, chat_function, current_bridge_id=None, transfer_request_id=None
 ):
@@ -1801,6 +1788,12 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 or model_response.get("status")
                 or ""
             )
+            post_tool_response = await handle_post_tool(parsed_data, result)
+            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                if formatted_response.get("data") is not None:
+                    formatted_response["data"]["content"] = post_tool_response.get("response")
+                if result.get("response", {}).get("data") is not None:
+                    result["response"]["data"]["content"] = post_tool_response.get("response")
             if not is_nested_stream_call:
                 accumulated_payload = None if template_data else formatted_response
                 await class_obj.streamer.emit_done(
@@ -1810,12 +1803,6 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                     accumulated_data=accumulated_payload,
                 )
                 await class_obj.streamer.close()
-            post_tool_response = await handle_post_tool(parsed_data, result)
-            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
-                if formatted_response.get("data") is not None:
-                    formatted_response["data"]["content"] = post_tool_response.get("response")
-                if result.get("response", {}).get("data") is not None:
-                    result["response"]["data"]["content"] = post_tool_response.get("response")
             
         return {"success": True, "response": result.get("response", {})}
     except Exception as err:

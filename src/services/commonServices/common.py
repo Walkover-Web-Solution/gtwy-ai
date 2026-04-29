@@ -174,9 +174,12 @@ async def chat(request_body):
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
         
-        # Setup pre_tools for the current agent with its own variables
-        setup_agent_tools(parsed_data, bridge_configurations, tool_phase="pre")
-        setup_agent_tools(parsed_data, bridge_configurations, tool_phase="post")
+        # Setup pre_tools and post_tool for the current agent with its own variables
+        current_agent_id = parsed_data.get("bridge_id")
+        pre_tools = bridge_configurations.get(current_agent_id, {}).get("pre_tools_data", [])
+        post_tool = bridge_configurations.get(current_agent_id, {}).get("post_tool_data", {})
+        parsed_data["pre_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, pre_tools)
+        parsed_data["post_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, post_tool)
         await apply_prompt_wrapper(parsed_data)
 
         # Initialize or retrieve transfer_request_id for tracking transfers
