@@ -190,6 +190,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
         "child_id": history_params.get("child_id"),
         "bridge_id": history_params.get("bridge_id"),
         "prompt": history_params.get("prompt"),
+        "is_cached": history_params.get("is_cached", False),
         "plans": history_params.get("plans"),
     }
 
