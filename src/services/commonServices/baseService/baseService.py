@@ -97,15 +97,17 @@ class BaseService:
         self.user_id = params.get("user_id")
         self.api_collection = params.get("api_collection")
         self.tool_call_limit_error = None
-        self.stream_mode = (
-            params.get("customConfig", {}).get("stream") is True
-            or params.get("configuration", {}).get("stream") is True
-        )
-        self.streamer = StreamingService(mode="sse") if self.stream_mode else None
-        logger.info(
-            f"BaseService init: stream_mode={self.stream_mode} service={self.service} "
-            f"response_format_type={(self.response_format or {}).get('type') if isinstance(self.response_format, dict) else None}"
-        )
+        self.stream_mode = params.get("customConfig", {}).get("stream") is True
+        if self.stream_mode:
+            self.streamer = StreamingService(mode="sse")
+        else:
+            self.streamer = None
+
+        self.stream_mode = params.get("customConfig", {}).get("stream") is True
+        if self.stream_mode:
+            self.streamer = StreamingService(mode="sse")
+        else:
+            self.streamer = None
 
     def aiconfig(self):
         return self.customConfig
@@ -645,19 +647,6 @@ class BaseService:
         via self.streamer, and returns the same complete response dict as chats()."""
         try:
             if count == 0:
-                if (
-                    isinstance(self.response_format, dict)
-                    and self.response_format.get("type") == "RTLayer"
-                    and self.response_format.get("cred")
-                ):
-                    self.streamer = StreamingService(
-                        mode="rtlayer",
-                        rtlayer_cred=self.response_format["cred"],
-                    )
-                    logger.info(
-                        f"stream: using RTLayer streamer (channel={self.response_format['cred'].get('channel')}) for service={service}"
-                    )
-
                 await self.streamer.emit_start(
                     model=self.model or "",
                     service=service,

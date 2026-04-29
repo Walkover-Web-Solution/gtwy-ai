@@ -45,8 +45,8 @@ async def _check_limit(limit_type, data, version_id):
     # Get limit value from data
     try:
         if limit_type == "apikey":
-            limit_value = float((data.get("apikeys_combined") or {}).get(data.get("service"), {}).get(limit_field, 0) or 0) or float(
-                data.get("folder_apikeys", {}).get(data.get("service"), {}).get(limit_field, 0) or 0
+            limit_value = float(((data.get("apikeys_combined") or {}).get(data.get("service")) or {}).get(limit_field, 0) or 0) or float(
+                (data.get("folder_apikeys", {}).get(data.get("service")) or {}).get(limit_field, 0) or 0
             )
         else:
             limit_value = float(data.get(limit_field, 0) or 0) or float(data.get("bridges", {}).get(limit_field) or 0)
@@ -79,10 +79,10 @@ async def _check_limit(limit_type, data, version_id):
             reset_period_field = f"{limit_type}_limit_reset_period"
             setup_date_field = f"{limit_type}_limit_start_date"
             if limit_type == "apikey":
-                reset_period_from_data = data.get("apikeys", {}).get(data.get("service"), {}).get(reset_period_field) or \
-                                         data.get("folder_apikeys", {}).get(data.get("service"), {}).get(reset_period_field)
-                setup_date_from_data = data.get("apikeys", {}).get(data.get("service"), {}).get(setup_date_field) or \
-                                       data.get("folder_apikeys", {}).get(data.get("service"), {}).get(setup_date_field)
+                reset_period_from_data = (data.get("apikeys", {}).get(data.get("service")) or {}).get(reset_period_field) or \
+                                         (data.get("folder_apikeys", {}).get(data.get("service")) or {}).get(reset_period_field)
+                setup_date_from_data = (data.get("apikeys", {}).get(data.get("service")) or {}).get(setup_date_field) or \
+                                       (data.get("folder_apikeys", {}).get(data.get("service")) or {}).get(setup_date_field)
             else:
                 reset_period_from_data = data.get(reset_period_field) or data.get("bridges", {}).get(reset_period_field)
                 setup_date_from_data = data.get(setup_date_field) or data.get("bridges", {}).get(setup_date_field)
