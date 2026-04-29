@@ -517,8 +517,8 @@ async def chat(request_body):
 
         # Template HTML Generation
         template_data = render_template_if_applicable(parsed_data, result)
-        # Add template data to historyParams chatbot_message if template was used and not playground
-        if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
+        # Add template data to historyParams chatbot_message
+        if template_data and result.get('historyParams'):
             result['historyParams']['chatbot_message'] = json.dumps(result['response']['data']['content'])
 
         # Create latency object using utility function
@@ -604,8 +604,7 @@ async def chat(request_body):
                         parsed_data.get("testcase_data", {}), result, parsed_data
                     )
                     result["response"]["testcase_result"] = testcase_result
-            elif parsed_data.get('testcase_data'):
-                await process_background_tasks_for_playground(result, parsed_data)
+            await process_background_tasks_for_playground(result, parsed_data)
         
 
         # Save agent bridge_id to Redis for 3 days (259200 seconds)

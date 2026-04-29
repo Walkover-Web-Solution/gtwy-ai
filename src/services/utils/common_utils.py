@@ -1444,6 +1444,8 @@ async def process_background_tasks_for_playground(result, parsed_data):
 
     try:
         testcase_data = parsed_data.get("testcase_data", {})
+        if not testcase_data:
+            return
 
         # If testcase_id exists, update in background and return immediately
         if testcase_data.get("testcase_id"):
@@ -1597,10 +1599,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 await class_obj.streamer.emit_error(original_error)
                 if not is_nested_stream_call:
                     await class_obj.streamer.close()
-            if not parsed_data.get("is_playground"):
-                await sendResponse(
-                    parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {})
-                ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+            await sendResponse(
+                parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {})
+            ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
             if is_nested_stream_call:
                 return {"success": False, "message": str(original_error), "response": {}}
             return
@@ -1701,7 +1702,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         # playground split so both paths see the final, reviewed response with
         # summed tokens. Reviewer + any re-runs share the same SSE connection
         # (class_obj.streamer); emit_done is owned by this finalizer below.
-        if not parsed_data["is_playground"] and result.get("response") and result["response"].get("data"):
+        if result.get("response") and result["response"].get("data"):
             result["response"]["data"]["message_id"] = parsed_data["message_id"]
         update_usage_metrics(parsed_data, params, latency, result=result, success=True)
         result.setdefault("response", {}).setdefault("usage", {})
@@ -1722,18 +1723,16 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             result.setdefault("response", {}).setdefault("usage", {})
             result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
 
-        if not parsed_data["is_playground"]:
-            await sendResponse(
-                parsed_data.get("response_format"),
-                result["response"],
-                success=True,
-                variables=parsed_data.get("variables", {}),
-            )
-            await process_background_tasks(
-                parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
-            )
-        else:
-            await process_background_tasks_for_playground(result, parsed_data)
+        await sendResponse(
+            parsed_data.get("response_format"),
+            result["response"],
+            success=True,
+            variables=parsed_data.get("variables", {}),
+        )
+        await process_background_tasks(
+            parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
+        )
+        await process_background_tasks_for_playground(result, parsed_data)
 
         if class_obj.streamer:
             model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
