@@ -567,13 +567,15 @@ async def chat(request_body):
                 success=True,
                 variables=parsed_data.get("variables", {}),
             )
+        
+        post_tool_response = await handle_post_tool(parsed_data, result)
+        if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+            result["response"]["data"]["content"] = post_tool_response.get("response")
+            result['historyParams']['post_tool_response'] = post_tool_response.get("response")
 
         if not parsed_data["is_playground"]:
             if result.get("response") and result["response"].get("data"):
                 result["response"]["data"]["message_id"] = parsed_data["message_id"]
-            post_tool_response = await handle_post_tool(parsed_data, result)
-            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
-                result["response"]["data"]["content"] = post_tool_response.get("response")
             await sendResponse(
                 parsed_data["response_format"],
                 result["response"],

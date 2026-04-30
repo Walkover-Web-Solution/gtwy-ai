@@ -528,13 +528,13 @@ async def handle_post_tool(parsed_data, result):
         if response_data:
             args["ai_response"] = response_data.get("content") or response_data
 
-        post_function_response = await axios_work(
+        post_tool_response = await axios_work(
             args,
             {"url": f"https://flow.sokt.io/func/{script_id}"},
         )
     except Exception as err:
         logger.error(f"post_tool execution error (script_id={script_id}): {err}")
-    return post_function_response
+    return post_tool_response
 
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
