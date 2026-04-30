@@ -1762,6 +1762,30 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             result.setdefault("response", {}).setdefault("usage", {})
             result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
 
+        model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
+        formatted_response = result.get("response", {}) if isinstance(result, dict) else {}
+
+        post_tool_response = await handle_post_tool(parsed_data, result)
+        if post_tool_response is not None:
+            post_tool_data = parsed_data.get("post_tool_data", {})
+            flow_hit_id = (post_tool_response.get("metadata") or {}).get("flowHitId")
+            entry = {
+                "id": post_tool_data.get("script_id"),
+                "args": post_tool_data.get("args", {}),
+                "data": post_tool_response,
+                "type": "post_tool",
+                "name": post_tool_data.get("title") or post_tool_data.get("script_id"),
+                "error": post_tool_response.get("status") != 1,
+            }
+            post_tool_log = {flow_hit_id: entry} if flow_hit_id else entry
+            if result.get("historyParams") is not None:
+                result["historyParams"].setdefault("tools_call_data", []).append(post_tool_log)
+            if post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                if formatted_response.get("data") is not None:
+                    formatted_response["data"]["content"] = post_tool_response.get("response")
+                if result.get("response", {}).get("data") is not None:
+                    result["response"]["data"]["content"] = post_tool_response.get("response")
+
         if not parsed_data["is_playground"]:
             await sendResponse(
                 parsed_data.get("response_format"),
@@ -1776,8 +1800,6 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             await process_background_tasks_for_playground(result, parsed_data)
 
         if class_obj.streamer:
-            model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
-            formatted_response = result.get("response", {}) if isinstance(result, dict) else {}
             if getattr(class_obj, 'tool_call_limit_error', None):
                 result["error"] = class_obj.tool_call_limit_error
             if result.get("error"):
@@ -1788,12 +1810,6 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 or model_response.get("status")
                 or ""
             )
-            post_tool_response = await handle_post_tool(parsed_data, result)
-            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
-                if formatted_response.get("data") is not None:
-                    formatted_response["data"]["content"] = post_tool_response.get("response")
-                if result.get("response", {}).get("data") is not None:
-                    result["response"]["data"]["content"] = post_tool_response.get("response")
             if not is_nested_stream_call:
                 accumulated_payload = None if template_data else formatted_response
                 await class_obj.streamer.emit_done(
