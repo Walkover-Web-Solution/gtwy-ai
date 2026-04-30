@@ -809,6 +809,10 @@ async def _save_plan_from_result(parsed_data, result):
             )
             return
 
+        # Handle new format where plan is nested under 'plan' key
+        if "plan" in plan_json and isinstance(plan_json["plan"], dict):
+            plan_json = plan_json["plan"]
+        
         new_tasks = plan_json.get("tasks", {}) or {}
         existing_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
         existing_tasks = (existing_plan or {}).get("tasks") or {}

@@ -589,8 +589,28 @@ def finalize_main_agent_metrics(metrics):
     }
 
 
-def _get_runnable_tasks(tasks):
-    """Find tasks that are pending and have all dependencies completed."""
+def _get_runnable_tasks(tasks, checkpoint=None):
+    """Find tasks that are pending and have all dependencies completed.
+    
+    Args:
+        tasks: Dictionary of all tasks
+        checkpoint: Optional checkpoint with pre-computed executor context
+        
+    Returns:
+        List of runnable task IDs
+    """
+    if checkpoint and "executor_context" in checkpoint:
+        executor_context = checkpoint.get("executor_context", {})
+        runnable_from_checkpoint = executor_context.get("runnable_tasks", [])
+        
+        if runnable_from_checkpoint:
+            valid_runnable = [
+                task_id for task_id in runnable_from_checkpoint
+                if task_id in tasks and tasks[task_id].get("status") == "pending"
+            ]
+            if valid_runnable:
+                return valid_runnable
+    
     runnable = []
     for task_id, task in tasks.items():
         if task["status"] != "pending":
@@ -1051,6 +1071,8 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
         logger.error(f"Plan not found for {org_id}/{bridge_id}/{thread_id}/{sub_thread_id}")
         return None
 
+    checkpoint = await plan_store.get_latest_checkpoint(org_id, bridge_id, thread_id, sub_thread_id)
+
     recovered_task_ids = _recover_interrupted_in_progress_tasks(plan)
     if recovered_task_ids:
         logger.warning(
@@ -1106,8 +1128,8 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             await _emit("plan_paused", {"state": "paused", "plan": plan})
             break
 
-        # Find runnable tasks
-        runnable = _get_runnable_tasks(tasks)
+        # Find runnable tasks (use checkpoint for O(1) lookup if available)
+        runnable = _get_runnable_tasks(tasks, checkpoint)
         if not runnable:
             await asyncio.sleep(1)
             continue

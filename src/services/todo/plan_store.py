@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 
 from src.configs.constant import redis_keys
 from src.services.cache_service import delete_in_cache, find_in_cache, store_in_cache
+from src.services.todo.plan_checkpoint import CheckpointManager
 
 PLAN_TTL = 172800  # 48 hours
+_checkpoint_manager = CheckpointManager()
 
 
 def _build_redis_key(org_id, bridge_id, thread_id, sub_thread_id):
@@ -34,13 +36,25 @@ async def save_plan(plan):
     redis_key = _build_redis_key(org_id, bridge_id, thread_id, sub_thread_id)
     await store_in_cache(redis_key, plan, ttl=PLAN_TTL)
 
-    # Mirror any new `waiting_for_user` questions into session memory so the
-    # planner sees them as pending even before the user replies. Failures here
-    # must not break plan persistence — they are a best-effort sync.
     try:
         await _sync_pending_questions_to_session(plan)
     except Exception:
         pass
+    
+    try:
+        old_checkpoint = await get_latest_checkpoint(org_id, bridge_id, thread_id, sub_thread_id)
+        interaction_type = "initial_plan" if old_checkpoint is None else "execution_update"
+        
+        checkpoint = _checkpoint_manager.create_checkpoint(
+            plan=plan,
+            interaction_type=interaction_type,
+            old_checkpoint=old_checkpoint
+        )
+        
+        await add_checkpoint(org_id, bridge_id, thread_id, sub_thread_id, checkpoint)
+    except Exception as e:
+        from globals import logger
+        logger.error(f"Failed to create checkpoint: {e}", exc_info=True)
 
 
 async def get_plan(org_id, bridge_id, thread_id, sub_thread_id):
@@ -194,4 +208,134 @@ async def _sync_pending_questions_to_session(plan):
 async def clear_planner_session(org_id, bridge_id, thread_id, sub_thread_id):
     """Clear planner session memory for the given (thread, sub_thread) scope."""
     redis_key = _build_session_key(org_id, bridge_id, thread_id, sub_thread_id)
+    await delete_in_cache(redis_key)
+
+
+_MAX_CHECKPOINTS_STORED = 10
+
+
+def _build_checkpoint_key(org_id, bridge_id, thread_id, sub_thread_id):
+    """Build Redis key for plan checkpoints."""
+    return f"{redis_keys['plan_']}checkpoint_{org_id}_{bridge_id}_{thread_id}_{sub_thread_id}"
+
+
+async def add_checkpoint(org_id, bridge_id, thread_id, sub_thread_id, checkpoint):
+    """
+    Add a new checkpoint to the checkpoint history.
+    
+    Maintains a circular buffer of the last N checkpoints.
+    
+    Args:
+        org_id: Organization ID
+        bridge_id: Bridge ID
+        thread_id: Thread ID
+        sub_thread_id: Sub-thread ID
+        checkpoint: Checkpoint dictionary to add
+    """
+    redis_key = _build_checkpoint_key(org_id, bridge_id, thread_id, sub_thread_id)
+    
+    cached = await find_in_cache(redis_key)
+    if cached:
+        try:
+            checkpoint_data = json.loads(cached)
+        except (json.JSONDecodeError, TypeError):
+            checkpoint_data = {"checkpoints": []}
+    else:
+        checkpoint_data = {"checkpoints": []}
+    
+    checkpoints = checkpoint_data.get("checkpoints", [])
+    
+    version = len(checkpoints) + 1
+    checkpoint["version"] = version
+    
+    checkpoints.append(checkpoint)
+    
+    if len(checkpoints) > _MAX_CHECKPOINTS_STORED:
+        checkpoints = checkpoints[-_MAX_CHECKPOINTS_STORED:]
+    
+    checkpoint_data["checkpoints"] = checkpoints
+    checkpoint_data["current_version"] = version
+    
+    await store_in_cache(redis_key, checkpoint_data, ttl=PLAN_TTL)
+
+
+async def get_latest_checkpoint(org_id, bridge_id, thread_id, sub_thread_id):
+    """
+    Get the latest checkpoint for a plan.
+    
+    Args:
+        org_id: Organization ID
+        bridge_id: Bridge ID
+        thread_id: Thread ID
+        sub_thread_id: Sub-thread ID
+        
+    Returns:
+        Latest checkpoint dictionary or None if no checkpoints exist
+    """
+    redis_key = _build_checkpoint_key(org_id, bridge_id, thread_id, sub_thread_id)
+    cached = await find_in_cache(redis_key)
+    
+    if cached:
+        try:
+            checkpoint_data = json.loads(cached)
+            checkpoints = checkpoint_data.get("checkpoints", [])
+            if checkpoints:
+                return checkpoints[-1]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    return None
+
+
+async def get_checkpoint_history(org_id, bridge_id, thread_id, sub_thread_id, limit=10):
+    """
+    Get checkpoint history for a plan.
+    
+    Args:
+        org_id: Organization ID
+        bridge_id: Bridge ID
+        thread_id: Thread ID
+        sub_thread_id: Sub-thread ID
+        limit: Maximum number of checkpoints to return
+        
+    Returns:
+        List of checkpoint dictionaries (most recent first)
+    """
+    redis_key = _build_checkpoint_key(org_id, bridge_id, thread_id, sub_thread_id)
+    cached = await find_in_cache(redis_key)
+    
+    if cached:
+        try:
+            checkpoint_data = json.loads(cached)
+            checkpoints = checkpoint_data.get("checkpoints", [])
+            return checkpoints[-limit:] if checkpoints else []
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    return []
+
+
+async def get_task(org_id, bridge_id, thread_id, sub_thread_id, task_id):
+    """
+    Get a single task from the plan without loading the full plan.
+    
+    Args:
+        org_id: Organization ID
+        bridge_id: Bridge ID
+        thread_id: Thread ID
+        sub_thread_id: Sub-thread ID
+        task_id: Task ID to retrieve
+        
+    Returns:
+        Task dictionary or None if not found
+    """
+    plan = await get_plan(org_id, bridge_id, thread_id, sub_thread_id)
+    if plan:
+        return plan.get("tasks", {}).get(task_id)
+    return None
+
+
+async def clear_checkpoints(org_id, bridge_id, thread_id, sub_thread_id):
+    """Clear all checkpoints for the given plan scope."""
+    redis_key = _build_checkpoint_key(org_id, bridge_id, thread_id, sub_thread_id)
     await delete_in_cache(redis_key)

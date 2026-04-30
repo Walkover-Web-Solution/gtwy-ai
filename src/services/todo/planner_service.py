@@ -5,19 +5,20 @@ from globals import logger
 from src.services.utils.helper import Helper
 from src.services.prebuilt_prompt_service import get_specific_prebuilt_prompt_without_org_service
 from src.services.todo import plan_store
+from src.services.todo.plan_checkpoint import CheckpointManager
+from src.services.todo.context_builder import SmartContextExtractor
 
 PLANNER_PROMPT = """
 Top level Role: Planner
-Top Level Objective: Turn the user's goal into a structured, executable task list. If the goal is unclear, ask targeted questions before planning. All tasks must be planned within its capabilities — so the executor runs them sequentially with zero additional decision-making.
-
+Top Level Objective: Convert the user's goal into a structured, executable task list. Before planning, gather and confirm all required details — never create a plan until the goal is fully clear. All tasks must be self-contained so the executor can run them sequentially with zero additional decision-making.
 
 Planner Context and instructions - 
 {{system_prompt}}
 
 
-return Goal and proper organised plan in below Output Format
+return valid json in below format -> At least one of display_response, plan, or questions must be present.
 {
-  "user_message":"used it when you are talking to user directly, like greeting or casual conversation",
+  "display_response":"used it when you are talking to user directly, like greeting or casual conversation",
   "plan": {
     "goal": "Build a REST API for a todo app",
     "tasks": [
@@ -192,6 +193,26 @@ def _build_planner_message(
 
     return "\n".join(parts)
 
+
+async def _build_smart_planner_context(
+    user_input,
+    checkpoint,
+    existing_plan=None
+):
+    """Build minimal context for planner using checkpoint.
+    
+    Args:
+        user_input: User's input message
+        checkpoint: Latest checkpoint (None for initial plan)
+        existing_plan: Full plan (optional, for detailed task info)
+        
+    Returns:
+        Minimal context dictionary for AI
+    """
+    extractor = SmartContextExtractor()
+    context = extractor.extract_context(checkpoint, user_input, existing_plan)
+    return context
+
 def _build_planner_system_prompt(prompt, agent_context, session_memory=None, user_system_prompt=None):
     # Build the system_prompt section to inject into the template
     system_prompt_parts = []
@@ -230,57 +251,63 @@ async def _get_planner_prompt_from_db(default_prompt):
 
 
 async def prepare_planner_request(parsed_data, bridge_configurations, custom_config):
-    # Load session memory (Q&A history) to avoid repeated questions.
-    # Scoped per (thread_id, sub_thread_id) to match the plan's scope.
-    session_memory = await plan_store.get_planner_session(
-        parsed_data["org_id"],
-        parsed_data["bridge_id"],
-        parsed_data["thread_id"],
-        parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
-    )
+    use_checkpoint_memory = True
 
-    # Load existing plan (if any) for updates
-    existing_plan = await plan_store.get_plan(
-        parsed_data["org_id"],
-        parsed_data["bridge_id"],
-        parsed_data["thread_id"],
-        parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
-    )
-
-    # Check if user message contains task IDs and plan exists
     user_input = parsed_data.get("user", "")
-    has_task_ids = _has_task_ids_in_message(user_input)
     
-    # Separate search tools from other tools
     original_tools = parsed_data.get("configuration", {}).get("tools", [])
     search_tools, other_tools = _separate_search_and_other_tools(original_tools)
     
-    # Set planner to use ONLY search tools in its configuration
     parsed_data.setdefault("configuration", {})["tools"] = search_tools
     
-    # Build system prompt with agent context (includes other_tools) + session memory + user system prompt
     db_planner_prompt = await _get_planner_prompt_from_db(PLANNER_PROMPT)
     agent_context = _build_agent_context(parsed_data, bridge_configurations, other_tools)
     original_prompt = (parsed_data.get("configuration") or {}).get("prompt") or ""
-    planner_prompt = _build_planner_system_prompt(db_planner_prompt, agent_context, session_memory, original_prompt)
+    planner_prompt = _build_planner_system_prompt(db_planner_prompt, agent_context, None, original_prompt)
     parsed_data.setdefault("configuration", {})["prompt"] = planner_prompt
 
     custom_config["response_type"] = {"type": "json_object"}
 
-    # Build concise user message; heavy context lives in system prompt
-    if existing_plan:
-        # Update flow - pass is_human_loop flag to optimize message format
-        parsed_data["user"] = _build_planner_message(
-            user_goal=existing_plan.get("goal"),
-            existing_plan=existing_plan,
-            user_feedback=user_input,
-            is_human_loop=has_task_ids,
+    if use_checkpoint_memory:
+        checkpoint = await plan_store.get_latest_checkpoint(
+            parsed_data["org_id"],
+            parsed_data["bridge_id"],
+            parsed_data["thread_id"],
+            parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
         )
+        
+        existing_plan = None
+        if checkpoint:
+            existing_plan = await plan_store.get_plan(
+                parsed_data["org_id"],
+                parsed_data["bridge_id"],
+                parsed_data["thread_id"],
+                parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
+            )
+        
+        context = await _build_smart_planner_context(user_input, checkpoint, existing_plan)
+        parsed_data["user"] = json.dumps(context)
     else:
-        # First-time plan creation: just the user goal
-        parsed_data["user"] = _build_planner_message(
-            user_goal=user_input,
-            is_human_loop=False,
+        existing_plan = await plan_store.get_plan(
+            parsed_data["org_id"],
+            parsed_data["bridge_id"],
+            parsed_data["thread_id"],
+            parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
         )
+        
+        has_task_ids = _has_task_ids_in_message(user_input)
+        
+        if existing_plan:
+            parsed_data["user"] = _build_planner_message(
+                user_goal=existing_plan.get("goal"),
+                existing_plan=existing_plan,
+                user_feedback=user_input,
+                is_human_loop=has_task_ids,
+            )
+        else:
+            parsed_data["user"] = _build_planner_message(
+                user_goal=user_input,
+                is_human_loop=False,
+            )
 
 
