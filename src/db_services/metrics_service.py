@@ -127,6 +127,8 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
             batch_history_entries.append(conversation_log_data)
 
         if batch_history_entries:
+            batch_history_entries[0]["thread_flag"] = parsed_data.get("thread_flag")
+            batch_history_entries[0]["response_format"] = parsed_data.get("response_format")
             message = make_json_serializable({"save_batch_history": batch_history_entries})
             await sub_queue_obj.publish_message(message)
 

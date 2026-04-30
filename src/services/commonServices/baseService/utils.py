@@ -555,15 +555,6 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
     assistant_message = result.get("historyParams", {}).get("message", "")
 
     data = {
-        "save_sub_thread_id_and_name": {
-            "org_id": parsed_data.get("org_id"),
-            "thread_id": thread_info.get("thread_id") if thread_info else parsed_data.get("thread_id"),
-            "sub_thread_id": thread_info.get("sub_thread_id") if thread_info else parsed_data.get("sub_thread_id"),
-            "thread_flag": parsed_data.get("thread_flag"),
-            "response_format": parsed_data.get("response_format"),
-            "bridge_id": parsed_data.get("bridge_id"),
-            "user": parsed_data.get("user"),
-        },
         "metrics_service": {
             "dataset": [parsed_data.get("usage", {})],
             "history_params": result.get("historyParams", {}),

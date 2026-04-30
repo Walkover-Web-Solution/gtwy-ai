@@ -10,7 +10,6 @@ from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger, try_catch
 from src.configs.model_configuration import model_config_document
 from src.configs.serviceKeys import model_config_change
-from src.controllers.conversationController import save_sub_thread_id_and_name
 from src.db_services.metrics_service import (
     build_history_and_metrics_payload,
     build_orchestrator_log_data,
@@ -708,10 +707,29 @@ def build_service_params(
     }
 
 
-async def _publish_history_to_queue(dataset, history_params, version_id, thread_info=None):
+def _attach_sub_thread_extras(conversation_log_data, parsed_data):
+    conversation_log_data["thread_flag"] = parsed_data.get("thread_flag")
+    conversation_log_data["response_format"] = parsed_data.get("response_format")
+
+
+def _build_orchestrator_sub_thread_data(parsed_data, thread_info=None):
+    return {
+        "org_id": parsed_data.get("org_id"),
+        "thread_id": (thread_info or {}).get("thread_id") or parsed_data.get("thread_id"),
+        "sub_thread_id": (thread_info or {}).get("sub_thread_id") or parsed_data.get("sub_thread_id"),
+        "thread_flag": parsed_data.get("thread_flag"),
+        "response_format": parsed_data.get("response_format"),
+        "bridge_id": parsed_data.get("bridge_id"),
+        "user": parsed_data.get("user"),
+    }
+
+
+async def _publish_history_to_queue(dataset, history_params, version_id, thread_info=None, parsed_data=None):
     """Build history/metrics payload and publish it to the log queue for Node.js to save."""
     try:
         payload = build_history_and_metrics_payload(dataset, history_params, version_id)
+        if parsed_data is not None:
+            _attach_sub_thread_extras(payload["conversation_log_data"], parsed_data)
         message = make_json_serializable({"save_history": [payload]})
         await sub_queue_obj.publish_message(message)
 
@@ -983,6 +1001,7 @@ async def process_background_tasks(
     data = await make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info)
 
     if history_entries:
+        _attach_sub_thread_extras(history_entries[0]["conversation_log_data"], parsed_data)
         data["save_history"] = history_entries
 
         asyncio.gather(
@@ -991,6 +1010,7 @@ async def process_background_tasks(
         )
 
     if orchestrator_history_data:
+        orchestrator_history_data["sub_thread_data"] = _build_orchestrator_sub_thread_data(parsed_data, thread_info)
         data["save_orchestrator_history"] = orchestrator_history_data
 
     data = make_json_serializable(data)
@@ -1019,16 +1039,10 @@ async def process_background_tasks_for_error(parsed_data, error):
             is_external_error=False,
         ),
         _publish_history_to_queue(
-            [parsed_data["usage"]], parsed_data["historyParams"], parsed_data["version_id"]
-        ),
-        save_sub_thread_id_and_name(
-            parsed_data["thread_id"],
-            parsed_data["sub_thread_id"],
-            parsed_data["org_id"],
-            parsed_data["thread_flag"],
-            parsed_data["response_format"],
-            parsed_data["bridge_id"],
-            parsed_data["user"],
+            [parsed_data["usage"]],
+            parsed_data["historyParams"],
+            parsed_data["version_id"],
+            parsed_data=parsed_data,
         ),
     ]
     await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)
@@ -1050,8 +1064,7 @@ async def process_batch_background_tasks(parsed_data, result, processed_prompts,
     messages = result.get("messages", [])
     
     tasks = []
-    
-    # Task 1: Save batch conversation logs
+
     if batch_id and messages:
         tasks.append(
             create_batch_conversation_logs(
@@ -1059,25 +1072,10 @@ async def process_batch_background_tasks(parsed_data, result, processed_prompts,
                 messages=messages,
                 parsed_data=parsed_data,
                 processed_prompts=processed_prompts,
-                batch_variables=batch_variables
+                batch_variables=batch_variables,
             )
         )
-    
-    # Task 2: Save subthread information (only if thread_id and sub_thread_id exist)
-    if parsed_data.get("thread_id") and parsed_data.get("sub_thread_id"):
-        tasks.append(
-            save_sub_thread_id_and_name(
-                parsed_data["thread_id"],
-                parsed_data["sub_thread_id"],
-                parsed_data["org_id"],
-                parsed_data.get("thread_flag", False),
-                parsed_data.get("response_format", {}),
-                parsed_data["bridge_id"],
-                parsed_data["user"],
-            )
-        )
-    
-    # Execute all tasks in parallel without blocking
+
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 

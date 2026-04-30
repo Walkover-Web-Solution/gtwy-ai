@@ -24,6 +24,7 @@ from src.services.cache_service import make_json_serializable
 from src.services.commonServices.baseService.utils import make_request_data_and_publish_sub_queue
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.utils.common_utils import (
+    _attach_sub_thread_extras,
     build_service_params,
     configure_custom_settings,
     create_latency_object,
@@ -169,10 +170,11 @@ async def _publish_reviewer_data(
     Publish the reviewer agent's full queue payload.
 
     Mirrors the main agent's process_background_tasks publish path: builds the
-    same payload via make_request_data_and_publish_sub_queue (save_sub_thread_id_and_name,
-    metrics_service, validateResponse, total_token_calculation, etc.) and appends
-    save_history. The reviewer therefore gets its own sub_thread record, metrics,
-    and history saved on the Node side — same as the main agent.
+    same payload via make_request_data_and_publish_sub_queue (metrics_service,
+    validateResponse, total_token_calculation, etc.) and appends save_history with
+    thread_flag and response_format merged into conversation_log_data so the
+    reviewer's sub_thread record, metrics, and history are all saved on the Node
+    side from a single message.
 
     Independent of the main agent's publish so a reviewer-side failure can't
     block the main agent's history.
@@ -197,18 +199,9 @@ async def _publish_reviewer_data(
             or reviewer_params is None
         ):
             history_params = reviewer_summary.get("history_params") or {}
-            error_payload = {
-                "save_history": [history_payload],
-                "save_sub_thread_id_and_name": {
-                    "org_id": history_params.get("org_id"),
-                    "thread_id": history_params.get("thread_id"),
-                    "sub_thread_id": history_params.get("sub_thread_id"),
-                    "thread_flag": None,
-                    "response_format": {"type": "default"},
-                    "bridge_id": reviewer_summary.get("bridge_id"),
-                    "user": history_params.get("user"),
-                },
-            }
+            history_payload["conversation_log_data"]["thread_flag"] = None
+            history_payload["conversation_log_data"]["response_format"] = {"type": "default"}
+            error_payload = {"save_history": [history_payload]}
             message = make_json_serializable(error_payload)
             await sub_queue_obj.publish_message(message)
             logger.info(
@@ -220,6 +213,7 @@ async def _publish_reviewer_data(
         data = await make_request_data_and_publish_sub_queue(
             reviewer_parsed_data, reviewer_result, reviewer_params, thread_info=None
         )
+        _attach_sub_thread_extras(history_payload["conversation_log_data"], reviewer_parsed_data)
         data["save_history"] = [history_payload]
         message = make_json_serializable(data)
         await sub_queue_obj.publish_message(message)
