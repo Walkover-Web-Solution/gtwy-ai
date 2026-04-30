@@ -8,453 +8,41 @@ returns JSON of the form:
     {"passed": true | false, "reason": "<feedback>"}
 
 On `passed=false`, `reason` is fed back into the main agent as a correction and the
-main agent runs again. Up to MAX_REVIEW_ROUNDS attempts. Only the final main-agent
-response and final reviewer response are persisted; tokens from all attempts are
-summed into the saved row so cost reporting stays honest.
+main agent runs again. Up to MAX_REVIEW_ROUNDS attempts.
+
+Persistence: every reviewer round is saved as its own conversation_log row under
+the main agent's thread_id and sub_thread_id. The Node consumer reads
+historyEntries[0] of each save_history queue message, so we publish one queue
+message per round. The final reviewer round's message carries the full payload
+(metrics_service, validateResponse, broadcast_response_webhook, save_agent_memory,
+etc.) so those side-effects fire once per main turn; intermediate rounds publish
+a history-only message. The main agent's row stores summed tokens across all
+main-agent attempts so cost reporting stays honest.
+
+This module is the orchestrator only. Helpers (LLM calls, history builders,
+queue publish, JSON parsing, token math) live in reviewer_service_helpers.
 """
 
-import json
-import re
 import uuid
-from copy import deepcopy
 
 from globals import logger
 from src.db_services.metrics_service import build_history_and_metrics_payload
-from src.services.cache_service import make_json_serializable
-from src.services.commonServices.baseService.utils import make_request_data_and_publish_sub_queue
-from src.services.commonServices.queueService.queueLogService import sub_queue_obj
-from src.services.utils.common_utils import (
-    _attach_sub_thread_extras,
-    build_service_params,
-    configure_custom_settings,
-    create_latency_object,
-    load_model_configuration,
-    update_usage_metrics,
+from src.services.commonServices.reviewer_service_helpers import (
+    _add_tokens,
+    _build_review_user_message,
+    _build_reviewer_dataset_entry_for_round,
+    _build_reviewer_history_params_for_round,
+    _call_reviewer,
+    _extract_response_text,
+    _publish_reviewer_round,
+    _read_usage_tokens,
+    _rerun_main_agent,
+    _zero_tokens,
+    parse_reviewer_json,
 )
-from src.services.utils.helper import Helper
+from src.services.utils.common_utils import update_usage_metrics
 
 MAX_REVIEW_ROUNDS = 3
-
-# Appended to the reviewer's user-authored system prompt at runtime so the model
-# returns a strictly-parseable verdict. We don't mutate the stored bridge prompt —
-# this is added to a deep-copy of the reviewer's configuration on every call.
-REVIEWER_JSON_TEMPLATE = (
-    "\n\n---\n"
-    "OUTPUT FORMAT (REQUIRED):\n"
-    "After your reasoning, your final output MUST be a single JSON object on its own "
-    "line, with no surrounding prose, no code fences, and no commentary after it. "
-    'The JSON must be exactly: {"passed": <true|false>, "reason": "<string>"}\n'
-    "- passed=true  → the main agent's response satisfies the user's query fully and "
-    "correctly. In this case `reason` MUST be an empty string.\n"
-    "- passed=false → the response is wrong, incomplete, off-topic, or low-quality. "
-    "In this case `reason` MUST be specific, actionable feedback that the main agent "
-    "can act on to fix its response on the next attempt.\n"
-    "Output exactly one JSON object. Nothing after it."
-)
-
-
-def parse_reviewer_json(raw_text):
-    """
-    Extract {"passed": bool, "reason": str} from the reviewer's text output.
-
-    Forgiving on purpose: a malformed reviewer reply must never crash the request.
-    On parse failure, treat as passed=false with an explanatory reason so the main
-    agent gets one more chance.
-    """
-    if not raw_text:
-        return {"passed": False, "reason": "<reviewer returned empty response>"}
-
-    text = str(raw_text).strip()
-
-    candidates = [text]
-    fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    candidates.extend(fenced)
-
-    # Depth-aware scan: find every balanced top-level {...} block (handles nested
-    # braces in `reason` strings that a flat regex would skip). Quotes and escapes
-    # are honored so braces inside string literals don't shift depth.
-    depth = 0
-    start = -1
-    in_string = False
-    escape = False
-    for idx, ch in enumerate(text):
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            if depth == 0:
-                start = idx
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0 and start >= 0:
-                candidates.append(text[start : idx + 1])
-                start = -1
-
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(parsed, dict) or "passed" not in parsed:
-            continue
-        passed = parsed.get("passed")
-        reason = parsed.get("reason", "")
-        if isinstance(passed, str):
-            passed = passed.strip().lower() in ("true", "yes", "1", "pass", "passed")
-        return {"passed": bool(passed), "reason": str(reason or "")}
-
-    return {"passed": False, "reason": "<reviewer output was unparseable>"}
-
-
-def _build_review_user_message(original_user_query, main_response_text):
-    return (
-        "User's original query:\n"
-        f"{original_user_query}\n\n"
-        "Main agent's response:\n"
-        f"{main_response_text}\n\n"
-        "Review the main agent's response above. Decide whether it correctly and "
-        "completely addresses the user's query. Respond with the JSON verdict."
-    )
-
-
-def _extract_response_text(result):
-    if not isinstance(result, dict):
-        return ""
-    response_data = (result.get("response") or {}).get("data") or {}
-    content = response_data.get("content")
-    if isinstance(content, list):
-        # Some providers return content as list of parts
-        return "\n".join(
-            part.get("text", "") if isinstance(part, dict) else str(part)
-            for part in content
-        )
-    return content or ""
-
-
-def _zero_tokens():
-    return {"input": 0, "output": 0, "total": 0, "expected_cost": 0.0}
-
-
-def _read_usage_tokens(usage):
-    return {
-        "input": usage.get("inputTokens", 0) or 0,
-        "output": usage.get("outputTokens", 0) or 0,
-        "total": usage.get("total_tokens", 0) or 0,
-        "expected_cost": usage.get("expectedCost", 0) or 0.0,
-    }
-
-
-def _add_tokens(accum, delta):
-    accum["input"] += delta["input"] or 0
-    accum["output"] += delta["output"] or 0
-    accum["total"] += delta["total"] or 0
-    accum["expected_cost"] += delta["expected_cost"] or 0.0
-
-
-async def _publish_reviewer_data(
-    reviewer_summary,
-    reviewer_parsed_data,
-    reviewer_params,
-    reviewer_result,
-):
-    """
-    Publish the reviewer agent's full queue payload.
-
-    Mirrors the main agent's process_background_tasks publish path: builds the
-    same payload via make_request_data_and_publish_sub_queue (metrics_service,
-    validateResponse, total_token_calculation, etc.) and appends save_history with
-    thread_flag and response_format merged into conversation_log_data so the
-    reviewer's sub_thread record, metrics, and history are all saved on the Node
-    side from a single message.
-
-    Independent of the main agent's publish so a reviewer-side failure can't
-    block the main agent's history.
-    """
-    if not reviewer_summary or not reviewer_summary.get("history_params"):
-        return
-    try:
-        history_payload = build_history_and_metrics_payload(
-            reviewer_summary.get("dataset") or [],
-            reviewer_summary["history_params"],
-            reviewer_summary.get("version_id"),
-        )
-
-        # Hard-error path (reviewer call never completed): we don't have the
-        # parsed_data/result/params needed for the full payload builder. Build
-        # a minimal payload covering the two persistence concerns: the failed
-        # conversation_log row AND the reviewer's sub_thread record (so the
-        # row has a sub_thread to live under).
-        if (
-            reviewer_parsed_data is None
-            or reviewer_result is None
-            or reviewer_params is None
-        ):
-            history_params = reviewer_summary.get("history_params") or {}
-            history_payload["conversation_log_data"]["thread_flag"] = None
-            history_payload["conversation_log_data"]["response_format"] = {"type": "default"}
-            error_payload = {"save_history": [history_payload]}
-            message = make_json_serializable(error_payload)
-            await sub_queue_obj.publish_message(message)
-            logger.info(
-                f"Published reviewer error history for bridge {reviewer_summary.get('bridge_id')} "
-                f"(error={reviewer_summary.get('error')!r}, sub_thread_id={history_params.get('sub_thread_id')!r})"
-            )
-            return
-
-        data = await make_request_data_and_publish_sub_queue(
-            reviewer_parsed_data, reviewer_result, reviewer_params, thread_info=None
-        )
-        _attach_sub_thread_extras(history_payload["conversation_log_data"], reviewer_parsed_data)
-        data["save_history"] = [history_payload]
-        message = make_json_serializable(data)
-        await sub_queue_obj.publish_message(message)
-        logger.info(
-            f"Published reviewer payload for bridge {reviewer_summary.get('bridge_id')} "
-            f"(rounds={reviewer_summary.get('rounds')}, passed={reviewer_summary.get('passed')}, "
-            f"error={reviewer_summary.get('error')!r})"
-        )
-    except Exception as exc:
-        logger.error(f"Failed to publish reviewer payload: {exc}")
-
-
-async def _call_reviewer(
-    reviewer_bridge_id,
-    bridge_configurations,
-    review_user_message,
-    parsed_data,
-    thread_info,
-    timer,
-    streamer=None,
-):
-    """
-    Run a single reviewer LLM call. Returns (result_dict, tokens_dict, latency_dict).
-
-    The reviewer runs as its own bridge: its user-authored prompt, model, and tools
-    are used verbatim. We override only the user message and a few execution-context
-    fields. `playground=True` is set on the reviewer's params to suppress
-    intermediate sendResponse notifications that would otherwise leak to the client.
-
-    If `streamer` is provided, the reviewer streams its tokens onto the SAME SSE
-    connection as the main agent — the user sees the verdict being produced in
-    real time. We DO NOT call emit_done on the streamer here; the parent finalizer
-    owns the single emit_done at the end of the whole review flow.
-    """
-    reviewer_cfg = bridge_configurations.get(reviewer_bridge_id) or {}
-    if not reviewer_cfg:
-        raise ValueError(f"Reviewer bridge {reviewer_bridge_id} config not loaded")
-
-    reviewer_configuration = deepcopy(reviewer_cfg.get("configuration") or {})
-    reviewer_service = reviewer_cfg.get("service") or ""
-    reviewer_apikey = reviewer_cfg.get("apikey")
-    reviewer_model = reviewer_configuration.get("model") or ""
-
-    # Append the JSON-output template to the reviewer's prompt at runtime. The user
-    # who authored the reviewer bridge doesn't need to know about the JSON contract;
-    # we enforce it here so parse_reviewer_json can reliably extract the verdict.
-    base_prompt = reviewer_configuration.get("prompt") or ""
-    reviewer_configuration["prompt"] = base_prompt + REVIEWER_JSON_TEMPLATE
-
-    # Streaming: if a parent streamer is supplied, let the reviewer stream its
-    # tokens onto the same SSE connection. Otherwise force non-streaming so we
-    # can buffer the full response to parse the JSON verdict.
-    use_streaming = streamer is not None
-    reviewer_configuration["stream"] = use_streaming
-    # Reviewer is a single-shot judge: don't carry the main agent's conversation,
-    # GPT-memory, or thread history into its call.
-    reviewer_configuration.pop("conversation", None)
-
-    model_config, custom_config, model_output_config = await load_model_configuration(
-        reviewer_model, reviewer_configuration, reviewer_service
-    )
-    custom_config = await configure_custom_settings(
-        model_config["configuration"], custom_config, reviewer_service
-    )
-    custom_config["stream"] = use_streaming
-
-    reviewer_parsed_data = {
-        "configuration": reviewer_configuration,
-        "apikey": reviewer_apikey,
-        "variables": reviewer_cfg.get("variables") or {},
-        "user": review_user_message,
-        "original_user": review_user_message,
-        "org_id": parsed_data.get("org_id"),
-        "bridge_id": reviewer_bridge_id,
-        "bridge": reviewer_cfg.get("bridge"),
-        "thread_id": parsed_data.get("thread_id"),
-        "sub_thread_id": parsed_data.get("sub_thread_id"),
-        "model": reviewer_model,
-        "service": reviewer_service,
-        "is_playground": True,  # suppress intermediate sendResponse leaks to client
-        "template": reviewer_cfg.get("template"),
-        "response_format": {"type": "default"},
-        "execution_time_logs": [],
-        "variables_path": reviewer_cfg.get("variables_path") or {},
-        "message_id": str(uuid.uuid4()),
-        "bridgeType": reviewer_cfg.get("bridgeType"),
-        "tool_id_and_name_mapping": reviewer_cfg.get("tool_id_and_name_mapping") or {},
-        "reasoning_model": reviewer_cfg.get("reasoning_model", False),
-        "apikey_object_id": reviewer_cfg.get("apikey_object_id"),
-        "images": [],
-        "audios": [],
-        "maximum_iterations": reviewer_cfg.get("maximum_iterations") or 10,
-        "rag_data": reviewer_cfg.get("rag_data"),
-        "name": reviewer_cfg.get("name") or "",
-        "org_name": reviewer_cfg.get("org_name") or "",
-        "built_in_tools": reviewer_cfg.get("built_in_tools") or [],
-        "files": [],
-        "file_data": None,
-        "youtube_url": None,
-        "web_search_filters": reviewer_cfg.get("web_search_filters") or {},
-        "folder_id": reviewer_cfg.get("folder_id"),
-        "owner_id": reviewer_cfg.get("owner_id"),
-        "limit": reviewer_cfg.get("limit"),
-        "is_embed": reviewer_cfg.get("is_embed", False),
-        "user_id": reviewer_cfg.get("user_id"),
-        "api_collection": reviewer_cfg.get("api_collection") or {},
-        "tools_call_data": [],
-        "tokens": {},
-        "usage": {},
-    }
-
-    params = build_service_params(
-        reviewer_parsed_data,
-        custom_config,
-        model_output_config,
-        thread_info=None,
-        timer=timer,
-        memory=None,
-        bridge_configurations=bridge_configurations,
-    )
-    class_obj = await Helper.create_service_handler(params, reviewer_service)
-    # When the parent provides a streamer, override the reviewer's auto-created
-    # streamer so deltas flow to the same SSE connection. Mirrors the A2A
-    # pattern at common.py:292 (_injected_streamer).
-    if use_streaming:
-        class_obj.streamer = streamer
-        class_obj.stream_mode = True
-    result = await class_obj.execute()
-
-    if not isinstance(result, dict):
-        result = {"success": False, "response": {"data": {"content": ""}, "usage": {}}, "historyParams": {}}
-    if not result.get("response"):
-        result["response"] = {"data": {"content": ""}, "usage": {}}
-
-    # The reviewer runs with playground=True (to suppress sendResponse leaks to the
-    # client), but that branch in execute() skips historyParams construction. Build
-    # it explicitly here so the reviewer's conversation_log row gets a proper
-    # AiConfig, model, prompt, etc.
-    if not result.get("historyParams"):
-        try:
-            result["historyParams"] = class_obj.prepare_history_params(
-                result.get("response") or {},
-                result.get("modelResponse") or {},
-                {},
-            )
-        except Exception as exc:
-            logger.error(f"prepare_history_params failed for reviewer: {exc}")
-            result["historyParams"] = {}
-
-    if reviewer_parsed_data.get("type") != "image":
-        reviewer_parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-            reviewer_model, reviewer_service
-        )
-        result.setdefault("response", {}).setdefault("usage", {})
-        result["response"]["usage"]["cost"] = reviewer_parsed_data["tokens"].get("total_cost") or 0
-
-    latency = create_latency_object(timer, params)
-    # Honor the actual success flag from execute() — passing success=True
-    # unconditionally would mask soft failures and skip the error field on the
-    # dataset row, leaving us with a saved reviewer log that has no error.
-    reviewer_success = bool(result.get("success", True))
-    reviewer_error = result.get("error") if not reviewer_success else None
-    update_usage_metrics(
-        reviewer_parsed_data,
-        params,
-        latency,
-        result=result if reviewer_success else None,
-        error=reviewer_error,
-        success=reviewer_success,
-    )
-
-    tokens = _read_usage_tokens(reviewer_parsed_data["usage"])
-    return result, reviewer_parsed_data, tokens, latency, params
-
-
-async def _rerun_main_agent(
-    parsed_data,
-    timer,
-    thread_info,
-    memory,
-    bridge_configurations,
-    streamer=None,
-):
-    """
-    Re-run the main agent. The caller is responsible for setting up the message
-    structure: parsed_data["user"] (the latest user turn — typically the reviewer's
-    feedback) and parsed_data["configuration"]["conversation"] (the prior turns,
-    including each prior round's user/assistant pair).
-
-    Disables fallback and A2A transfers for re-runs to keep the blast radius
-    bounded and token accounting honest.
-
-    If `streamer` is provided, the re-run streams its tokens onto the same SSE
-    connection as the original main-agent stream — emit_done is owned by the
-    parent finalizer and is not called here.
-    """
-    use_streaming = streamer is not None
-    parsed_data["configuration"]["stream"] = use_streaming
-
-    model_config, custom_config, model_output_config = await load_model_configuration(
-        parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
-    )
-    custom_config = await configure_custom_settings(
-        model_config["configuration"], custom_config, parsed_data["service"]
-    )
-    custom_config["stream"] = use_streaming
-
-    params = build_service_params(
-        parsed_data,
-        custom_config,
-        model_output_config,
-        thread_info,
-        timer,
-        memory,
-        bridge_configurations,
-    )
-
-    class_obj = await Helper.create_service_handler(params, parsed_data["service"])
-    if use_streaming:
-        class_obj.streamer = streamer
-        class_obj.stream_mode = True
-    result = await class_obj.execute()
-
-    if not isinstance(result, dict):
-        result = {"success": False, "response": {"data": {"content": ""}, "usage": {}}, "historyParams": {}}
-    if not result.get("response"):
-        result["response"] = {"data": {"content": ""}, "usage": {}}
-
-    # Strip any transfer_agent_config so the caller doesn't think a re-run is also
-    # an A2A transfer (we explicitly disable A2A on re-runs).
-    result.pop("transfer_agent_config", None)
-
-    if parsed_data.get("type") != "image":
-        parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-            parsed_data["model"], parsed_data["service"]
-        )
-        result["response"].setdefault("usage", {})
-        result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
-
-    latency = create_latency_object(timer, params)
-    return result, params, latency
 
 
 async def run_review_loop(
@@ -472,14 +60,23 @@ async def run_review_loop(
     Run up to MAX_REVIEW_ROUNDS rounds of review-then-revise.
 
     Returns (final_main_result, reviewer_summary). The reviewer_summary is None when
-    no reviewer is configured, otherwise a dict with the data needed to publish the
-    reviewer's own conversation_log row.
+    no reviewer is configured, otherwise a dict describing the loop outcome (used
+    for logging; callers discard it today).
+
+    Persistence: every reviewer round (1..N) is published as its own queue message
+    and saved as a separate conversation_log row, all under the main agent's
+    thread_id and sub_thread_id. Intermediate rounds publish a history-only message;
+    the final round publishes a full payload via make_request_data_and_publish_sub_queue
+    so webhook/memory/validateResponse side-effects fire ONCE per main turn (not
+    once per round).
 
     Side effects:
     - Mutates parsed_data["usage"] so its token fields reflect the SUM of all main
       agent attempts (round 1 + retries). The caller's existing publish path then
-      stores the summed totals in conversation_logs.
-    - Adds review_meta into result["historyParams"]["AiConfig"] for observability.
+      stores the summed totals in the main agent's conversation_log row.
+    - Adds review_meta = {rounds, passed} into result["historyParams"]["AiConfig"]
+      for observability on the main agent's row. Each reviewer row carries its
+      own review_meta = {round_number, passed, error?} for that specific round.
 
     If `streamer` is provided (i.e. the user requested SSE streaming), reviewer
     and re-run calls stream their tokens onto the same SSE connection. Phase
@@ -490,6 +87,13 @@ async def run_review_loop(
     reviewer_bridge_id = parsed_data.get("_reviewer_bridge_id") or ""
     if not reviewer_bridge_id:
         return main_result, None
+
+    # Per-session reviewer sub_thread_id. All rounds (1..N) of THIS review loop
+    # share it, so they group together in conversation_logs as one session.
+    # Each main-agent turn invocation of run_review_loop mints a fresh one, so
+    # reviewer rows from different turns don't co-mingle. thread_id stays as
+    # the main agent's so reviewer rows live alongside the main thread.
+    reviewer_sub_thread_id = str(uuid.uuid4())
 
     # Non-terminal agents in an A2A chain return early at common.py:365 (after the
     # transfer_agent_config branch), so any frame that reaches this loop is by
@@ -509,22 +113,37 @@ async def run_review_loop(
     # Snapshot main-agent round-1 tokens (already accumulated into parsed_data["usage"]
     # by the upstream update_usage_metrics call).
     summed_main_tokens = _read_usage_tokens(parsed_data["usage"])
-    reviewer_tokens_accum = _zero_tokens()
+    reviewer_tokens_accum = _zero_tokens()  # only used for the returned summary
 
     main_response_text = _extract_response_text(main_result)
-    last_reviewer_result = None
-    last_reviewer_parsed_data = None
-    last_reviewer_latency = None
-    last_reviewer_params = None
     last_verdict = {"passed": False, "reason": ""}
-    last_reviewer_error = None  # captured on hard exception OR soft success=False
     rounds_run = 0
+    # Per-round records collected during the loop and published after it. Each
+    # entry holds the full context needed to build that round's history_params,
+    # dataset entry, and queue payload (intermediate vs. final).
+    reviewer_rounds = []
+    # Reviewer's own (user, assistant) pairs accumulated across rounds. Round N
+    # sees rounds 1..N-1 — passed to _call_reviewer as prior_conversation so
+    # the reviewer can refer back to its earlier verdicts (e.g. "I asked for X
+    # last round, has the agent fixed it?"). Round 1 starts empty.
+    reviewer_conversation_pairs = []
 
     for round_num in range(1, MAX_REVIEW_ROUNDS + 1):
         rounds_run = round_num
         review_user_message = _build_review_user_message(
             original_user_query, main_response_text
         )
+        round_record = {
+            "round_num": round_num,
+            "review_user_message": review_user_message,
+            "result": None,
+            "parsed_data": None,
+            "params": None,
+            "tokens": _zero_tokens(),
+            "latency": {},
+            "error": None,
+            "verdict": {"passed": False, "reason": ""},
+        }
 
         if streamer is not None:
             try:
@@ -546,13 +165,16 @@ async def run_review_loop(
                 parsed_data,
                 thread_info,
                 timer,
+                reviewer_sub_thread_id=reviewer_sub_thread_id,
                 streamer=streamer,
+                prior_conversation=reviewer_conversation_pairs,
             )
         except Exception as exc:
             logger.error(f"Reviewer call failed on round {round_num}: {exc}")
-            # Capture the error so a reviewer conversation_log row gets saved
-            # below with status=false and the error string in `error`.
-            last_reviewer_error = str(exc)
+            # Capture the error on the round record so a reviewer
+            # conversation_log row gets saved below with status=false and the
+            # error string in `error`.
+            round_record["error"] = str(exc)
             # Surface the failure to the SSE client so they don't see a silent
             # truncation (e.g. provider 429s on the reviewer call). Wrap in
             # try/except so a streaming-side failure can't shadow the original.
@@ -561,32 +183,36 @@ async def run_review_loop(
                     await streamer.emit_error(f"Reviewer call failed on round {round_num}: {exc}")
                 except Exception as emit_exc:
                     logger.error(f"emit_error(reviewer_failed) failed: {emit_exc}")
+            reviewer_rounds.append(round_record)
             # Abort the review loop on hard failure — keep the latest main response
             # so the user still gets an answer.
             break
 
+        round_record["result"] = reviewer_result
+        round_record["parsed_data"] = reviewer_parsed_data
+        round_record["params"] = round_params
+        round_record["tokens"] = round_tokens
+        round_record["latency"] = round_latency
         _add_tokens(reviewer_tokens_accum, round_tokens)
-        last_reviewer_result = reviewer_result
-        last_reviewer_parsed_data = reviewer_parsed_data
-        last_reviewer_latency = round_latency
-        last_reviewer_params = round_params
 
         # Soft failure: execute() returned success=False (provider error,
         # apikey limit, etc). Capture the error and stop the loop so we save
         # the reviewer's failed row instead of looping into re-runs based on a
         # bogus parsed verdict.
         if not reviewer_result.get("success", True):
-            last_reviewer_error = (
+            round_record["error"] = (
                 reviewer_result.get("error")
                 or reviewer_result.get("response", {}).get("error")
                 or "<reviewer call returned success=false>"
             )
             logger.error(
-                f"Reviewer round {round_num} returned soft failure: {last_reviewer_error}"
+                f"Reviewer round {round_num} returned soft failure: {round_record['error']}"
             )
+            reviewer_rounds.append(round_record)
             break
 
         verdict = parse_reviewer_json(_extract_response_text(reviewer_result))
+        round_record["verdict"] = verdict
         last_verdict = verdict
 
         if streamer is not None:
@@ -601,11 +227,30 @@ async def run_review_loop(
                 logger.error(f"emit_review_phase(reviewer_done) failed: {exc}")
 
         if verdict["passed"]:
+            reviewer_rounds.append(round_record)
             break
 
         if round_num == MAX_REVIEW_ROUNDS:
             # Max attempts hit — keep the most recent main response.
+            reviewer_rounds.append(round_record)
             break
+
+        # Append the record BEFORE attempting the main rerun so that if the
+        # rerun fails, this round is still part of reviewer_rounds and gets
+        # treated as the final round (carrying side-effects on publish).
+        reviewer_rounds.append(round_record)
+
+        # Accumulate this round's (review prompt, reviewer verdict) into the
+        # reviewer's own conversation so the NEXT reviewer call sees its prior
+        # rounds. The assistant turn carries the reviewer's full text output
+        # (including the JSON verdict) — it's what the model itself produced,
+        # so feeding it back as-is keeps continuity natural.
+        reviewer_conversation_pairs.append(
+            {"role": "user", "content": review_user_message}
+        )
+        reviewer_conversation_pairs.append(
+            {"role": "assistant", "content": _extract_response_text(reviewer_result) or ""}
+        )
 
         # Build the multi-turn conversation for the next main-agent call:
         #   developer + original_conversation
@@ -653,6 +298,8 @@ async def run_review_loop(
                 except Exception as emit_exc:
                     logger.error(f"emit_error(rerun_failed) failed: {emit_exc}")
             # Keep the previous main response; abort further review rounds.
+            # The current round's record was already appended above so it
+            # becomes the loop's final round and publishes with side-effects.
             break
 
         # Update parsed_data["usage"] with the new attempt's tokens, then accumulate
@@ -672,8 +319,9 @@ async def run_review_loop(
         main_result = new_main_result
         main_response_text = _extract_response_text(main_result)
 
-    # Stamp review_meta onto the main agent's historyParams so it shows up in the
-    # main conversation_log row's AiConfig blob.
+    # Stamp aggregate review_meta onto the main agent's historyParams so it
+    # shows up in the main conversation_log row's AiConfig blob. Per-round
+    # review_meta lives on each reviewer row's AiConfig (built below).
     history_params = main_result.get("historyParams") or {}
     ai_config = history_params.get("AiConfig") or {}
     if isinstance(ai_config, dict):
@@ -685,146 +333,58 @@ async def run_review_loop(
         history_params["AiConfig"] = ai_config
     main_result["historyParams"] = history_params
 
-    # If we have neither a successful reviewer call NOR an error to report, no
-    # reviewer row is needed (e.g. reviewer_bridge_id was set but the loop
-    # bailed out before the very first call ever ran).
-    if last_reviewer_result is None and last_reviewer_parsed_data is None and not last_reviewer_error:
+    if not reviewer_rounds:
         return main_result, None
-
-    # The reviewer gets its own sub_thread namespace so its conversation_log row
-    # and metrics aren't co-mingled with the main agent's. Deterministic naming
-    # (reviewer_<main_sub_thread>) means follow-up turns within the same main
-    # sub_thread reuse one reviewer sub_thread.
-    main_sub_thread_id = parsed_data.get("sub_thread_id")
-    reviewer_sub_thread_id = (
-        f"reviewer_{main_sub_thread_id}" if main_sub_thread_id else str(uuid.uuid4())
-    )
 
     reviewer_cfg = bridge_configurations.get(reviewer_bridge_id, {}) or {}
 
-    # Pin the reviewer's history shape so process_background_tasks can build a
-    # standalone conversation_log row from it. On hard error (no reviewer call
-    # ever returned) we synthesize a minimal historyParams from the reviewer's
-    # bridge config so the saved row still has model/service/AiConfig/prompt.
-    # The `user` field on the reviewer's saved row reflects what the reviewer
-    # LLM actually received: the templated message ("User's original query:\n
-    # ...\n\nMain agent's response:\n...\n\nReview ..."), NOT the bare user
-    # query. This makes the saved history meaningful for debugging the review
-    # loop — you can see exactly what was put in front of the reviewer.
-    final_review_user_message = _build_review_user_message(
-        original_user_query, main_response_text
-    )
+    # Publish each round in order. Rounds 1..N-1 use a minimal history-only
+    # message (no side-effects). The final round (the last entry in
+    # reviewer_rounds, regardless of why the loop terminated) publishes the
+    # full make_request_data_and_publish_sub_queue payload so webhook/memory/
+    # validateResponse fire ONCE per main turn.
+    last_idx = len(reviewer_rounds) - 1
+    for idx, record in enumerate(reviewer_rounds):
+        is_final = idx == last_idx
+        round_history_params = _build_reviewer_history_params_for_round(
+            record, parsed_data, reviewer_cfg, reviewer_bridge_id, reviewer_sub_thread_id
+        )
+        round_dataset_entry = _build_reviewer_dataset_entry_for_round(
+            record, parsed_data, reviewer_cfg, round_history_params
+        )
+        try:
+            history_payload = build_history_and_metrics_payload(
+                [round_dataset_entry],
+                round_history_params,
+                (record["parsed_data"].get("version_id") if record["parsed_data"] else None)
+                or reviewer_cfg.get("version_id"),
+            )
+        except Exception as exc:
+            logger.error(
+                f"Failed to build history payload for reviewer round {record['round_num']}: {exc}"
+            )
+            continue
 
-    if last_reviewer_result is not None:
-        reviewer_history_params = dict(last_reviewer_result.get("historyParams") or {})
-    else:
-        reviewer_cfg_configuration = reviewer_cfg.get("configuration") or {}
-        reviewer_history_params = {
-            "thread_id": parsed_data.get("thread_id"),
-            "sub_thread_id": reviewer_sub_thread_id,
-            "user": final_review_user_message,
-            "message": "",
-            "model": reviewer_cfg_configuration.get("model", ""),
-            "service": reviewer_cfg.get("service", ""),
-            "bridge_id": reviewer_bridge_id,
-            "AiConfig": reviewer_cfg_configuration,
-            "prompt": reviewer_cfg_configuration.get("prompt", ""),
-            "channel": "chat",
-            "type": "assistant",
-            "actor": "user",
-            "tools": {},
-            "chatbot_message": "",
-            "tools_call_data": [],
-            "message_id": str(uuid.uuid4()),
-        }
+        await _publish_reviewer_round(
+            history_payload=history_payload,
+            reviewer_parsed_data=record["parsed_data"],
+            reviewer_result=record["result"],
+            reviewer_params=record["params"],
+            is_final=is_final,
+            bridge_id=reviewer_bridge_id,
+            round_num=record["round_num"],
+            error=record["error"],
+        )
 
-    if last_reviewer_parsed_data is not None:
-        last_reviewer_parsed_data["sub_thread_id"] = reviewer_sub_thread_id
-
-    reviewer_history_params["parent_id"] = parsed_data.get("bridge_id")
-    reviewer_history_params["child_id"] = None
-    reviewer_history_params["thread_id"] = parsed_data.get("thread_id")
-    reviewer_history_params["sub_thread_id"] = reviewer_sub_thread_id
-    reviewer_history_params["org_id"] = parsed_data.get("org_id")
-    # Force `user` to the latest-round templated message. prepare_history_params
-    # populates this from self.original_user (which we set to review_user_message
-    # in _call_reviewer) so it would normally already be correct — but on
-    # synthesized hard-error rows it isn't, and pinning it here keeps both
-    # branches consistent regardless of which round produced the saved row.
-    reviewer_history_params["user"] = final_review_user_message
-    if last_reviewer_error:
-        # build_history_and_metrics_payload reads `history_params.error` only
-        # when dataset[0].success is True. We mirror it here so the field is
-        # present regardless of which branch the consumer hits.
-        reviewer_history_params["error"] = last_reviewer_error
-
-    reviewer_ai_config = reviewer_history_params.get("AiConfig") or {}
-    if isinstance(reviewer_ai_config, dict):
-        reviewer_ai_config = dict(reviewer_ai_config)
-        review_meta = {
-            "rounds": rounds_run,
-            "passed": bool(last_verdict.get("passed")),
-            "target_main_message_id": parsed_data.get("message_id"),
-        }
-        if last_reviewer_error:
-            review_meta["error"] = last_reviewer_error
-        reviewer_ai_config["review_meta"] = review_meta
-        reviewer_history_params["AiConfig"] = reviewer_ai_config
-
-    # Build the dataset entry. Either start from the reviewer's tracked usage
-    # (if at least one call landed) or synthesize a minimal one. Either way,
-    # final tokens are the summed totals across all rounds.
-    if last_reviewer_parsed_data is not None:
-        reviewer_dataset_entry = dict(last_reviewer_parsed_data.get("usage") or {})
-    else:
-        reviewer_dataset_entry = {
-            "orgId": parsed_data.get("org_id"),
-            "service": reviewer_history_params.get("service", ""),
-            "model": reviewer_history_params.get("model", ""),
-            "apikey_object_id": reviewer_cfg.get("apikey_object_id"),
-            "variables": {},
-            "latency": "{}",
-        }
-
-    reviewer_dataset_entry["inputTokens"] = reviewer_tokens_accum["input"]
-    reviewer_dataset_entry["outputTokens"] = reviewer_tokens_accum["output"]
-    reviewer_dataset_entry["total_tokens"] = reviewer_tokens_accum["total"]
-    reviewer_dataset_entry["expectedCost"] = reviewer_tokens_accum["expected_cost"]
-
-    if last_reviewer_error:
-        # Critical: dataset[0].success=False + dataset[0].error=<msg> is what
-        # build_history_and_metrics_payload uses to populate the row's `error`
-        # column and `status` flag. Without this the saved row would mask the
-        # failure as a successful reviewer pass.
-        reviewer_dataset_entry["success"] = False
-        reviewer_dataset_entry["error"] = last_reviewer_error
-
+    last_record = reviewer_rounds[-1]
     reviewer_summary = {
         "rounds": rounds_run,
         "passed": bool(last_verdict.get("passed")),
         "final_reason": last_verdict.get("reason", ""),
-        "error": last_reviewer_error,
+        "error": last_record["error"],
         "tokens": reviewer_tokens_accum,
-        "latency": last_reviewer_latency or {},
-        "history_params": reviewer_history_params,
-        "dataset": [reviewer_dataset_entry],
-        "version_id": (
-            (last_reviewer_parsed_data.get("version_id") if last_reviewer_parsed_data else None)
-            or reviewer_cfg.get("version_id")
-        ),
+        "latency": last_record["latency"] or {},
         "bridge_id": reviewer_bridge_id,
     }
-
-    # Publish the reviewer's full payload as its own queue message (separate from
-    # the main agent's process_background_tasks publish). Mirrors the main
-    # agent's publish shape so the reviewer's sub_thread, metrics, validation,
-    # and history are saved alongside save_history. Decouples the two saves so
-    # a reviewer-side failure can't block the main agent's history.
-    await _publish_reviewer_data(
-        reviewer_summary,
-        last_reviewer_parsed_data,
-        last_reviewer_params,
-        last_reviewer_result,
-    )
 
     return main_result, reviewer_summary
