@@ -712,6 +712,15 @@ async def run_review_loop(
     # standalone conversation_log row from it. On hard error (no reviewer call
     # ever returned) we synthesize a minimal historyParams from the reviewer's
     # bridge config so the saved row still has model/service/AiConfig/prompt.
+    # The `user` field on the reviewer's saved row reflects what the reviewer
+    # LLM actually received: the templated message ("User's original query:\n
+    # ...\n\nMain agent's response:\n...\n\nReview ..."), NOT the bare user
+    # query. This makes the saved history meaningful for debugging the review
+    # loop — you can see exactly what was put in front of the reviewer.
+    final_review_user_message = _build_review_user_message(
+        original_user_query, main_response_text
+    )
+
     if last_reviewer_result is not None:
         reviewer_history_params = dict(last_reviewer_result.get("historyParams") or {})
     else:
@@ -719,7 +728,7 @@ async def run_review_loop(
         reviewer_history_params = {
             "thread_id": parsed_data.get("thread_id"),
             "sub_thread_id": reviewer_sub_thread_id,
-            "user": original_user_query,
+            "user": final_review_user_message,
             "message": "",
             "model": reviewer_cfg_configuration.get("model", ""),
             "service": reviewer_cfg.get("service", ""),
@@ -743,7 +752,12 @@ async def run_review_loop(
     reviewer_history_params["thread_id"] = parsed_data.get("thread_id")
     reviewer_history_params["sub_thread_id"] = reviewer_sub_thread_id
     reviewer_history_params["org_id"] = parsed_data.get("org_id")
-    reviewer_history_params["user"] = original_user_query
+    # Force `user` to the latest-round templated message. prepare_history_params
+    # populates this from self.original_user (which we set to review_user_message
+    # in _call_reviewer) so it would normally already be correct — but on
+    # synthesized hard-error rows it isn't, and pinning it here keeps both
+    # branches consistent regardless of which round produced the saved row.
+    reviewer_history_params["user"] = final_review_user_message
     if last_reviewer_error:
         # build_history_and_metrics_payload reads `history_params.error` only
         # when dataset[0].success is True. We mirror it here so the field is
