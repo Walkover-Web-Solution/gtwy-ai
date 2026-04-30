@@ -24,7 +24,6 @@ from src.services.session_manager import (
 from src.services.utils.common_utils import (
     create_latency_object,
     process_background_tasks,
-    process_background_tasks_for_playground,
     update_usage_metrics,
 )
 

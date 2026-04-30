@@ -888,6 +888,40 @@ async def process_background_tasks(
     if parsed_data.get("mode") == "plan" and not parsed_data.get("action"):
         await _save_plan_from_result(parsed_data, result)
 
+    # Playground testcase handling
+    testcase_data = parsed_data.get("testcase_data", {})
+    if testcase_data:
+        from bson import ObjectId
+        from src.controllers.testcase_controller import handle_testcase
+        try:
+            if testcase_data.get("testcase_id"):
+                async def update_testcase_background():
+                    try:
+                        await handle_testcase(result, parsed_data, False)
+                    except Exception as e:
+                        logger.error(f"Error updating testcase in background: {str(e)}")
+                asyncio.create_task(update_testcase_background())
+            else:
+                new_testcase_id = str(ObjectId())
+                result["response"]["testcase_id"] = new_testcase_id
+                parsed_data["testcase_data"]["testcase_id"] = new_testcase_id
+                channel_id = f"{parsed_data.get('org_id')}_{parsed_data.get('bridge_id')}_{parsed_data.get('version_id')}"
+                playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
+                await sendResponse(
+                    playground_response_format,
+                    parsed_data["testcase_data"],
+                    success=True,
+                    variables=parsed_data.get("variables", {}),
+                )
+                async def create_testcase_background():
+                    try:
+                        await handle_testcase(result, parsed_data, True)
+                    except Exception as e:
+                        logger.error(f"Error creating testcase in background: {str(e)}")
+                asyncio.create_task(create_testcase_background())
+        except Exception as e:
+            logger.error(f"Error processing playground testcase: {str(e)}")
+
     orchestrator_flag = parsed_data.get("orchestrator_flag") or parsed_data.get("body", {}).get("orchestrator_flag")
 
     is_transfer_chain = (
@@ -1437,59 +1471,6 @@ async def add_files_to_parse_data(thread_id, sub_thread_id, bridge_id):
     return []
 
 
-async def process_background_tasks_for_playground(result, parsed_data):
-    from bson import ObjectId
-
-    from src.controllers.testcase_controller import handle_playground_testcase
-
-    try:
-        testcase_data = parsed_data.get("testcase_data", {})
-        if not testcase_data:
-            return
-
-        # If testcase_id exists, update in background and return immediately
-        if testcase_data.get("testcase_id"):
-            Flag = False
-
-            # Update testcase in background (async task)
-            async def update_testcase_background():
-                try:
-                    await handle_playground_testcase(result, parsed_data, Flag)
-                except Exception as e:
-                    logger.error(f"Error updating testcase in background: {str(e)}")
-
-            asyncio.create_task(update_testcase_background())
-
-        else:
-            # Generate testcase_id immediately and add to response
-            new_testcase_id = str(ObjectId())
-            result["response"]["testcase_id"] = new_testcase_id
-            parsed_data["testcase_data"]["testcase_id"] = new_testcase_id
-            channel_id = f"{parsed_data.get('org_id')}_{parsed_data.get('bridge_id')}_{parsed_data.get('version_id')}"
-            playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
-            if playground_response_format:
-                await sendResponse(
-                    playground_response_format,
-                    parsed_data["testcase_data"],
-                    success=True,
-                    variables=parsed_data.get("variables", {}),
-                )
-
-            # Add the generated ID to testcase_data for the background task
-
-            # Save testcase data in background using the same function
-            async def create_testcase_background():
-                try:
-                    Flag = True
-                    await handle_playground_testcase(result, parsed_data, Flag)
-                except Exception as e:
-                    logger.error(f"Error creating testcase in background: {str(e)}")
-
-            asyncio.create_task(create_testcase_background())
-
-    except Exception as e:
-        logger.error(f"Error processing playground testcase: {str(e)}")
-
 
 async def update_cost_and_last_used(parsed_data):
     try:
@@ -1732,7 +1713,6 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         await process_background_tasks(
             parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
         )
-        await process_background_tasks_for_playground(result, parsed_data)
 
         if class_obj.streamer:
             model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}

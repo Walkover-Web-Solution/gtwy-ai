@@ -75,7 +75,7 @@ async def get_all_testcases_controller(bridge_id):
         return JSONResponse(status_code=400, content={"success": False, "error": str(error)})
 
 
-async def handle_playground_testcase(result, parsed_data, Flag):
+async def handle_testcase(result, parsed_data, Flag):
     """Handle testcase data from playground - create or update testcase"""
     try:
         # Extract expected response from result

@@ -33,7 +33,6 @@ from src.services.utils.common_utils import (
     prepare_prompt,
     process_background_tasks,
     process_background_tasks_for_error,
-    process_background_tasks_for_playground,
     process_variable_state,
     restructure_json_schema,
     validate_json_schema_configuration,
@@ -550,18 +549,7 @@ async def chat(request_body):
             # Refresh client-visible cost field after summing rounds.
             result.setdefault("response", {}).setdefault("usage", {})
             result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
-
-        # Send data to playground (after review so playground sees final response)
-        if parsed_data.get("is_playground") and parsed_data.get("body", {}).get("bridge_configurations", {}).get(
-            "playground_response_format"
-        ):
-            await sendResponse(
-                parsed_data["body"]["bridge_configurations"]["playground_response_format"],
-                result["response"],
-                success=True,
-                variables=parsed_data.get("variables", {}),
-            )
-
+        
         # Create latency object using utility function
         latency = create_latency_object(timer, params)
         if result.get("response") and result["response"].get("data"):
@@ -604,8 +592,6 @@ async def chat(request_body):
                         parsed_data.get("testcase_data", {}), result, parsed_data
                     )
                     result["response"]["testcase_result"] = testcase_result
-            await process_background_tasks_for_playground(result, parsed_data)
-        
 
         # Save agent bridge_id to Redis for 3 days (259200 seconds)
         thread_id = parsed_data.get("thread_id")
