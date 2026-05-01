@@ -11,7 +11,7 @@ class Queue3(BaseQueue):
         return cls._instance
 
     def __init__(self):
-        queue_name = Config.METRICS_QUEUE_NAME or f"AI-MIDDLEWARE-METRICS-QUEUE-{Config.ENVIROMENT}"
+        queue_name = Config.METRICS_QUEUE_NAME or f"AI-MIDDLEWARE-METRICS-QUEUE-{Config.ENVIRONMENT}"
         super().__init__(queue_name)
         print("Queue3 Metrics Service Initialized")
 
