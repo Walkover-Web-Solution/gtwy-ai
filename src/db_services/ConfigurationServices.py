@@ -714,12 +714,63 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         }
                     }
                 },
+                # Stage 8b: Lookup folder post_tool from apicalls collection
+                {
+                    "$lookup": {
+                        "from": "apicalls",
+                        "let": {
+                            "post_tool_id_obj": {
+                                "$cond": [
+                                    {"$ne": ["$config.post_tool_id", None]},
+                                    {
+                                        "$convert": {
+                                            "input": "$config.post_tool_id",
+                                            "to": "objectId",
+                                            "onError": None,
+                                            "onNull": None,
+                                        }
+                                    },
+                                    None,
+                                ]
+                            }
+                        },
+                        "pipeline": [
+                            {"$match": {"$expr": {"$eq": ["$_id", "$$post_tool_id_obj"]}}},
+                            {
+                                "$addFields": {
+                                    "_id": {"$toString": "$_id"},
+                                    "bridge_ids": {
+                                        "$map": {
+                                            "input": "$bridge_ids",
+                                            "as": "bid",
+                                            "in": {"$toString": "$$bid"},
+                                        }
+                                    },
+                                }
+                            },
+                        ],
+                        "as": "folder_post_tool_docs",
+                    }
+                },
+                # Stage 8c: Extract folder_post_tool
+                {
+                    "$addFields": {
+                        "folder_post_tool": {
+                            "$cond": [
+                                {"$gt": [{"$size": "$folder_post_tool_docs"}, 0]},
+                                {"$arrayElemAt": ["$folder_post_tool_docs", 0]},
+                                None,
+                            ]
+                        }
+                    }
+                },
                 # Stage 9: Project folder fields including tools and variables
                 {
                     "$project": {
                         "folder_apikeys": 1,
                         "folder_tools": 1,
                         "folder_pre_tool": 1,
+                        "folder_post_tool": 1,
                         "type": 1,
                         "wrapper_id": 1,
                         "folder_limit": {"$ifNull": ["$folder_limit", 0]},
@@ -729,6 +780,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         "apikey_object_id": 1,
                         "tools_id": "$config.tools_id",
                         "pre_tool_id": "$config.pre_tool_id",
+                        "post_tool_id": "$config.post_tool_id",
                         "variables_path": {"$ifNull": ["$config.variables_path", {}]},
                         "folder_prompt": "$config.prompt",
                     }
@@ -771,6 +823,10 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 if folder_pre_tool_id and folder_pre_tool_id not in bridge_data["pre_tools"]:
                     bridge_data["pre_tools"].append(folder_pre_tool_id)
                     bridge_data["pre_tools_data"].append(folder_pre_tool)
+
+            # Merge folder_post_tool into bridge_data
+            if folder_result and folder_result[0].get("folder_post_tool"):
+                bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
 
             # Merge folder variables_path into bridge's variables_path
             if folder_result and folder_result[0].get("variables_path"):
@@ -899,40 +955,6 @@ async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org
 
     await delete_in_cache(f"{redis_keys['bridge_data_with_tools_']}{cache_key}")
     return {"success": True, "result": updated_bridge}
-
-
-async def save_sub_thread_id(
-    org_id, thread_id, sub_thread_id, display_name, bridge_id, current_time
-):  # bridge_id is now a required parameter
-    try:
-        # Build update data with both $set and $setOnInsert in single operation
-        update_data = {
-            "$set": {"bridge_id": bridge_id},
-            "$setOnInsert": {
-                "org_id": org_id,
-                "thread_id": thread_id,
-                "sub_thread_id": sub_thread_id,
-                "created_at": current_time,
-            },
-        }
-
-        # Add display_name to $set if provided
-        if display_name is not None and isinstance(display_name, str):
-            update_data["$set"]["display_name"] = display_name
-
-        result = await threadsModel.find_one_and_update(
-            {"org_id": org_id, "thread_id": thread_id, "sub_thread_id": sub_thread_id, "bridge_id": bridge_id},
-            update_data,
-            upsert=True,
-            return_document=True,
-        )
-        return {
-            "success": True,
-            "message": f"sub_thread_id and bridge_id saved successfully {result}",  # Updated success message
-        }
-    except Exception as error:
-        logger.error(f"Error in save_sub_thread_id: {error}")
-        raise error
 
 
 async def get_agents_data(slug_name, user_email):

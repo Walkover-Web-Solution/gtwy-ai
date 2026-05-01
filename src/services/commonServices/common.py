@@ -25,6 +25,7 @@ from src.services.utils.common_utils import (
     filter_missing_vars,
     handle_agent_transfer,
     handle_fine_tune_model,
+    handle_post_tool,
     handle_pre_tools,
     initialize_timer,
     load_model_configuration,
@@ -36,7 +37,7 @@ from src.services.utils.common_utils import (
     process_variable_state,
     restructure_json_schema,
     validate_json_schema_configuration,
-    setup_agent_pre_tools,
+    setup_agent_tools,
     update_usage_metrics,
     process_batch_background_tasks,
     update_cost_usage_and_apikey_status_in_background,
@@ -171,8 +172,12 @@ async def chat(request_body):
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
         
-        # Setup pre_tools for the current agent with its own variables
-        setup_agent_pre_tools(parsed_data, bridge_configurations)
+        # Setup pre_tools and post_tool for the current agent with its own variables
+        current_agent_id = parsed_data.get("bridge_id")
+        pre_tools = bridge_configurations.get(current_agent_id, {}).get("pre_tools_data", [])
+        post_tool = bridge_configurations.get(current_agent_id, {}).get("post_tool_data", {})
+        parsed_data["pre_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, pre_tools)
+        parsed_data["post_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, post_tool)
         await apply_prompt_wrapper(parsed_data)
 
         # Initialize or retrieve transfer_request_id for tracking transfers
@@ -572,7 +577,10 @@ async def chat(request_body):
             )
             result["response"]["testcase_result"] = testcase_result
             if parsed_data.get("body", {}).get("bridge_configurations", {}).get("playground_response_format"):
-                await sendResponse(
+                post_tool_response = await handle_post_tool(parsed_data, result)
+            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                result["response"]["data"]["content"] = post_tool_response.get("response")
+            await sendResponse(
                     parsed_data["body"]["bridge_configurations"]["playground_response_format"],
                     parsed_data["testcase_data"],
                     success=True,

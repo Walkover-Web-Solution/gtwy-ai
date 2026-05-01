@@ -1141,6 +1141,7 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
         plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
         tasks = plan.get("tasks", {})
 
+        replan_queue = []
         for task_id, result in zip(runnable, results):
             task = tasks[task_id]
 
@@ -1200,6 +1201,22 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
                     })
 
         await plan_store.update_plan(plan)
+
+        # If any worker asked for a replan, call the planner now. The next loop
+        # iteration re-reads the plan and runs whatever tasks the planner
+        # produced in place of the pending ones.
+        if replan_queue:
+            for entry in replan_queue:
+                await _trigger_replan(
+                    org_id=org_id,
+                    bridge_id=bridge_id,
+                    thread_id=thread_id,
+                    sub_thread_id=sub_thread_id,
+                    bridge_configurations=bridge_configurations,
+                    parsed_data=parsed_data,
+                    replan_entry=entry,
+                    emit=_emit,
+                )
 
     # Final state check
     plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)

@@ -127,6 +127,8 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
             batch_history_entries.append(conversation_log_data)
 
         if batch_history_entries:
+            batch_history_entries[0]["thread_flag"] = parsed_data.get("thread_flag")
+            batch_history_entries[0]["response_format"] = parsed_data.get("response_format")
             message = make_json_serializable({"save_batch_history": batch_history_entries})
             await sub_queue_obj.publish_message(message)
 
@@ -190,6 +192,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
         "child_id": history_params.get("child_id"),
         "bridge_id": history_params.get("bridge_id"),
         "prompt": history_params.get("prompt"),
+        "is_cached": history_params.get("is_cached", False),
         "plans": history_params.get("plans"),
     }
 
