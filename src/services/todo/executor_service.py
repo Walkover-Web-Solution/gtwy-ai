@@ -10,6 +10,24 @@ from src.services.todo import plan_store
 
 
 TERMINAL_STATUSES = {"completed", "failed", "skipped", "waiting_for_user"}
+
+
+def _get_tasks(plan):
+    """Extract tasks dict from plan. LLM stores tasks as a list under plan['plan']['tasks'];
+    convert to dict keyed by task id so the executor can work with it."""
+    raw = (plan.get("plan") or {}).get("tasks") or []
+    if isinstance(raw, list):
+        return {t["id"]: t for t in raw if isinstance(t, dict) and t.get("id")}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _set_tasks(plan, tasks_dict):
+    """Write tasks dict back into plan['plan']['tasks'] as a list."""
+    if "plan" not in plan or plan["plan"] is None:
+        plan["plan"] = {}
+    plan["plan"]["tasks"] = list(tasks_dict.values())
 # Statuses that should be preserved across replans (the planner is not allowed
 # to delete these). `needs_replan` is intentionally NOT preserved — it's the
 # planner's job to resolve those tasks on the next revision.
@@ -26,42 +44,25 @@ WORKER_RESPONSE_SCHEMA = """
   "error": "error description if failed, else null"
 }"""
 
-WORKER_SYSTEM_PROMPT_TEMPLATE = """You are the EXECUTOR worker for ONE task in a Planner -> Executor pipeline.
+WORKER_SYSTEM_PROMPT_TEMPLATE = """You are a task executor in a Planner→Executor pipeline. Call the assigned tool and return JSON.
 
-Your default behavior: understand the task, prepare correct arguments, then call the assigned tool immediately.
+## Task
+{title}: {task_description}
 
-Task title: {title}
-Task goal: {task_description}
-
-## Execution details from planner
+## Execution Details (exact params from planner — use as-is)
 {execution_details}
 
-## Per-task instructions
-{task_prompt}
+{human_response_block}## Tool
+{tool_list}
 
-{human_response_block}## Rules
-Tool(s) available: {tool_list}
+## Rules
+1. Call the tool immediately using execution_details values. Do not invent missing required values.
+2. On error: retry up to 2× with corrected args.
+3. Still failing or missing required info → return `waiting_for_user` with a clear question in `human_query`.
+4. `failed` only for unrecoverable infrastructure failure after retries.
 
-1. Before calling, quickly verify: task goal, required fields, and value source (execution details, dependency results, user clarification).
-2. Use values from execution details exactly as given; do not invent missing required values.
-3. Call the assigned tool without unnecessary delay once arguments are prepared.
-4. If the tool errors, analyze the error, correct arguments if possible, and retry up to 2 times.
-5. If still not solvable or missing required information, return `waiting_for_user` with a clear `human_query` asking for help.
-6. Use `failed` only for unrecoverable infrastructure issues.
-
-Decision policy based on tool result:
-- Return `completed` when the tool returns a successful and usable result.
-- Return `waiting_for_user` when you need user help: missing inputs, unclear requirements, permission issues, or any problem you cannot resolve. Ask a clear question in `human_query`.
-- Return `failed` only when the system is unavailable after retries (service down, transport outage, repeated timeout/rate-limit).
-
-## Response format
-Return only one valid JSON object (no markdown, no extra text):
-{schema}
-
-Status guide:
-- "completed": task finished successfully.
-- "waiting_for_user": need user help to proceed; include a clear question in `human_query`.
-- "failed": unrecoverable infrastructure failure."""
+## Response (JSON only, no markdown)
+{schema}"""
 
 
 _WORKER_PROMPT_TEMPLATE_CACHE = None
@@ -177,7 +178,6 @@ def _build_worker_system_prompt(task, filtered_tool_names, all_tasks=None, promp
         except Exception:
             return str(value)
 
-    task_prompt = _as_text(task.get("worker_task") or task.get("task_description"))
     execution_details = _as_text(
         task.get("execution_details"),
         default="(none — use task_description and tool schema)",
@@ -198,7 +198,6 @@ def _build_worker_system_prompt(task, filtered_tool_names, all_tasks=None, promp
         "title": task.get("title", ""),
         "task_description": task.get("task_description", ""),
         "execution_details": execution_details,
-        "task_prompt": task_prompt,
         "human_response_block": human_response_block,
         "tool_list": tool_list,
         "schema": WORKER_RESPONSE_SCHEMA,
@@ -696,7 +695,11 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
 
         current_agent_config = bridge_configurations.get(assigned_agent, {})
         if not current_agent_config:
-            return {"success": False, "status": "failed", "error": f"Agent configuration not found for {assigned_agent}"}
+            logger.warning(f"Agent config not found for '{assigned_agent}', falling back to main bridge '{bridge_id}'")
+            assigned_agent = bridge_id
+            current_agent_config = bridge_configurations.get(bridge_id, {})
+        if not current_agent_config:
+            return {"success": False, "status": "failed", "error": f"Agent configuration not found for {bridge_id}"}
 
         # Per-task prompt + tool scoping: copy only what we mutate.
         # Keep a cheap top-level map copy and deep-copy the assigned agent entry
@@ -716,7 +719,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
         scoped_agent_config["prompt"] = _build_worker_system_prompt(
             task,
             filtered_tool_names,
-            plan.get("tasks", {}),
+            _get_tasks(plan),
             prompt_template=worker_prompt_template,
         )
         # Force JSON-object response. Live inside scoped_agent_config because
@@ -724,6 +727,11 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
         # clobbers request_body["configuration"] with primary_config["configuration"];
         # keys placed here survive that merge. parse_request_body then reads
         # body.configuration.response_type into parsed_data.
+        fall_back = (current_agent_config.get("settings") or {}).get("fall_back") or {}
+        if fall_back.get("is_enable") and fall_back.get("model"):
+            scoped_agent_config["model"] = fall_back["model"]       # parsed_data["model"] reads from body.configuration.model
+            if fall_back.get("service"):
+                scoped_agent_entry["service"] = fall_back["service"]  # parsed_data["service"] reads from body.service (top-level)
         scoped_agent_config["response_type"] = {"type": "json_object"}
         if streamer:
             scoped_agent_config["stream"] = True
@@ -908,7 +916,7 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
 
 def _recover_interrupted_in_progress_tasks(plan):
     """Re-queue tasks that were left in_progress after an interrupted run."""
-    tasks = (plan or {}).get("tasks") or {}
+    tasks = _get_tasks(plan or {})
     recovered = []
     for task_id, task in tasks.items():
         if task.get("status") != "in_progress":
@@ -997,8 +1005,14 @@ async def _trigger_replan(org_id, bridge_id, thread_id, sub_thread_id, bridge_co
     if not plan:
         return
 
-    new_tasks = new_plan_obj.get("tasks", {}) or {}
-    existing_tasks = plan.get("tasks", {}) or {}
+    new_plan_data = new_plan_obj.get("plan") or {}
+    raw_new_tasks = new_plan_data.get("tasks") or []
+    if isinstance(raw_new_tasks, list):
+        new_tasks = {t["id"]: t for t in raw_new_tasks if isinstance(t, dict) and t.get("id")}
+    else:
+        new_tasks = raw_new_tasks or {}
+
+    existing_tasks = _get_tasks(plan)
 
     # Guard: if the planner came back with an empty task set, keep the old
     # plan rather than wiping it (same safety net as _save_plan_from_result).
@@ -1011,10 +1025,6 @@ async def _trigger_replan(org_id, bridge_id, thread_id, sub_thread_id, bridge_co
         return
 
     merged_tasks = dict(new_tasks)
-    # Re-inject tasks the planner dropped that must not be lost.
-    # This prevents accidental truncation of remaining work (e.g., task_5..task_7
-    # disappearing after a replan focused on task_3). `needs_replan` is still
-    # intentionally NOT preserved — the planner owns its resolution.
     for tid, old_task in existing_tasks.items():
         if tid in merged_tasks:
             continue
@@ -1023,9 +1033,9 @@ async def _trigger_replan(org_id, bridge_id, thread_id, sub_thread_id, bridge_co
             logger.warning(
                 f"Replan: planner omitted protected task '{tid}' (status={old_task.get('status')}); preserved by patch merge."
             )
-    plan["tasks"] = merged_tasks
-    if new_plan_obj.get("goal"):
-        plan["goal"] = new_plan_obj["goal"]
+    _set_tasks(plan, merged_tasks)
+    if new_plan_data.get("goal"):
+        plan.setdefault("plan", {})["goal"] = new_plan_data["goal"]
     plan["state"] = "executing"
     await plan_store.update_plan(plan)
 
@@ -1074,7 +1084,7 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             "reason": INTERRUPTED_TASK_RECOVERY_NOTE,
         })
 
-    tasks = plan.get("tasks", {})
+    tasks = _get_tasks(plan)
 
     max_iterations = 1000
     iteration = 0
@@ -1084,7 +1094,7 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
         if not plan:
             logger.warning(f"Plan disappeared during execution at iteration {iteration}")
             return finalize_main_agent_metrics(main_agent_metrics)
-        tasks = plan.get("tasks", {})
+        tasks = _get_tasks(plan)
 
         # Check if all tasks are done
         if _is_plan_complete(tasks):
@@ -1112,11 +1122,15 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             await asyncio.sleep(1)
             continue
 
+        logger.info(f"[EXECUTE] Runnable tasks: {runnable}")
         # Mark runnable tasks as in_progress and notify
         for task_id in runnable:
+            task = tasks[task_id]
+            logger.info(f"[EXECUTE] Starting task {task_id}, has human_response: {bool(task.get('human_response'))}")
             tasks[task_id]["status"] = "in_progress"
             tasks[task_id]["started_at"] = time.time()
             await _emit("task_started", {"task_id": task_id, "title": tasks[task_id].get("title", "")})
+        _set_tasks(plan, tasks)
         await plan_store.update_plan(plan)
 
         # Execute runnable tasks in parallel (streamer forwarded for live events)
@@ -1139,7 +1153,7 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
 
         # Process results
         plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
-        tasks = plan.get("tasks", {})
+        tasks = _get_tasks(plan)
 
         replan_queue = []
         for task_id, result in zip(runnable, results):
@@ -1200,6 +1214,7 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
                         "retrying": False,
                     })
 
+        _set_tasks(plan, tasks)
         await plan_store.update_plan(plan)
 
         # If any worker asked for a replan, call the planner now. The next loop
@@ -1227,7 +1242,7 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
             await plan_store.update_plan(plan)
             await _emit("plan_failed", {"state": "failed", "reason": "max_iterations_reached", "plan": plan})
         else:
-            has_failures = any(t["status"] == "failed" for t in plan.get("tasks", {}).values())
+            has_failures = any(t["status"] == "failed" for t in _get_tasks(plan).values())
             plan["state"] = "failed" if has_failures else "completed"
             await plan_store.update_plan(plan)
             await _emit("plan_completed", {"state": plan["state"], "plan": plan})
@@ -1247,16 +1262,21 @@ async def resume_task(org_id, bridge_id, thread_id, sub_thread_id, task_id, huma
     if not plan:
         return {"success": False, "error": "Plan not found"}
 
-    task = plan.get("tasks", {}).get(task_id)
+    tasks = _get_tasks(plan)
+    task = tasks.get(task_id)
     if not task:
         return {"success": False, "error": f"Task {task_id} not found"}
 
     if task["status"] != "waiting_for_user":
         return {"success": False, "error": f"Task {task_id} is not waiting for user input (status: {task['status']})"}
 
+    logger.info(f"[RESPOND] Updating task {task_id}: status waiting_for_user -> pending, human_response set")
     task["human_response"] = human_response
     task["status"] = "pending"
+    task["retry"] = 0
+    _set_tasks(plan, tasks)
     await plan_store.update_plan(plan)
+    logger.info(f"[RESPOND] Task {task_id} updated and saved to DB")
 
     # Save Q&A to session memory so planner doesn't ask again.
     # Scoped per (thread_id, sub_thread_id) to match the plan's scope.

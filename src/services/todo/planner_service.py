@@ -7,70 +7,88 @@ from src.services.prebuilt_prompt_service import get_specific_prebuilt_prompt_wi
 from src.services.todo import plan_store
 
 PLANNER_PROMPT = """
-RoleYou are the Planner Agent — the strategic thinking layer of an Agentic AI Platform.
-Your Job
-* Convert the user’s system prompt and request into a clear, executable plan.
-* Use available tools (including search) to gather information, but do not include search tasks in the plan.
-* Create tasks only after proper research.
-* In update mode, carefully analyze the existing plan. Update only impacted tasks (especially those waiting for user input), not the entire logic unnecessarily.
-* The executor will follow your execution_details, so ensure instructions are precise and complete.
-* Your output replaces the entire plan—update carefully without losing important tasks.
-
-Instructions 
--  Research is YOUR job, not the executor's. If search/information tools are available, use them during planning to fetch internal data the LLM may not know. Resolve what you can before emitting the plan.
-- You should update the plan based on the user’s input. Your output must fully replace the existing plan, so ensure no important tasks are lost.
-- Ask questions when required, based on the user agent’s system prompt not guess the need of task.
-
-Output Rules
-Return only a valid JSON object. No markdown, no commentary, no extra text.
-
-{
-  "goal": "user's original goal in one sentence",
-  "tasks": {
-    "task_1": {
-      "title": "short human-readable title",
-      "task_description": "what this task should accomplish, in plain language",
-      "status": "pending | waiting_for_user",
-      "dependencies": ["task_id", "..."],
-      "assigned_agent": "bridge_id of the agent, or null to use the main agent",
-      "assigned_tool": "name of tool (give correct and same name as in the tool list), or null",
-      "retry": 0,
-      "max_retry": 2,
-      "result": null,
-      "is_error": false,
-      "error": null,
-      "human_query": "single clear question, only when status = waiting_for_user; else null", #No need to add the options here 
-      "human_options": ["option 1", "option 2"], #give a options of the qeustions when available
-      "allow_custom_response": true,
-      "human_response": null,
-      "execution_details": "precise instructions the executor needs executer has only permission for task related tool so give the tool name and parameters properly"
-    }
-  }
-}
 """
 
-def _build_agent_context(parsed_data, bridge_configurations):
-    """Build a context string describing the available agents and tools for the planner."""
+def _has_task_ids_in_message(user_message):
+    """Check if user message contains task IDs in format like 'task_id:task_1' or 'task_id: task_2'"""
+    if not user_message:
+        return False
+    task_pattern = re.compile(r'task_id\s*:\s*task_\d+', re.IGNORECASE)
+    return bool(task_pattern.search(user_message))
+
+
+def _has_question_ids_in_message(user_message):
+    """Check if user message contains question IDs in format like 'question_id:q1'"""
+    if not user_message:
+        return False
+    question_pattern = re.compile(r'question_id\s*:\s*q\d+', re.IGNORECASE)
+    return bool(question_pattern.search(user_message))
+
+
+def _extract_task_answer_pairs(user_message):
+    """Extract task-answer pairs from human-loop message.
+
+    Format: 'task_id:task_1, answer:Use preset...'
+    Returns dict: {"task_1": "Use preset...", "task_2": "answer2", ...}
+    """
+    if not user_message:
+        return {}
+
+    pattern = re.compile(
+        r'task_id\s*:\s*(task_\d+)\s*,\s*answer\s*:\s*([^\n]+?)(?=\s*task_id\s*:|$)',
+        re.IGNORECASE | re.DOTALL
+    )
+    matches = pattern.findall(user_message)
+    return {task_id.strip(): answer.strip() for task_id, answer in matches}
+
+
+def _extract_question_answer_pairs(user_message):
+    """Extract question-answer pairs from human-loop message.
+
+    Format: 'question_id:q1, answer:Gmail\\nquestion_id:q2, answer:Every email'
+    Returns dict: {"q1": "Gmail", "q2": "Every email", ...}
+    """
+    if not user_message:
+        return {}
+
+    pattern = re.compile(
+        r'question_id\s*:\s*(q\d+)\s*,\s*answer\s*:\s*([^\n]+?)(?=\s*question_id\s*:|$)',
+        re.IGNORECASE | re.DOTALL
+    )
+    matches = pattern.findall(user_message)
+    return {q_id.strip(): answer.strip() for q_id, answer in matches}
+
+
+
+def _separate_search_and_other_tools(tools):
+    """Separate tools into search tools and other tools.
+
+    A tool with only a 'search' param goes to search_tools only.
+    A tool with both 'search' and other params goes to both lists.
+    A tool with no 'search' param goes to other_tools only.
+    """
+    search_tools = []
+    other_tools = []
+
+    for tool in tools:
+        properties = tool.get("properties") or {}
+        is_search = "search" in properties
+        has_other_params = "executor" in properties
+        if is_search:
+            search_tools.append(tool)
+        if not is_search or has_other_params:
+            other_tools.append(tool)
+    
+    return search_tools, other_tools
+
+
+def _build_agent_context(parsed_data, bridge_configurations, other_tools=None):
+
     main_bridge_id = parsed_data["bridge_id"]
-    main_config = bridge_configurations.get(main_bridge_id, {})
 
     context_parts = []
 
-    # Main agent info - ONLY TOOLS, NO SYSTEM PROMPT
-    context_parts.append(f"Main Agent (bridge_id: {main_bridge_id}):")
-
-    # Available tools on the main agent
-    tools = main_config.get("configuration", {}).get("tools", [])
-    if tools:
-        tool_names = []
-        for tool in tools:
-            name = tool.get("name") or tool.get("function", {}).get("name", "unknown")
-            desc = tool.get("description") or tool.get("function", {}).get("description", "")
-            tool_names.append(f"  - {name}: {desc[:100]}")
-        context_parts.append("Available Tools:")
-        context_parts.extend(tool_names)
-
-    # Connected agents - ONLY TOOLS, NO SYSTEM PROMPT
+    # Connected agents info
     connected_agents = []
     for bid, config in bridge_configurations.items():
         if bid == main_bridge_id:
@@ -85,56 +103,69 @@ def _build_agent_context(parsed_data, bridge_configurations):
             + (f" | Tools: {tool_summary}" if tool_summary else "")
         )
 
-    if connected_agents:
+    if connected_agents: 
         context_parts.append("Connected Agents:")
         context_parts.extend(connected_agents)
+
+    # Add non-search tools to system prompt for task assignment
+    if other_tools:
+        context_parts.append("\nTools available for task execution (do NOT set assigned_agent for these — they run on the main agent):")
+        for tool in other_tools:
+            name = tool.get("name") or tool.get("function", {}).get("name", "unknown")
+            desc = tool.get("description") or tool.get("function", {}).get("description", "")
+            param_info = tool.get("properties", {})
+            
+            context_parts.append(f"  Tool Name: {name}")
+            context_parts.append(f"  Tool Description: {desc}")
+            context_parts.append(f"  Tool Parameters: {param_info}")
 
     return "\n".join(context_parts)
 
 
 def _build_planner_message(
     user_goal,
-    agent_context=None,
     existing_plan=None,
     user_feedback=None,
-    user_system_prompt=None,
+    is_human_loop=False,
+    is_question_loop=False,
 ):
-    """Build the user message to send to the planner agent."""
+    """Build the user message for the planner agent."""
     parts = []
 
-    if user_system_prompt:
-        parts.append(f"## USER AGENT SYSTEM PROMPT\n{user_system_prompt}")
-        parts.append("\n Use search tools to gather required information related to executions tool call and parameters. Do not add search tasks to the plan. Do not guess any task details.")
+    if existing_plan:
+        if existing_plan.get("questions"):
+            parts.append("\nQuestions:")
+            parts.append(json.dumps(existing_plan["questions"], indent=2, default=str))
+
+        if user_feedback:
+            parts.append(f"\nUser Message: {user_feedback}")
+
+        if is_question_loop:
+            parts.append("\nMark answered questions as 'answered' and continue planning. Do not regenerate the full plan.")
+    else:
+        parts.append(user_goal)
+
+    return "\n".join(parts)
+
+def _build_planner_system_prompt(prompt, agent_context, existing_plan=None, session_memory=None, user_system_prompt=None):
+    system_prompt_parts = []
+
+    # if user_system_prompt:
+    #     system_prompt_parts.append(f"User Agent System Prompt:\n{user_system_prompt}")
+
+    system_prompt_parts.append(f"\nAvailable Agents and Tools:\n{agent_context}")
 
     if existing_plan:
-        # REPLAN FLOW — strong guardrails to keep planner focused
-        plan_json = json.dumps(existing_plan, indent=2, default=str)
-        parts.append(f"\n## CURRENT PLAN\n{plan_json}")
-        parts.append(f"\n## User's client message\n{user_feedback or 'None'}")
-     
-    else:
-        parts.append(f"##  Your message is: \n{user_goal}")
+        if existing_plan.get("plan"):
+            system_prompt_parts.append(
+                "\nPreviously built plan by you (AI):\n"
+                + json.dumps(existing_plan["plan"], indent=2, default=str)
+            )
 
-    return "\n".join(parts)
+    system_prompt_content = "\n".join(system_prompt_parts)
+    final_prompt = (user_system_prompt or "") + "\n" + system_prompt_content
 
-
-def _build_planner_system_prompt(prompt, agent_context, session_memory=None):
-    parts = [prompt, f"\n## AVAILABLE AGENTS AND TOOLS\n{agent_context}"]
-
-    qa_history = (session_memory or {}).get("qa_history") or []
-    if qa_history:
-        answered = [q for q in qa_history if q.get("answer")]
-
-        if answered:
-            parts.append("\n## PREVIOUS USER ANSWERS (from this conversation)")
-            parts.append("You already asked these and have the answers. DO NOT re-ask — reuse the answer:")
-            for qa in answered:
-                q = (qa.get("question") or "")[:200]
-                a = qa.get("answer")
-                parts.append(f"- Q: {q}")
-                parts.append(f"  A: {a}")
-
-    return "\n".join(parts)
+    return final_prompt
 
 
 def _parse_plan_json(content):
@@ -153,7 +184,7 @@ async def _get_planner_prompt_from_db(default_prompt):
         prompt_data = await get_specific_prebuilt_prompt_without_org_service("planner_prompt")
         prompt_override = (prompt_data or {}).get("planner_prompt")
         if isinstance(prompt_override, str) and prompt_override.strip():
-            return prompt_override
+            return default_prompt
     except Exception as err:
         logger.error(f"Error fetching planner_prompt from preBuiltPrompts: {err}")
     return default_prompt
@@ -177,29 +208,58 @@ async def prepare_planner_request(parsed_data, bridge_configurations, custom_con
         parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
     )
 
-    # Build system prompt with agent context + session memory + existing plan context
+    # Check if user message is a human-loop response
+    user_input = parsed_data.get("user", "")
+    has_task_ids = _has_task_ids_in_message(user_input)
+    has_question_ids = _has_question_ids_in_message(user_input)
+
+    # Separate search tools from other tools
+    original_tools = parsed_data.get("configuration", {}).get("tools", [])
+    search_tools, other_tools = _separate_search_and_other_tools(original_tools)
+    
+    # Set planner to use ONLY search tools in its configuration
+    parsed_data.setdefault("configuration", {})["tools"] = search_tools
+    # Also update custom_config directly — it was already built from parsed_data["configuration"]
+    # before prepare_planner_request is called, so parsed_data changes alone won't affect the LLM call.
+    if search_tools:
+        custom_config["tools"] = search_tools
+    else:
+        custom_config.pop("tools", None)
+
+    # Build conversation from history_summary so the planner gets prior context
+    # as a proper conversation message instead of raw JSON blobs from thread history.
+    conversation = []
+    if existing_plan and existing_plan.get("history_summary"):
+        history_summary = existing_plan["history_summary"]
+        if not isinstance(history_summary, str):
+            history_summary = json.dumps(history_summary)
+        conversation = [{"role": "assistant", "content": history_summary}]
+    parsed_data.setdefault("configuration", {})["conversation"] = conversation
+    
+    # Build system prompt with agent context (includes other_tools) + session memory + user system prompt
     db_planner_prompt = await _get_planner_prompt_from_db(PLANNER_PROMPT)
-    agent_context = _build_agent_context(parsed_data, bridge_configurations)
-    planner_prompt = _build_planner_system_prompt(db_planner_prompt, agent_context, session_memory)
+    agent_context = _build_agent_context(parsed_data, bridge_configurations, other_tools)
     original_prompt = (parsed_data.get("configuration") or {}).get("prompt") or ""
+    planner_prompt = _build_planner_system_prompt(db_planner_prompt, agent_context, existing_plan, session_memory, original_prompt)
     parsed_data.setdefault("configuration", {})["prompt"] = planner_prompt
 
     custom_config["response_type"] = {"type": "json_object"}
 
     # Build concise user message; heavy context lives in system prompt
-    user_input = parsed_data.get("user", "")
     if existing_plan:
-        # Update flow
+        # Update flow - pass is_human_loop flag to optimize message format
         parsed_data["user"] = _build_planner_message(
             user_goal=existing_plan.get("goal"),
+            existing_plan=existing_plan,
             user_feedback=user_input,
-            user_system_prompt=original_prompt,
+            is_human_loop=has_task_ids,
+            is_question_loop=has_question_ids,
         )
     else:
         # First-time plan creation: just the user goal
         parsed_data["user"] = _build_planner_message(
             user_goal=user_input,
-            user_system_prompt=original_prompt,
+            is_human_loop=False,
         )
 
 

@@ -59,12 +59,28 @@ async def update_plan(plan):
     await save_plan(plan)
 
 
+def _get_tasks(plan):
+    raw = (plan.get("plan") or {}).get("tasks") or []
+    if isinstance(raw, list):
+        return {t["id"]: t for t in raw if isinstance(t, dict) and t.get("id")}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _set_tasks(plan, tasks_dict):
+    if "plan" not in plan or plan["plan"] is None:
+        plan["plan"] = {}
+    plan["plan"]["tasks"] = list(tasks_dict.values())
+
+
 async def update_task_status(org_id, bridge_id, thread_id, sub_thread_id, task_id, status, result=None, error=None):
     plan = await get_plan(org_id, bridge_id, thread_id, sub_thread_id)
     if not plan:
         return None
 
-    task = plan.get("tasks", {}).get(task_id)
+    tasks = _get_tasks(plan)
+    task = tasks.get(task_id)
     if not task:
         return None
 
@@ -74,6 +90,7 @@ async def update_task_status(org_id, bridge_id, thread_id, sub_thread_id, task_i
     if error is not None:
         task["error"] = error
 
+    _set_tasks(plan, tasks)
     await update_plan(plan)
     return plan
 
@@ -153,7 +170,7 @@ async def _sync_pending_questions_to_session(plan):
     `answer` in history, or tasks with a non-null `human_response` matching
     the question) are left untouched.
     """
-    tasks = (plan or {}).get("tasks") or {}
+    tasks = _get_tasks(plan or {})
     pending_questions = [
         t.get("human_query")
         for t in tasks.values()
