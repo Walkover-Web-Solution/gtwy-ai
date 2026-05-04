@@ -97,6 +97,7 @@ class BaseService:
         self.is_embed = params.get("is_embed")
         self.user_id = params.get("user_id")
         self.api_collection = params.get("api_collection")
+        self.meta = params.get("meta")
         self.tool_call_limit_error = None
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
@@ -303,7 +304,7 @@ class BaseService:
         history_data["response_format"] = self.response_format
         await asyncio.gather(
             sub_queue_obj.publish_message(make_json_serializable({"save_history": [history_data]})),
-            sendResponse(self.response_format, data=response.get("error")),
+            sendResponse(self.response_format, data=response.get("error"), meta=self.meta),
             return_exceptions=True,
         )
 

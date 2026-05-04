@@ -577,6 +577,7 @@ async def chat(request_body):
                 result["response"],
                 success=True,
                 variables=parsed_data.get("variables", {}),
+                meta=parsed_data.get("meta"),
             )
 
             # Process background tasks (handles both transfer and non-transfer cases)
@@ -628,7 +629,7 @@ async def chat(request_body):
             # Create history parameters
             parsed_data["historyParams"] = create_history_params(parsed_data, error, class_obj)
             await sendResponse(
-                parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"]
+                parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
             ) if parsed_data["response_format"]["type"] != "default" else None
             # Process background tasks for error handling
             await process_background_tasks_for_error(parsed_data, error)
@@ -900,7 +901,7 @@ async def image(request_body):
         if result.get("response") and result["response"].get("data"):
             result["response"]["data"]["id"] = parsed_data["message_id"]
         await sendResponse(
-            parsed_data["response_format"], result["response"], success=True, variables=parsed_data.get("variables", {})
+            parsed_data["response_format"], result["response"], success=True, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
         )
         latency = create_latency_object(timer, params)
         if not parsed_data["is_playground"]:
@@ -932,7 +933,7 @@ async def image(request_body):
                 parsed_data, error, class_obj, thread_info if "thread_info" in locals() else None
             )
             await sendResponse(
-                parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"]
+                parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
             ) if parsed_data["response_format"]["type"] != "default" else None
             # Process background tasks for error handling
             await process_background_tasks_for_error(parsed_data, error)

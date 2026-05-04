@@ -126,7 +126,8 @@ class MistralBatch(BaseService):
             "org_id": self.org_id,
             "bridge_id": self.bridge_id,
             "version_id": getattr(self, 'version_id', ''),
-            "thread_id": self.thread_id
+            "thread_id": self.thread_id,
+            "meta": getattr(self, 'meta', None),
         }
         cache_key = f"{redis_keys['batch_']}{batch_job.id}"
         await store_in_cache(cache_key, batch_json, ttl=86400)

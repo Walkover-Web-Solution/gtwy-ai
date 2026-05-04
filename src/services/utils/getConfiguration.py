@@ -258,6 +258,7 @@ async def _prepare_configuration_response(
         "chatbot_auto_answers": chatbot_auto_answers,
         "cache_on": cache_on,
         "richui_templates": result.get("bridges", {}).get("richui_templates"),
+        "meta": bridge_data.get("meta") or bridge_data.get("bridges", {}).get("meta"),
         "reviewer_agent": str(
             result.get("bridges", {}).get("settings", {}).get("reviewer_agent") or ""
         ),

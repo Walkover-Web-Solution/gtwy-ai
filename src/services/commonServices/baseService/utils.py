@@ -213,7 +213,7 @@ async def send_message(cred, data):
         logger.error(f"Unexpected send message error=>, {str(e)}")
 
 
-async def sendResponse(response_format, data, success=False, variables=None):
+async def sendResponse(response_format, data, success=False, variables=None, meta=None):
     if variables is None:
         variables = {}
     data_to_send = {"response" if success else "error": data, "success": success}
@@ -222,6 +222,8 @@ async def sendResponse(response_format, data, success=False, variables=None):
             return await send_message(cred=response_format["cred"], data=data_to_send)
         case "webhook":
             data_to_send["variables"] = variables
+            if meta:
+                data_to_send["meta"] = meta
             return await send_request(**response_format["cred"], method="POST", data=data_to_send)
 
 

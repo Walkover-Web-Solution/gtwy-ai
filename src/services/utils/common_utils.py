@@ -236,6 +236,7 @@ def parse_request_body(request_body):
         "cache_on": body.get("cache_on"),
         "owner_id": state.get("profile", {}).get("owner_id"),
         "richui_templates": body.get("richui_templates", {}),
+        "meta": body.get("meta"),
         "limit": body.get("limit"),
         "is_rerun": body.get("is_rerun", False),
     }
@@ -758,6 +759,7 @@ def build_service_params(
         "is_embed": parsed_data.get("is_embed"),
         "user_id": parsed_data.get("user_id"),
         "api_collection": parsed_data.get("api_collection"),
+        "meta": parsed_data.get("meta"),
     }
 
 
@@ -1132,6 +1134,7 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "gpt_memory_context": parsed_data.get("gpt_memory_context", ""),
         "files": parsed_data.get("files", []),
         "version_id": parsed_data.get("version_id", ""),
+        "meta": parsed_data.get("meta"),
     }
 
 
@@ -1602,7 +1605,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         await class_obj.streamer.close()
                 if not parsed_data.get("is_playground"):
                     await sendResponse(
-                        parsed_data.get("response_format"), str(retry_err), variables=parsed_data.get("variables", {})
+                        parsed_data.get("response_format"), str(retry_err), variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
                     ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
                 if is_nested_stream_call:
                     return {"success": False, "message": str(retry_err), "response": {}}
@@ -1614,7 +1617,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                     await class_obj.streamer.close()
             if not parsed_data.get("is_playground"):
                 await sendResponse(
-                    parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {})
+                    parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
                 ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
             if is_nested_stream_call:
                 return {"success": False, "message": str(original_error), "response": {}}
@@ -1748,6 +1751,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 result["response"],
                 success=True,
                 variables=parsed_data.get("variables", {}),
+                meta=parsed_data.get("meta"),
             )
             await process_background_tasks(
                 parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations

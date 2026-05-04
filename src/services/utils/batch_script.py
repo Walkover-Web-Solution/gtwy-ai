@@ -40,7 +40,8 @@ async def check_batch_status():
             bridge_id = batch_data.get('bridge_id')
             version_id = batch_data.get('version_id')
             thread_id = batch_data.get('thread_id')
-            
+            meta = batch_data.get('meta')
+
             cache_key = f"{redis_keys['batch_']}{batch_id}"
 
             # Try to acquire lock for this batch
@@ -103,7 +104,7 @@ async def check_batch_status():
                             webhook_error = None
                             if webhook.get('url') is not None:
                                 try:
-                                    webhook_response = await sendResponse(response_format, data=formatted_results, success=has_success)
+                                    webhook_response = await sendResponse(response_format, data=formatted_results, success=has_success, meta=meta)
                                     logger.info(f"Batch {batch_id} - webhook sent")
                                 except Exception as webhook_err:
                                     webhook_error = str(webhook_err)
@@ -238,7 +239,7 @@ async def check_batch_status():
                             
                             if webhook.get('url') is not None:
                                 try:
-                                    await sendResponse(response_format, data=error_response, success=False)
+                                    await sendResponse(response_format, data=error_response, success=False, meta=meta)
                                     logger.info(f"Batch {batch_id} no-results webhook sent")
                                 except Exception as webhook_err:
                                     logger.error(f"Error sending webhook for batch {batch_id} (no results case): {str(webhook_err)}")
