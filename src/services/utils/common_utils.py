@@ -501,14 +501,12 @@ async def handle_pre_tools(parsed_data, custom_config):
                 error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
                 parsed_data["variables"]["web_search_pre_result"] = error_msg
 
-async def handle_post_tool(parsed_data, result):
-    """Execute the folder-level post_tool after every AI call (embed only).
-    Awaited directly; returns the post function response to allow the caller to override the AI response."""
 
+async def handle_post_tool(parsed_data, result):
+    """Execute the folder-level post_tool after every AI call."""
     post_tool_data = parsed_data.get("post_tool_data")
     if not post_tool_data:
         return
-
 
     script_id = post_tool_data.get("script_id") or post_tool_data.get("function_name") or post_tool_data.get("endpoint_name")
     if not script_id:
@@ -534,7 +532,23 @@ async def handle_post_tool(parsed_data, result):
         )
     except Exception as err:
         logger.error(f"post_tool execution error (script_id={script_id}): {err}")
-    return post_tool_response
+        return
+
+    flow_hit_id = (post_tool_response.get("metadata") or {}).get("flowHitId")
+    entry = {
+        "id": post_tool_data.get("script_id"),
+        "args": post_tool_data.get("args", {}),
+        "data": post_tool_response,
+        "type": "post_tool",
+        "name": post_tool_data.get("title") or post_tool_data.get("script_id"),
+        "error": post_tool_response.get("status") != 1,
+    }
+    post_tool_log = {flow_hit_id: entry} if flow_hit_id else entry
+    if result is not None and result.get("historyParams") is not None:
+        result["historyParams"].setdefault("tools_call_data", []).append(post_tool_log)
+    if post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+        if isinstance(result, dict) and result.get("response", {}).get("data") is not None:
+            result["response"]["data"]["content"] = post_tool_response.get("response")
 
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
@@ -1765,26 +1779,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
         formatted_response = result.get("response", {}) if isinstance(result, dict) else {}
 
-        post_tool_response = await handle_post_tool(parsed_data, result)
-        if post_tool_response is not None:
-            post_tool_data = parsed_data.get("post_tool_data", {})
-            flow_hit_id = (post_tool_response.get("metadata") or {}).get("flowHitId")
-            entry = {
-                "id": post_tool_data.get("script_id"),
-                "args": post_tool_data.get("args", {}),
-                "data": post_tool_response,
-                "type": "post_tool",
-                "name": post_tool_data.get("title") or post_tool_data.get("script_id"),
-                "error": post_tool_response.get("status") != 1,
-            }
-            post_tool_log = {flow_hit_id: entry} if flow_hit_id else entry
-            if result.get("historyParams") is not None:
-                result["historyParams"].setdefault("tools_call_data", []).append(post_tool_log)
-            if post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
-                if formatted_response.get("data") is not None:
-                    formatted_response["data"]["content"] = post_tool_response.get("response")
-                if result.get("response", {}).get("data") is not None:
-                    result["response"]["data"]["content"] = post_tool_response.get("response")
+        await handle_post_tool(parsed_data, result)
 
         if not parsed_data["is_playground"]:
             await sendResponse(

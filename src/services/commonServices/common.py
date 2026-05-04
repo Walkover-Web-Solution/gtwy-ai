@@ -178,7 +178,7 @@ async def chat(request_body):
         current_agent_id = parsed_data.get("bridge_id")
         pre_tools = bridge_configurations.get(current_agent_id, {}).get("pre_tools_data", [])
         post_tool = bridge_configurations.get(current_agent_id, {}).get("post_tool_data", {})
-        parsed_data["pre_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, pre_tools)
+        parsed_data["pre_tools"] = setup_agent_tools(parsed_data, bridge_configurations, pre_tools)
         parsed_data["post_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, post_tool)
         await apply_prompt_wrapper(parsed_data)
 
@@ -568,23 +568,7 @@ async def chat(request_body):
                 variables=parsed_data.get("variables", {}),
             )
          
-        post_tool_response = await handle_post_tool(parsed_data, result)
-        if post_tool_response is not None:
-            post_tool_data = parsed_data.get("post_tool_data", {})
-            flow_hit_id = (post_tool_response.get("metadata") or {}).get("flowHitId")
-            entry = {
-                "id": post_tool_data.get("script_id"),
-                "args": post_tool_data.get("args", {}),
-                "data": post_tool_response,
-                "type":"post_tool",
-                "name": post_tool_data.get("title") or post_tool_data.get("script_id"),
-                "error": post_tool_response.get("status") != 1,
-            }
-            post_tool_log = {flow_hit_id: entry} if flow_hit_id else entry
-            if result.get("historyParams") is not None:
-                result["historyParams"].setdefault("tools_call_data", []).append(post_tool_log)
-            if post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
-                result["response"]["data"]["content"] = post_tool_response.get("response")
+        await handle_post_tool(parsed_data, result)
 
         if not parsed_data["is_playground"]:
             if result.get("response") and result["response"].get("data"):
