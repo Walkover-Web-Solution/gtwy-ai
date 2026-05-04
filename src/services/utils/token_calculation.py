@@ -12,6 +12,14 @@ class TokenCalculator:
             "total_tokens": 0,
             "input_tokens": 0,
             "output_tokens": 0,
+            "input_text_tokens": 0,
+            "input_audio_tokens": 0,
+            "input_image_tokens": 0,
+            "input_video_tokens": 0,
+            "output_text_tokens": 0,
+            "output_audio_tokens": 0,
+            "output_image_tokens": 0,
+            "output_video_tokens": 0,
             "cached_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
@@ -78,6 +86,34 @@ class TokenCalculator:
                 usage["cachedTokens"] = usage_metadata.get('cached_content_token_count', 0)
                 usage["reasoningTokens"] = usage_metadata.get('thoughts_token_count', 0)
 
+                prompt_tokens_details = usage_metadata.get("prompt_tokens_details") or []
+                for detail in prompt_tokens_details:
+                    raw_modality = str(detail.get("modality") or "").upper()
+                    token_count = detail.get("token_count") or 0
+
+                    if "AUDIO" in raw_modality:
+                        usage["inputAudioTokens"] = (usage.get("inputAudioTokens") or 0) + token_count
+                    elif "IMAGE" in raw_modality:
+                        usage["inputImageTokens"] = (usage.get("inputImageTokens") or 0) + token_count
+                    elif "VIDEO" in raw_modality:
+                        usage["inputVideoTokens"] = (usage.get("inputVideoTokens") or 0) + token_count
+                    else:
+                        usage["inputTextTokens"] = (usage.get("inputTextTokens") or 0) + token_count
+
+                candidates_tokens_details = usage_metadata.get("candidates_tokens_details") or []
+                for detail in candidates_tokens_details:
+                    raw_modality = str(detail.get("modality") or "").upper()
+                    token_count = detail.get("token_count") or 0
+
+                    if "AUDIO" in raw_modality:
+                        usage["outputAudioTokens"] = (usage.get("outputAudioTokens") or 0) + token_count
+                    elif "IMAGE" in raw_modality:
+                        usage["outputImageTokens"] = (usage.get("outputImageTokens") or 0) + token_count
+                    elif "VIDEO" in raw_modality:
+                        usage["outputVideoTokens"] = (usage.get("outputVideoTokens") or 0) + token_count
+                    else:
+                        usage["outputTextTokens"] = (usage.get("outputTextTokens") or 0) + token_count
+
             case "openai":
                 usage["inputTokens"] = model_response["usage"]["input_tokens"]
                 usage["outputTokens"] = model_response["usage"]["output_tokens"]
@@ -115,12 +151,20 @@ class TokenCalculator:
         self.total_usage["total_tokens"] += usage.get("totalTokens") or 0
         self.total_usage["input_tokens"] += usage.get("inputTokens") or 0
         self.total_usage["output_tokens"] += usage.get("outputTokens") or 0
+        self.total_usage["input_text_tokens"] += usage.get("inputTextTokens") or 0
+        self.total_usage["input_audio_tokens"] += usage.get("inputAudioTokens") or 0
+        self.total_usage["input_image_tokens"] += usage.get("inputImageTokens") or 0
+        self.total_usage["input_video_tokens"] += usage.get("inputVideoTokens") or 0
+        self.total_usage["output_text_tokens"] += usage.get("outputTextTokens") or 0
+        self.total_usage["output_audio_tokens"] += usage.get("outputAudioTokens") or 0
+        self.total_usage["output_image_tokens"] += usage.get("outputImageTokens") or 0
+        self.total_usage["output_video_tokens"] += usage.get("outputVideoTokens") or 0
         self.total_usage["cached_tokens"] += usage.get("cachedTokens") or 0
         self.total_usage["cache_read_input_tokens"] += usage.get("cachingReadTokens") or 0
         self.total_usage["cache_creation_input_tokens"] += usage.get("cachingCreationInputTokens") or 0
         self.total_usage["reasoning_tokens"] += usage.get("reasoningTokens") or 0
-        self.total_usage["audio_duration_seconds"] += usage.get("audioDurationSeconds") or 0
-        self.total_usage["audio_duration_minutes"] += (usage.get("audioDurationSeconds") or 0) / 60
+        self.total_usage["audio_duration_seconds"] += usage.get("audioDurationSeconds") or ((self.total_usage.get("input_audio_tokens") + self.total_usage.get("output_audio_tokens")) / 32) or 0
+        self.total_usage["audio_duration_minutes"] += (usage.get("audio_duration_seconds") or 0) / 60
 
     def calculate_image_usage(self, model_response):
         """
@@ -181,18 +225,78 @@ class TokenCalculator:
             "total_cost": 0,
         }
 
-        # Calculate costs per million tokens using total_usage
-        if self.total_usage["input_tokens"] and pricing.get("input_cost"):
-            cost["input_cost"] = (self.total_usage["input_tokens"] / 1_000_000) * pricing["input_cost"]
+        threshold_tokens = pricing.get("multiplier_threshold_tokens", 200000)
 
-        if self.total_usage["output_tokens"] and pricing.get("output_cost"):
-            cost["output_cost"] = (self.total_usage["output_tokens"] / 1_000_000) * pricing["output_cost"]
+        input_multiplier = 1
+        output_multiplier = 1
+        has_unified_multiplier = pricing.get("cost_multiplier") is not None
+        if has_unified_multiplier:
+            applied_multiplier = pricing["cost_multiplier"] if self.total_usage["input_tokens"] > threshold_tokens else 1
+            input_multiplier = applied_multiplier
+            output_multiplier = applied_multiplier
+        else:
+            input_multiplier = (
+                pricing.get("input_cost_multiplier", 1) if self.total_usage["input_tokens"] > threshold_tokens else 1
+            )
+            output_multiplier = (
+                pricing.get("output_cost_multiplier", 1) if self.total_usage["output_tokens"] > threshold_tokens else 1
+            )
+
+        has_modality_breakdown = any(
+            self.total_usage.get(key) for key in [
+                "input_text_tokens",
+                "input_audio_tokens", 
+                "input_image_tokens",
+                "input_video_tokens",
+                "output_text_tokens",
+                "output_audio_tokens",
+                "output_image_tokens",
+                "output_video_tokens",
+            ]
+        )
+        use_modality_audio_pricing = (
+            bool(pricing.get("audio_token_cost")) and 
+            has_modality_breakdown and 
+            input_multiplier == 1 and
+            output_multiplier == 1
+        )
+
+        if use_modality_audio_pricing:
+            non_audio_input_tokens = (
+                (self.total_usage.get("input_text_tokens") or 0)
+                + (self.total_usage.get("input_image_tokens") or 0)
+                + (self.total_usage.get("input_video_tokens") or 0)
+            )
+            non_audio_output_tokens = (
+                (self.total_usage.get("output_text_tokens") or 0)
+                + (self.total_usage.get("output_image_tokens") or 0)
+                + (self.total_usage.get("output_video_tokens") or 0)
+            )
+            audio_tokens = (
+                (self.total_usage.get("input_audio_tokens") or 0)
+                + (self.total_usage.get("output_audio_tokens") or 0)
+            )
+
+            if non_audio_input_tokens and pricing.get("input_cost"):
+                cost["input_cost"] = (non_audio_input_tokens / 1_000_000) * pricing["input_cost"] * input_multiplier
+
+            if non_audio_output_tokens and pricing.get("output_cost"):
+                cost["output_cost"] = (non_audio_output_tokens / 1_000_000) * pricing["output_cost"] * output_multiplier
+
+            if audio_tokens:
+                cost["audio_cost"] = (audio_tokens / 1_000_000) * pricing["audio_token_cost"]
+        else:
+            if self.total_usage["input_tokens"] and pricing.get("input_cost"):
+                cost["input_cost"] = (self.total_usage["input_tokens"] / 1_000_000) * pricing["input_cost"] * input_multiplier
+
+            if self.total_usage["output_tokens"] and pricing.get("output_cost"):
+                cost["output_cost"] = (self.total_usage["output_tokens"] / 1_000_000) * pricing["output_cost"] * output_multiplier
 
         if self.total_usage["cached_tokens"] and pricing.get("cached_cost"):
-            cost["cached_cost"] = (self.total_usage["cached_tokens"] / 1_000_000) * pricing["cached_cost"]
+            cost["cached_cost"] = (self.total_usage["cached_tokens"] / 1_000_000) * pricing["cached_cost"] * input_multiplier
 
-        if self.total_usage["reasoning_tokens"] and pricing.get("output_tokens"):
-            cost["reasoning_cost"] = (self.total_usage["reasoning_tokens"] / 1_000_000) * pricing["output_tokens"]
+        if self.total_usage["reasoning_tokens"] and pricing.get("output_cost"):
+            cost["reasoning_cost"] = (self.total_usage["reasoning_tokens"] / 1_000_000) * pricing["output_cost"] * output_multiplier
 
         if self.total_usage["cache_read_input_tokens"] and pricing.get("caching_read_cost"):
             cost["cache_read_cost"] = (self.total_usage["cache_read_input_tokens"] / 1_000_000) * pricing[
@@ -280,7 +384,17 @@ class TokenCalculator:
         self.image_usage["total_images_generated"] += usage.get("total_images_generated") or 0
 
     def get_total_usage(self):
-        return self.total_usage
+        return {
+            "total_tokens": self.total_usage.get("total_tokens") or 0,
+            "input_tokens": self.total_usage.get("input_tokens") or 0,
+            "output_tokens": self.total_usage.get("output_tokens") or 0,
+            "cached_tokens": self.total_usage.get("cached_tokens") or 0,
+            "cache_read_input_tokens": self.total_usage.get("cache_read_input_tokens") or 0,
+            "cache_creation_input_tokens": self.total_usage.get("cache_creation_input_tokens") or 0,
+            "reasoning_tokens": self.total_usage.get("reasoning_tokens") or 0,
+            "audio_duration_minutes": self.total_usage.get("audio_duration_minutes") or 0,
+            "audio_duration_seconds": self.total_usage.get("audio_duration_seconds") or 0,
+        }
     
     def get_image_usage(self):
         return self.image_usage
