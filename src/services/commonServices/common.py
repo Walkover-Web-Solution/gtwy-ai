@@ -33,7 +33,7 @@ from src.services.utils.common_utils import (
     parse_request_body,
     prepare_prompt,
     process_background_tasks,
-    process_background_tasks_for_error,
+    save_error_history,
     process_background_tasks_for_playground,
     process_variable_state,
     restructure_json_schema,
@@ -621,18 +621,12 @@ async def chat(request_body):
     except (Exception, ValueError, BadRequestException) as error:
         if not isinstance(error, BadRequestException):
             logger.error(f"Error in chat service: %s, {str(error)}, {traceback.format_exc()}")
-        if not parsed_data["is_playground"]:
-            # Create latency object and update usage metrics
-            latency = create_latency_object(timer, params)
-            update_usage_metrics(parsed_data, params, latency, error=error, success=False)
-
-            # Create history parameters
-            parsed_data["historyParams"] = create_history_params(parsed_data, error, class_obj)
+        if not parsed_data.get("is_playground"):
             await sendResponse(
                 parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
             ) if parsed_data["response_format"]["type"] != "default" else None
-            # Process background tasks for error handling
-            await process_background_tasks_for_error(parsed_data, error)
+        if not parsed_data.get("is_playground"):
+            await save_error_history(parsed_data, error, params, timer, class_obj)
         # Check for a chained exception and create a structured error object
         if error.__cause__:
             # Combine both initial and fallback errors into a single string
@@ -916,27 +910,19 @@ async def image(request_body):
     except (Exception, ValueError, BadRequestException) as error:
         if not isinstance(error, BadRequestException):
             logger.error(f"Error in image service: {str(error)}, {traceback.format_exc()}")
-        if not parsed_data["is_playground"]:
-            # Update parsed_data with thread_info if available and thread_id/sub_thread_id are None
-            if "thread_info" in locals() and thread_info:
-                if not parsed_data.get("thread_id") and thread_info.get("thread_id"):
-                    parsed_data["thread_id"] = thread_info["thread_id"]
-                if not parsed_data.get("sub_thread_id") and thread_info.get("sub_thread_id"):
-                    parsed_data["sub_thread_id"] = thread_info["sub_thread_id"]
-
-            # Create latency object and update usage metrics
-            latency = create_latency_object(timer, params)
-            update_usage_metrics(parsed_data, params, latency, error=error, success=False)
-
-            # Create history parameters
-            parsed_data["historyParams"] = create_history_params(
-                parsed_data, error, class_obj, thread_info if "thread_info" in locals() else None
-            )
+        if "thread_info" in locals() and thread_info:
+            if not parsed_data.get("thread_id") and thread_info.get("thread_id"):
+                parsed_data["thread_id"] = thread_info["thread_id"]
+            if not parsed_data.get("sub_thread_id") and thread_info.get("sub_thread_id"):
+                parsed_data["sub_thread_id"] = thread_info["sub_thread_id"]
+        if not parsed_data.get("is_playground"):
             await sendResponse(
                 parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
             ) if parsed_data["response_format"]["type"] != "default" else None
-            # Process background tasks for error handling
-            await process_background_tasks_for_error(parsed_data, error)
+        if not parsed_data.get("is_playground"):
+            await save_error_history(
+                parsed_data, error, params, timer, class_obj, thread_info if "thread_info" in locals() else None
+            )
         # Check for a chained exception and create a structured error object
         if error.__cause__:
             # Combine both initial and fallback errors into a single string
