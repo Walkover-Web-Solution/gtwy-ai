@@ -821,8 +821,19 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 
                 # Add folder pre_tool if not already present
                 if folder_pre_tool_id and folder_pre_tool_id not in bridge_data["pre_tools"]:
-                    bridge_data["pre_tools"].append(folder_pre_tool_id)
+                    # Build pre_tools_data with variables_path mapping
+                    script_id = folder_pre_tool.get("script_id")
+                    variables_path_pre_tool = folder_result[0].get("variables_path", {}).get(script_id, {}) if script_id else {}
+                    pre_tool_data_entry = {
+                        "type": 'custom_function',
+                        "config":{
+                            "function_id": folder_pre_tool_id,
+                            "script_id": script_id
+                        },
+                        "args": variables_path_pre_tool or folder_pre_tool.get("args", {}),
+                    }
                     bridge_data["pre_tools_data"].append(folder_pre_tool)
+                    bridge_data["pre_tools"].append(pre_tool_data_entry)
 
             # Merge folder_post_tool into bridge_data
             if folder_result and folder_result[0].get("folder_post_tool"):
