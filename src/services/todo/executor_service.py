@@ -40,7 +40,9 @@ WORKER_RESPONSE_SCHEMA = """
   "status": "completed | waiting_for_user | failed",
   "result": "tool output or extracted answer if completed, else null",
   "reasoning": "1 sentence: what you did or why you couldn't",
-  "human_query": "question for user if waiting_for_user, else null",
+  "questions": [
+    { "id": "q1", "question": "string", "options": ["string"] }
+  ],
   "error": "error description if failed, else null"
 }"""
 
@@ -53,12 +55,12 @@ WORKER_SYSTEM_PROMPT_TEMPLATE = """You are a task executor in a Planner→Execut
 {execution_details}
 
 {human_response_block}## Tool
-{tool_list}
+
 
 ## Rules
 1. Call the tool immediately using execution_details values. Do not invent missing required values.
 2. On error: retry up to 2× with corrected args.
-3. Still failing or missing required info → return `waiting_for_user` with a clear question in `human_query`.
+3. Still failing or missing required info → return `waiting_for_user` with a clear question in the `questions` field.
 4. `failed` only for unrecoverable infrastructure failure after retries.
 
 ## Response (JSON only, no markdown)
@@ -243,7 +245,7 @@ def _build_worker_result(parsed):
         "status": status,
         "result": parsed.get("result"),
         "reasoning": parsed.get("reasoning"),
-        "human_query": parsed.get("human_query") or parsed.get("replan_reason"),
+        "questions": parsed.get("questions") or [],
         "error": parsed.get("error"),
     }
 
@@ -253,7 +255,7 @@ def _parse_worker_response(content):
     On failure, ask user for help instead of trying to auto-fix.
     """
     if not content:
-        return {"status": "waiting_for_user", "human_query": "The worker did not return a response. Please try again or provide more details."}
+        return {"status": "waiting_for_user", "questions": [{"id": "q1", "question": "The worker did not return a response. Please try again or provide more details.", "options": []}]}
     raw = content
     if "```json" in raw:
         raw = raw.split("```json", 1)[1].split("```", 1)[0].strip()
@@ -269,10 +271,7 @@ def _parse_worker_response(content):
         return {
             "status": "waiting_for_user",
             "result": None,
-            "human_query": (
-                "The task encountered an error and couldn't complete. "
-                f"Error: {str(err)[:200]}. Please review and provide guidance."
-            ),
+            "questions": [{"id": "q1", "question": f"The task encountered an error and couldn't complete. Error: {str(err)[:200]}. Please review and provide guidance.", "options": []}],
         }
 
 
@@ -1173,15 +1172,15 @@ async def execute_plan(org_id, bridge_id, thread_id, sub_thread_id, bridge_confi
 
             elif status == "waiting_for_user":
                 # Worker needs user help to proceed
-                human_query = result.get("human_query") or "The task needs additional information to proceed. Please provide guidance."
+                questions = result.get("questions") or [{"id": "q1", "question": "The task needs additional information to proceed. Please provide guidance.", "options": []}]
                 task["status"] = "waiting_for_user"
                 task["is_error"] = False
-                task["human_query"] = human_query
+                task["questions"] = questions
                 task["human_response"] = None
                 await _emit("task_waiting_for_user", {
                     "task_id": task_id,
                     "title": task.get("title", ""),
-                    "human_query": human_query,
+                    "questions": questions,
                 })
 
             else:  # failed
@@ -1280,10 +1279,12 @@ async def resume_task(org_id, bridge_id, thread_id, sub_thread_id, task_id, huma
 
     # Save Q&A to session memory so planner doesn't ask again.
     # Scoped per (thread_id, sub_thread_id) to match the plan's scope.
-    question = task.get("human_query")
-    if question:
-        await plan_store.add_to_planner_session(
-            org_id, bridge_id, thread_id, sub_thread_id, question, human_response
-        )
+    questions = task.get("questions") or []
+    for q in questions:
+        question_text = q.get("question") if isinstance(q, dict) else str(q)
+        if question_text:
+            await plan_store.add_to_planner_session(
+                org_id, bridge_id, thread_id, sub_thread_id, question_text, human_response
+            )
 
     return {"success": True, "plan": plan}
