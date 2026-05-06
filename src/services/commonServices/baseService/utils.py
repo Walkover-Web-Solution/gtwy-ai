@@ -21,88 +21,11 @@ from google.genai import types
 def clean_json(data):
     """Recursively remove keys with empty string, empty list, or empty dictionary."""
     if isinstance(data, dict):
-        return {k: clean_json(v) for k, v in data.items() if v not in [{}, "", []]}
+        return {k: clean_json(v) for k, v in data.items() if v not in ["", []]}
     elif isinstance(data, list):
         return [clean_json(item) for item in data]
     else:
         return data
-
-
-def get_nested_value(dictionary, key_path):
-    keys = key_path.split(".")
-    for key in keys:
-        if isinstance(dictionary, dict) and key in dictionary:
-            dictionary = dictionary[key]
-        else:
-            return None
-    return dictionary
-
-
-def apply_variable_path_filters(
-    properties, variables=None, variables_path=None, function_name=None, parent_key=None, parentValue=None
-):
-    if variables is None:
-        variables = {}
-    if variables_path is None:
-        variables_path = {}
-    if not isinstance(properties, dict):
-        return properties
-
-    transformed_properties = {}
-    function_variables_path = (variables_path or {}).get(function_name, {})
-
-    for key, value in properties.items():
-        if not isinstance(value, dict):
-            transformed_properties[key] = value
-            continue
-
-        transformed_value = value.copy()
-
-        key_to_find = f"{parent_key}.{key}" if parent_key else key
-        if key_to_find in function_variables_path:
-            variable_path_value = function_variables_path[key_to_find]
-            if_variable_has_value = get_nested_value(variables, variable_path_value)
-            if if_variable_has_value is not None:
-                if parentValue and "required" in parentValue and key in parentValue["required"]:
-                    parentValue["required"].remove(key)
-                continue
-
-        if isinstance(transformed_value.get("properties"), dict):
-            transformed_value["properties"] = apply_variable_path_filters(
-                transformed_value["properties"],
-                variables,
-                variables_path,
-                function_name,
-                key,
-                transformed_value,
-            )
-
-        items = transformed_value.get("items")
-        if isinstance(items, dict):
-            transformed_items = items.copy()
-            if isinstance(transformed_items.get("properties"), dict):
-                transformed_items["properties"] = apply_variable_path_filters(
-                    transformed_items["properties"],
-                    variables,
-                    variables_path,
-                    function_name,
-                    key,
-                    transformed_items,
-                )
-            if isinstance(transformed_items.get("items"), dict):
-                transformed_items["items"] = apply_variable_path_filters(
-                    transformed_items["items"],
-                    variables,
-                    variables_path,
-                    function_name,
-                    key,
-                    transformed_items,
-                )
-            transformed_value["items"] = transformed_items
-
-        transformed_properties[key] = transformed_value
-
-    return transformed_properties
 
 
 def validate_tool_call(service, response):
@@ -140,6 +63,70 @@ async def axios_work(data, function_payload):
         return {"response": str(err), "metadata": {"type": "function"}, "status": 0}
 
 
+# [?] won't work for the case addess.name[0]
+def get_nested_value(dictionary, key_path):
+    keys = key_path.split(".")
+    for key in keys:
+        if isinstance(dictionary, dict) and key in dictionary:
+            dictionary = dictionary[key]
+        else:
+            return None
+    return dictionary
+
+
+# https://docs.google.com/document/d/1WkXnaeAhTUdAfo62SQL0WASoLw-wB9RD9N-IeUXw49Y/edit?tab=t.0 => to see the variables example
+def transform_required_params_to_required(
+    properties, variables=None, variables_path=None, function_name=None, parent_key=None, parentValue=None
+):
+    if variables is None:
+        variables = {}
+    if variables_path is None:
+        variables_path = {}
+    if not isinstance(properties, dict):
+        return properties
+    transformed_properties = properties.copy()
+    if properties.get("type") == "array" or properties.get("type") == "object":
+        return {"items": properties}
+    for key, value in properties.items():
+        if value.get("required_params") is not None:
+            transformed_properties[key]["required"] = value.pop("required_params")
+        key_to_find = f"{parent_key}.{key}" if parent_key else key
+        if (
+            variables_path is not None
+            and variables_path.get(function_name)
+            and key_to_find in variables_path[function_name]
+        ):
+            variable_path_value = variables_path[function_name][key_to_find]
+            if_variable_has_value = get_nested_value(variables, variable_path_value)
+            if if_variable_has_value:
+                del transformed_properties[key]
+                if parentValue and "required" in parentValue and key in parentValue["required"]:
+                    parentValue["required"].remove(key)
+                continue
+        for prop_key in ["parameter", "properties"]:
+            if prop_key in value:
+                transformed_properties[key]["properties"] = transform_required_params_to_required(
+                    value.pop(prop_key), variables, variables_path, function_name, key, value
+                )
+                break
+        else:
+            items = value.get("items", {})
+            item_type = items.get("type")
+            if item_type == "object":
+                nextedObject = {
+                    "properties": transform_required_params_to_required(
+                        items.get("properties", {}), variables, variables_path, function_name, key, value
+                    )
+                }
+                nextedObject = {**nextedObject, "required": items.get("required", []), "type": item_type}
+                transformed_properties[key]["items"] = nextedObject
+            elif item_type == "array":
+                transformed_properties[key]["items"] = transform_required_params_to_required(
+                    items.get("items", {}), variables, variables_path, function_name, key, value
+                )
+                transformed_properties[key]["items"]["type"] = "array"
+    return transformed_properties
+
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
     if (
@@ -157,7 +144,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                     "parameters": {
                         "type": "object",
                         "properties": clean_json(
-                            apply_variable_path_filters(
+                            transform_required_params_to_required(
                                 transformed_tool.get("properties", {}),
                                 variables=variables,
                                 variables_path=variables_path,
@@ -182,15 +169,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                 "description": transformed_tool['description'],
                 "parameters": {
                     "type": "object",
-                    "properties": clean_json(
-                        apply_variable_path_filters(
-                            transformed_tool.get("properties", {}),
-                            variables=variables,
-                            variables_path=variables_path,
-                            function_name=transformed_tool["name"],
-                            parentValue={"required": transformed_tool.get("required", [])},
-                        )
-                    ),
+                    "properties": clean_json(transform_required_params_to_required(transformed_tool.get('properties', {}), variables=variables, variables_path=variables_path, function_name=transformed_tool['name'], parentValue={'required': transformed_tool.get('required', [])})),
                     "required": transformed_tool.get('required'),
                 }
             } for transformed_tool in configuration.get('tools', [])
@@ -210,7 +189,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                 "parameters": {
                     "type": "object",
                     "properties": clean_json(
-                        apply_variable_path_filters(
+                        transform_required_params_to_required(
                             transformed_tool.get("properties", {}),
                             variables=variables,
                             variables_path=variables_path,
@@ -235,7 +214,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                 "input_schema": {
                     "type": "object",
                     "properties": clean_json(
-                        apply_variable_path_filters(
+                        transform_required_params_to_required(
                             transformed_tool.get("properties", {}),
                             variables=variables,
                             variables_path=variables_path,
@@ -258,7 +237,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                     "parameters": {
                         "type": "object",
                         "properties": clean_json(
-                            apply_variable_path_filters(
+                            transform_required_params_to_required(
                                 transformed_tool.get("properties", {}),
                                 variables=variables,
                                 variables_path=variables_path,
