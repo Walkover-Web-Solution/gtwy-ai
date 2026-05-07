@@ -119,7 +119,7 @@ def process_api_call_tool(api_data, variables_path_bridge):
         properties.pop(key, None)
 
     # Filter required parameters
-    required = api_data.get("required_params", [])
+    required = api_data.get("required", [])
     required = [key for key in required if key not in variables_fill_by_gtwy]
 
     # Create tool format
@@ -147,16 +147,16 @@ def process_extra_tool(tool):
     if not isinstance(properties, dict):
         properties = {}
 
-    required_params = tool.get("required_params", []) or []
-    if not isinstance(required_params, list):
-        required_params = []
+    required = tool.get("required", []) or []
+    if not isinstance(required, list):
+        required = []
 
     tool_format = {
         "type": "function",
         "name": makeFunctionName(tool_name),
         "description": tool.get("description"),
         "properties": properties,
-        "required": required_params,
+        "required": required,
     }
 
     tool_mapping = {"url": tool.get("url"), "headers": tool.get("headers", {}), "name": tool_name}
@@ -250,10 +250,10 @@ def setup_pre_tools(bridge, result, variables):
         raise Exception("Didn't find the pre_function")
 
     name = api_data.get("title") or makeFunctionName(api_data["endpoint_name"] or api_data["function_name"])
-    required_params = api_data.get("required_params", [])
+    required = api_data.get("required", [])
 
     args = {}
-    for param in required_params:
+    for param in required:
         if param in variables:
             args[param] = variables[param]
 
@@ -284,14 +284,14 @@ def add_rag_tool(tools, tool_id_and_name_mapping, rag_data):
                     "description": "send resource id",
                     "type": "string",
                     "enum": [],
-                    "required_params": [],
+                    "required": [],
                     "parameter": {},
                 },
                 "query": {
                     "description": "query to ask from the knowledge base",
                     "type": "string",
                     "enum": [],
-                    "required_params": [],
+                    "required": [],
                     "parameter": {},
                 },
             },
@@ -328,7 +328,7 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
                     "enum": gtwy_web_search_filters
                     if (gtwy_web_search_filters and len(gtwy_web_search_filters) > 0)
                     else [],
-                    "required_params": [],
+                    "required": [],
                     "parameter": {},
                 },
                 "formats": {
@@ -336,7 +336,7 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
                     "type": "array",
                     "items": {"type": "string"},
                     "enum": [],
-                    "required_params": [],
+                    "required": [],
                     "parameter": {},
                 },
             },
@@ -371,7 +371,7 @@ def add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_f
             description = bridge_info.get("description", "")
             variables = bridge_info.get("variables", {})
             fields = variables.get("fields", {})
-            required_params = variables.get("required_params", [])
+            required = variables.get("required", [])
         else:
             # Use data from connected_agent_details when version_id is not present
             agent_details = connected_agent_details.get(bridge_id_value)
@@ -379,13 +379,13 @@ def add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_f
                 description = agent_details.get("description", bridge_info.get("description", ""))
                 variables = agent_details.get("agent_variables", {})
                 fields = variables.get("fields", {})
-                required_params = variables.get("required_params", [])
+                required = variables.get("required", [])
             else:
                 # Final fallback to connected_agents data
                 description = bridge_info.get("description", "")
                 variables = bridge_info.get("variables", {})
                 fields = variables.get("fields", {})
-                required_params = variables.get("required_params", [])
+                required = variables.get("required", [])
 
         name = makeFunctionName(agent_name_info.get(bridge_id_value, ""))
 
@@ -395,7 +395,7 @@ def add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_f
                 "description": "The query or message to be processed by the connected agent.",
                 "type": "string",
                 "enum": [],
-                "required_params": [],
+                "required": [],
                 "parameter": {},
             },
             **fields,
@@ -407,12 +407,12 @@ def add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_f
                 "description": "transfer: directly return child agent response, conversation: get child response and continue processing",
                 "type": "string",
                 "enum": ["transfer", "conversation"],
-                "required_params": [],
+                "required": [],
                 "parameter": {},
             }
 
         # Build required list
-        required = ["_query"] + required_params
+        required = ["_query"] + required
         if is_orchestrator:
             required.append("action_type")
 

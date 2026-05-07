@@ -464,7 +464,7 @@ class Helper:
 
     def transform_agent_variable_to_tool_call_format(input_data):
         fields = {}
-        required_params = []
+        required = []
 
         def set_nested_value(obj, path, value, is_required):
             parts = path.split(".")
@@ -478,7 +478,7 @@ class Helper:
                         "type": "object",
                         "description": "",
                         "enum": [],
-                        "required_params": [],
+                        "required": [],
                         "parameter": {},
                     }
                 elif "parameter" not in current[part]:
@@ -495,7 +495,7 @@ class Helper:
             elif "bool" in final_key.lower() or "flag" in final_key.lower():
                 param_type = "boolean"
 
-            current[final_key] = {"type": param_type, "description": "", "enum": [], "required_params": []}
+            current[final_key] = {"type": param_type, "description": "", "enum": [], "required": []}
 
             if is_required:
                 for i in range(len(parts) - 1):
@@ -506,11 +506,11 @@ class Helper:
                     parent_key = parts[i]
                     child_key = parts[i + 1]
 
-                    if child_key not in current_level[parent_key]["required_params"]:
-                        current_level[parent_key]["required_params"].append(child_key)
+                    if child_key not in current_level[parent_key]["required"]:
+                        current_level[parent_key]["required"].append(child_key)
 
-                if parts[0] not in required_params:
-                    required_params.append(parts[0])
+                if parts[0] not in required:
+                    required.append(parts[0])
 
         for key, value in input_data.items():
             is_required = value == "required"
@@ -524,12 +524,12 @@ class Helper:
                 elif "bool" in key.lower() or "flag" in key.lower():
                     param_type = "boolean"
 
-                fields[key] = {"type": param_type, "description": "", "enum": [], "required_params": []}
+                fields[key] = {"type": param_type, "description": "", "enum": [], "required": []}
 
-                if is_required and key not in required_params:
-                    required_params.append(key)
+                if is_required and key not in required:
+                    required.append(key)
 
-        return {"fields": fields, "required_params": required_params}
+        return {"fields": fields, "required": required}
 
     @staticmethod
     def update_agentconfig_from_pre_function(response_data, parsed_data, custom_config):

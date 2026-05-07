@@ -51,7 +51,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
                 resolved[param] = agent_variables[var_name]
             elif not is_custom:
                 resolved[param] = var_name
-        for param in tool_config.get("required_params", []):
+        for param in tool_config.get("required", []):
             if param not in resolved and param in agent_variables:
                 resolved[param] = agent_variables[param]
         return resolved
