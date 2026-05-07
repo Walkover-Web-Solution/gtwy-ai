@@ -126,20 +126,21 @@ def make_json_serializable(data):
         return str(data)
 
 
-async def acquire_lock(lock_key: str, ttl: int = 600) -> bool:
+async def acquire_lock(lock_key: str, ttl: int = 1800) -> bool:
     """
     Acquire a distributed lock using Redis SET NX EX pattern.
 
     Args:
         lock_key: Unique identifier for the lock
-        ttl: Time-to-live in seconds (default: 600 seconds = 10 minutes)
+        ttl: Time-to-live in seconds
+               Must be > poll_interval (900s) + max_processing_time
+               Default: 1800 seconds = 30 minutes
 
     Returns:
         True if lock was acquired, False otherwise
     """
     try:
         full_key = f"{REDIS_PREFIX}lock_{lock_key}"
-        # SET NX EX: Set if Not eXists with EXpiration
         result = await client.set(full_key, "locked", nx=True, ex=ttl)
         return result is not None
     except Exception as e:
@@ -164,7 +165,6 @@ async def release_lock(lock_key: str) -> bool:
     except Exception as e:
         logger.error(f"Error releasing lock for {lock_key}: {str(e)}")
         return False
-
 
 __all__ = [
     "delete_in_cache",
