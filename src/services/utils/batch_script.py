@@ -9,7 +9,7 @@ from ..commonServices.queueService.queueLogService import sub_queue_obj
 from ..commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.utils.alert_template import create_response_format
 from .ai_middleware_format import process_batch_results
-from .batch_script_utils import get_batch_result_handler, is_finalized_batch_item
+from .batch_script_utils import get_batch_result_handler, is_finalized_batch_item, get_batch_result_data
 from .helper import Helper
 from globals import *
 from .token_calculation import TokenCalculator
@@ -18,7 +18,7 @@ from .token_calculation import TokenCalculator
 async def repeat_function():
     while True:
         await check_batch_status()
-        await asyncio.sleep(900)
+        await asyncio.sleep(15)
 
 
 async def check_batch_status():
@@ -64,6 +64,21 @@ async def check_batch_status():
                     if is_completed:
                         # Batch has reached a terminal state (completed, failed, expired, cancelled)
                         if results:
+                            item_costs = {}
+ 
+                            for raw_item in results:
+                                message_id, result_data, status_code, has_error = get_batch_result_data(raw_item, service)
+
+                                if message_id and not has_error and result_data and model:
+                                    try:
+                                        temp_calculator = TokenCalculator(service, {})
+                                        temp_calculator.calculate_usage(result_data)
+                                        cost_breakdown = temp_calculator.calculate_total_cost(model, service)
+                                        item_costs[message_id] = cost_breakdown.get("total_cost", 0) * 0.5
+                                    except Exception as cost_error:
+                                        logger.error(f"Error calculating batch cost for message {message_id}: {str(cost_error)}")
+                            
+
                             # Process and format the results (could be success or error results)
                             formatted_results = await process_batch_results(
                                 results, service, batch_id, batch_variables, message_id_mapping
@@ -83,22 +98,12 @@ async def check_batch_status():
                                 for item in formatted_results
                             )
                             
-                            # Calculate and attach cost to each formatted result's usage before sending webhook
+                            # Attach cost to each formatted result's usage before sending webhook
                             for item in formatted_results:
-                                item_usage = item.get('usage', {})
-                                if item_usage and model:
-                                    item_input_tokens = item_usage.get('input_tokens') or 0
-                                    item_output_tokens = item_usage.get('output_tokens') or 0
-                                    item_cost = 0
-                                    if item_input_tokens > 0 or item_output_tokens > 0:
-                                        try:
-                                            cost_calc = TokenCalculator(service, {})
-                                            cost_calc.calculate_usage({'usage': item_usage})
-                                            cost_breakdown = cost_calc.calculate_total_cost(model, service)
-                                            item_cost = cost_breakdown.get('total_cost', 0) * 0.5
-                                        except Exception as cost_err:
-                                            logger.error(f"Error calculating cost for batch item: {str(cost_err)}")
-                                    item_usage['cost'] = item_cost
+                                message_id = item.get("message_id")
+                                item_usage = item.get("usage", {})
+                                if item_usage is not None:
+                                    item_usage["cost"] = item_costs.get(message_id, 0)
 
                             webhook_response = None
                             webhook_error = None
@@ -110,8 +115,6 @@ async def check_batch_status():
                                     webhook_error = str(webhook_err)
                                     logger.error(f"Error sending webhook for batch {batch_id}: {webhook_error}")
 
-                            # Initialize TokenCalculator for batch cost calculation with 50% discount
-                            token_calculator = TokenCalculator(service, {})
 
                             batch_updates = []
                             metrics_data = []
@@ -143,13 +146,6 @@ async def check_batch_status():
                                     else:
                                         error_message = "Unknown error occurred"
 
-                                input_tokens = usage.get('input_tokens') or 0 if usage else 0
-                                output_tokens = usage.get('output_tokens') or 0 if usage else 0
-                                total_tokens = usage.get('total_tokens') or 0 if usage else 0
-
-                                if usage and is_success:
-                                    token_calculator.calculate_usage({'usage': usage})
-
                                 update_data = {
                                     'llm_message': llm_message,
                                     'chatbot_message': chatbot_message,
@@ -157,9 +153,9 @@ async def check_batch_status():
                                     'error': error_message,
                                     'finish_reason': data.get('finish_reason'),
                                     'tokens': {
-                                        'input_tokens': input_tokens,
-                                        'output_tokens': output_tokens,
-                                        'total_tokens': total_tokens
+                                        'input_tokens': usage.get("input_tokens", 0),
+                                        'output_tokens': usage.get("output_tokens", 0),
+                                        'total_tokens': usage.get("total_tokens", 0)
                                     } if usage else None,
                                     'batch_data': {
                                         'status': 'completed',
@@ -178,16 +174,8 @@ async def check_batch_status():
                                 })
 
                                 if org_id and model:
-                                    individual_cost = 0
-                                    if input_tokens > 0 or output_tokens > 0:
-                                        try:
-                                            temp_calculator = TokenCalculator(service, {})
-                                            temp_calculator.calculate_usage({'usage': usage}) if usage else None
-                                            cost_breakdown = temp_calculator.calculate_total_cost(model, service)
-                                            individual_cost = cost_breakdown.get('total_cost', 0) * 0.5
-                                        except Exception as cost_error:
-                                            logger.error(f"Error calculating cost for message {message_id}: {str(cost_error)}")
-                                            individual_cost = 0
+                                    individual_cost = item_costs.get(message_id, 0)
+
 
                                     metrics_data.append({
                                         'org_id': org_id,
@@ -195,9 +183,9 @@ async def check_batch_status():
                                         'version_id': version_id or '',
                                         'thread_id': thread_id or '',
                                         'model': model,
-                                        'input_tokens': float(input_tokens),
-                                        'output_tokens': float(output_tokens),
-                                        'total_tokens': float(total_tokens),
+                                        'input_tokens': usage.get("input_tokens", 0),
+                                        'output_tokens': usage.get("output_tokens", 0),
+                                        'total_tokens': usage.get("total_tokens", 0),
                                         'apikey_id': '',
                                         'latency': 0,
                                         'success': is_success,

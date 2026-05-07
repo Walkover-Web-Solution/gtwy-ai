@@ -71,12 +71,13 @@ class TokenCalculator:
                 usage["reasoningTokens"] = _get_usage_value("reasoning_tokens")
 
             case "gemini":
-                usage_metadata = model_response.get('usage_metadata', {}) or {}
-                usage["inputTokens"] = usage_metadata.get('prompt_token_count', 0)
-                usage["outputTokens"] = usage_metadata.get('candidates_token_count', 0)
-                usage["totalTokens"] = usage_metadata.get('total_token_count', 0)
-                usage["cachedTokens"] = usage_metadata.get('cached_content_token_count', 0)
-                usage["reasoningTokens"] = usage_metadata.get('thoughts_token_count', 0)
+                # Batch send camelCase, normal completion returns snake_case
+                usage_metadata = model_response.get('usage_metadata') or model_response.get('usageMetadata') or {}
+                usage["inputTokens"] = usage_metadata.get('prompt_token_count') or usage_metadata.get('promptTokenCount') or 0
+                usage["outputTokens"] = usage_metadata.get('candidates_token_count') or usage_metadata.get('candidatesTokenCount') or 0
+                usage["totalTokens"] = usage_metadata.get('total_token_count') or usage_metadata.get('totalTokenCount') or 0
+                usage["cachedTokens"] = usage_metadata.get('cached_content_token_count') or usage_metadata.get('cachedContentTokenCount') or 0
+                usage["reasoningTokens"] = usage_metadata.get('thoughts_token_count') or usage_metadata.get('thoughtsTokenCount') or 0
 
             case "openai":
                 usage["inputTokens"] = model_response["usage"]["input_tokens"]

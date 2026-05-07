@@ -118,7 +118,7 @@ async def download_gemini_file(file_uri, apikey):
 
     try:
         client = genai.Client(api_key=apikey)
-        file_content = client.files.get(name=file_uri).read()
+        file_content = client.files.download(file=file_uri)
 
         try:
             results = [json.loads(line) for line in file_content.decode("utf-8").splitlines() if line.strip()]
@@ -154,7 +154,9 @@ async def handle_batch_results(batch_id, apikey):
         return None, False
 
     # Terminal states - download results
-    output_uri = batch.output_uri
+    output_uri = None
+    if batch.dest and batch.dest.file_name:
+        output_uri = batch.dest.file_name
 
     # For Gemini, there's no separate error file like OpenAI
     # All results (success and errors) are in the output file

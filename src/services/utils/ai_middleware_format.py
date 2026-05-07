@@ -4,6 +4,7 @@ import uuid
 from config import Config
 from src.configs.constant import service_name
 from src.services.utils.apiservice import fetch
+from src.services.utils.batch_script_utils import get_batch_result_data
 
 
 async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False, isCache=False):
@@ -44,7 +45,7 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
 
         return {
             "data": {
-                "id": response.get("key", None),  # Use the key from batch response as ID
+                "id": response.get("responseId", None),  # Use the key from batch response as ID
                 "content": content_parts[0].get("text", None) if content_parts else None,
                 "model": response.get("modelVersion", None),
                 "role": candidates[0].get("content", {}).get("role", "model") if candidates else "model",
@@ -53,13 +54,14 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 "annotations": None,
                 "fallback": response.get("fallback") or False,
                 "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(candidates[0].get("finishReason", "") if candidates else ""),
+                "finish_reason": finish_reason_mapping(candidates[0].get("finishReason", "").lower() if candidates else ""),
             },
             "usage": {
-                "input_tokens": response.get("usageMetadata", {}).get("promptTokenCount", None),
-                "output_tokens": response.get("usageMetadata", {}).get("candidatesTokenCount", None),
-                "total_tokens": response.get("usageMetadata", {}).get("totalTokenCount", None),
-                "cached_tokens": response.get("usageMetadata", {}).get("cachedContentTokenCount", None),
+                "input_tokens": response.get("usageMetadata", {}).get("promptTokenCount", 0),
+                "output_tokens": response.get("usageMetadata", {}).get("candidatesTokenCount", 0),
+                "total_tokens": response.get("usageMetadata", {}).get("totalTokenCount", 0),
+                "cached_tokens": response.get("usageMetadata", {}).get("cachedContentTokenCount", 0),
+                "reasoning_tokens": response.get("usageMetadata", {}).get("thoughtsTokenCount", 0)
             },
         }
     elif service == "anthropic" and isBatch:
@@ -81,13 +83,13 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 "finish_reason": finish_reason_mapping(response.get("stop_reason", "")),
             },
             "usage": {
-                "input_tokens": response.get("usage", {}).get("input_tokens", None),
-                "output_tokens": response.get("usage", {}).get("output_tokens", None),
+                "input_tokens": response.get("usage", {}).get("input_tokens", 0),
+                "output_tokens": response.get("usage", {}).get("output_tokens", 0),
                 "total_tokens": (
                     response.get("usage", {}).get("input_tokens", 0) + response.get("usage", {}).get("output_tokens", 0)
                 ),
-                "cache_read_input_tokens": response.get("usage", {}).get("cache_read_input_tokens", None),
-                "cache_creation_input_tokens": response.get("usage", {}).get("cache_creation_input_tokens", None),
+                "cache_read_input_tokens": response.get("usage", {}).get("cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": response.get("usage", {}).get("cache_creation_input_tokens", 0),
             },
         }
     elif service == service_name["openai"] and (type != "image" and type != "embedding"):
@@ -422,7 +424,6 @@ async def Batch_Response_formatter(
     formatted_response = await Response_formatter(
         response=response, service=service, tools=tools, type=type, images=images, isBatch=isBatch
     )
-    print(formatted_response)
     # Add batch_id and message_id to the response for mapping
     formatted_response["batch_id"] = batch_id
     formatted_response["message_id"] = message_id
@@ -459,32 +460,7 @@ async def process_batch_results(results, service, batch_id, batch_variables, mes
 
         # Extract message_id from result (sent as custom_id/key to the APIs)
         # The external API returns our message_id in their custom_id/key field
-        if service == "gemini":
-            message_id = result_item.get("key", None)
-            result_data = result_item.get("response", {})
-            result_data = message_id
-        elif service == "anthropic":
-            message_id = result_item.get("custom_id", None)
-            result_data = result_item.get("result", {})
-            if result_data.get("type") != "error":
-                result_data = result_data.get("message", {})
-        elif service in ["openai", "groq"]:
-            message_id = result_item.get("custom_id", None)
-            response = result_item.get("response", {})
-            result_data = response.get("body", {})
-            status_code = response.get("status_code", 200)
-        elif service == "mistral":
-            message_id = result_item.get("custom_id", None)
-            result_data = result_item.get("response", {})
-
-        # Check for errors (use truthy check: API often sends "error": null on success)
-        has_error = False
-        if service in {"openai", "groq"}:
-            has_error = status_code >= 400 or bool(result_data.get("error"))
-        elif service == "anthropic":
-            has_error = result_data.get("type") == "error"
-        else:
-            has_error = result_data.get("error")
+        message_id, result_data, status_code, has_error = get_batch_result_data(result_item, service)
 
         if has_error:
             formatted_content = {
