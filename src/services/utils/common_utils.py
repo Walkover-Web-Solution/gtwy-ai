@@ -452,12 +452,12 @@ async def handle_pre_tools(parsed_data, custom_config):
                 response_data = pre_tool_response.get("response", {})
                 Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
                 entry = {
-                    "id": response_data.get("script_id"),
-                    "args": response_data.get("args", {}),
+                    "id": tool.get("name", ""),
+                    "args": args,
                     "data": pre_tool_response,
                     "type": "pre_tool",
-                    "name": response_data.get("title") or response_data.get("script_id"),
-                    "error": pre_tool_response.get("status") != 1,
+                    "error": pre_tool_response.get("status", 0) != 1,
+                    "name": tool.get('name', "")
                 }
         
         elif tool_type == "query_refiner":
