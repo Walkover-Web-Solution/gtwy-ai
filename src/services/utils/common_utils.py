@@ -429,6 +429,9 @@ async def handle_pre_tools(parsed_data, custom_config):
     if not pre_tools:
         return
 
+    pre_tool_response = None
+    entry = {}
+
     for tool in pre_tools:
         tool_type = tool.get("type")
         args = dict(tool.get("args", {}))
@@ -436,18 +439,26 @@ async def handle_pre_tools(parsed_data, custom_config):
         args["_response_type"] = parsed_data["configuration"]["response_type"]
 
         if tool_type == "custom_function":
-            pre_function_response = await axios_work(
+            pre_tool_response = await axios_work(
                 args,
                 {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
             )
-            if pre_function_response.get("status") == 0:
+            if pre_tool_response.get("status") == 0:
                 parsed_data["variables"]["pre_function"] = (
-                    f"Error while calling prefunction. Error message: {pre_function_response.get('response')}"
+                    f"Error while calling prefunction. Error message: {pre_tool_response.get('response')}"
                 )
             else:
-                parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
-                response_data = pre_function_response.get("response", {})
+                parsed_data["variables"]["pre_function"] = pre_tool_response.get("response")
+                response_data = pre_tool_response.get("response", {})
                 Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
+                entry = {
+                    "id": response_data.get("script_id"),
+                    "args": response_data.get("args", {}),
+                    "data": pre_tool_response,
+                    "type": "pre_tool",
+                    "name": response_data.get("title") or response_data.get("script_id"),
+                    "error": pre_tool_response.get("status") != 1,
+                }
         
         elif tool_type == "query_refiner":
             prompt = args.get("prompt", "")
@@ -456,16 +467,24 @@ async def handle_pre_tools(parsed_data, custom_config):
             if prompt:
                 variables["prompt"] = prompt
             try:
-                optimised_query = await call_ai_middleware(
+                pre_tool_response = await call_ai_middleware(
                     user=user_query,
                     bridge_id=bridge_ids["query_refiner"],
                     variables=variables,
                     response_type="text",
                 )
-                optimised_query = optimised_query or user_query
+                optimised_query = pre_tool_response or user_query
             except Exception as e:
+                pre_tool_response = None
                 optimised_query = user_query
-         
+            entry = {
+                    "id" : uuid.uuid4().hex,
+                    "type" : "pre_tool",
+                    "name" : "Query Refiner",
+                    "data" : pre_tool_response,
+                    "args" : variables,
+                    "error" : pre_tool_response.get("status") != 1,
+                }
             parsed_data["user"] = optimised_query
             
         elif tool_type == "rag_knowledgebase":
@@ -474,10 +493,11 @@ async def handle_pre_tools(parsed_data, custom_config):
             owner_id = parsed_data.get("owner_id")
             resource_to_collection_mapping = {resource_id: collection_id} if resource_id and collection_id else {}
             if not resource_id or not collection_id:
+                pre_tool_response = None
                 parsed_data["variables"]["rag_pre_result"] = ""
                 logger.warning(f"rag_knowledgebase pre-tool missing resource_id or collection_id for bridge {parsed_data.get('bridge_id')}")
                 continue
-            rag_response = await get_text_from_vectorsQuery(
+            pre_tool_response = await get_text_from_vectorsQuery(
                 {
                     "resource_id": resource_id,
                     "query": parsed_data["user"],
@@ -488,20 +508,37 @@ async def handle_pre_tools(parsed_data, custom_config):
                 owner_id=owner_id,
                 resource_to_collection_mapping=resource_to_collection_mapping,
             )
-            if rag_response.get("status") == 1:
-                parsed_data["variables"]["rag_pre_result"] = rag_response.get("response")
+            if pre_tool_response.get("status") == 1:
+                parsed_data["variables"]["rag_pre_result"] = pre_tool_response.get("response")
             else:
-                parsed_data["variables"]["rag_pre_result"] = f"Error: {rag_response.get('response', 'unknown error')}"
+                parsed_data["variables"]["rag_pre_result"] = f"Error: {pre_tool_response.get('response', 'unknown error')}"
+            entry = {
+                    "id":uuid.uuid4().hex,
+                    "type":"pre_tool",
+                    "name":"RAG Knowledgebase",
+                    "data":pre_tool_response,
+                    "args":args,
+                    "error":pre_tool_response.get("status") != 1,
+                }
         
         elif tool_type == "gtwy_web_search":
-            web_response = await call_firecrawl_scrape(args)
-            if web_response.get("status") == 1:
-                parsed_data["variables"]["web_search_pre_result"] = web_response.get("response")
+            pre_tool_response = await call_firecrawl_scrape(args)
+            if pre_tool_response.get("status") == 1:
+                parsed_data["variables"]["web_search_pre_result"] = pre_tool_response.get("response")
             else:
-                response = web_response.get('response')
+                response = pre_tool_response.get('response')
                 error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
                 parsed_data["variables"]["web_search_pre_result"] = error_msg
-
+            entry = {
+                    "id":uuid.uuid4().hex,
+                    "type":"pre_tool",
+                    "name":"Web Search",
+                    "data":pre_tool_response,
+                    "args":args,
+                    "error":pre_tool_response.get("status") != 1,
+                }
+    parsed_data.setdefault('pre_tool_response_to_save', {})
+    parsed_data['pre_tool_response_to_save'].update({entry['id']: entry})
 
 async def handle_post_tool(parsed_data, result):
     """Execute the folder-level post_tool after every AI call."""
@@ -1753,6 +1790,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 variables=parsed_data.get("variables", {}),
                 meta=parsed_data.get("meta"),
             )
+            if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
+                result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
+
             await process_background_tasks(
                 parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
             )

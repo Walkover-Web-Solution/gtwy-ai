@@ -578,6 +578,9 @@ async def chat(request_body):
                 meta=parsed_data.get("meta"),
             )
 
+            if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
+                result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
+
             # Process background tasks (handles both transfer and non-transfer cases)
             await process_background_tasks(
                 parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
@@ -807,6 +810,10 @@ async def batch(request_body):
 
         # Store custom_config as AiConfig for batch conversation logs
         parsed_data["AiConfig"] = custom_config
+
+        if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
+                result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
+
 
         # Step 9: Process batch conversation logs in background
         await process_batch_background_tasks(
