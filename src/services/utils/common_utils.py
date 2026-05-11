@@ -1671,10 +1671,10 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                     await sendResponse(
                         parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
                     ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
-            if is_nested_stream_call:
-                await save_error_history(parsed_data, first_err, params, timer, class_obj, thread_info)
-                return {"success": False, "message": str(original_error), "response": {}}
-            raise
+                if is_nested_stream_call:
+                    await save_error_history(parsed_data, first_err, params, timer, class_obj, thread_info)
+                    return {"success": False, "message": str(original_error), "response": {}}
+                raise
 
         template_data = render_template_if_applicable(parsed_data, result)
         result.setdefault("response", {}).setdefault("data", {})
