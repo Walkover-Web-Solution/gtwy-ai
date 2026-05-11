@@ -368,19 +368,24 @@ class BaseService:
             "chatbot_message": "",
             "tools_call_data": self.func_tool_call_data,
             "message_id": self.message_id,
-            "llm_urls": [
-                {"revised_prompt": img.get("revised_prompt"), "permanent_url": img.get("url"), "type": "image"}
-                for img in model_response.get("data", [])
-                if img.get("url")
-            ]
-            or [
-                {
-                    "revised_prompt": model_response.get("data", [{}])[0].get("revised_prompt", None),
-                    "permanent_url": model_response.get("data", [{}])[0].get("url", None),
-                }
-            ]
-            if model_response.get("data", [{}])[0].get("url")
-            else [],
+            "llm_urls": (
+                [
+                    {"revised_prompt": img.get("revised_prompt"), "permanent_url": img.get("url"), "type": "image"}
+                    for img in model_response.get("data", [])
+                    if img.get("url")
+                ]
+                + [
+                    {
+                        "revised_prompt": item.get("revised_prompt"),
+                        "permanent_url": item.get("image_url") or item.get("permanent_url") or item.get("url"),
+                        "type": "image",
+                    }
+                    for item in model_response.get("output", [])
+                    if isinstance(item, dict)
+                    and item.get("type") == "image_generation_call"
+                    and (item.get("image_url") or item.get("permanent_url") or item.get("url"))
+                ]
+            ),
             "revised_prompt": model_response.get("data", [{}])[0].get("revised_prompt", None),
             "user_urls": [
                 *({"url": u, "type": "image"} for u in (self.image_data or [])),

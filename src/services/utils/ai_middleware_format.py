@@ -93,9 +93,21 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
             },
         }
     elif service == service_name["openai"] and (type != "image" and type != "embedding"):
+        generated_image_urls = [
+            {
+                "revised_prompt": item.get("revised_prompt"),
+                "image_url": item.get("image_url") or item.get("permanent_url") or item.get("url"),
+                "permanent_url": item.get("permanent_url") or item.get("image_url") or item.get("url"),
+            }
+            for item in response.get("output", [])
+            if isinstance(item, dict)
+            and item.get("type") == "image_generation_call"
+            and (item.get("image_url") or item.get("permanent_url") or item.get("url"))
+        ]
         return {
             "data": {
                 "id": response.get("id", None),
+                "image_urls": generated_image_urls,
                 "content": (
                     # Check if any item in output is a function call
                     next(
