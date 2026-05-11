@@ -83,6 +83,7 @@ class ConversationLog(Base):
     thread_id = Column(String, nullable=True)
     version_id = Column(String, nullable=True)
     bridge_id = Column(String, nullable=True)
+    testcase_id = Column(String, nullable=True)
     user_urls = Column(JSON, nullable=True, default=[])
     llm_urls = Column(JSON, nullable=True, default=[])
     AiConfig = Column(JSON, nullable=True)

@@ -402,7 +402,15 @@ class BaseService:
             "is_cached": is_cached,
             "error": self.tool_call_limit_error or "",
             "plans": self.parsed_data.get("plans") if hasattr(self, 'parsed_data') else None,
+            "testcase_id": self._resolve_testcase_id(),
         }
+
+    def _resolve_testcase_id(self):
+        testcase_data = (self.parsed_data.get("testcase_data") if hasattr(self, 'parsed_data') else None) or {}
+        raw = testcase_data.get("_id")
+        if not raw or raw == "direct_testcase":
+            return None
+        return str(raw)
 
     def service_formatter(self, configuration: object, service: str):  # changes
         try:

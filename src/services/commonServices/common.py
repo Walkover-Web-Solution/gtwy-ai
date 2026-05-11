@@ -13,6 +13,7 @@ from src.configs.constant import redis_keys, alert_types
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.common_utils import (
+    _publish_history_to_queue,
     add_default_template,
     add_files_to_parse_data,
     add_user_in_variables,
@@ -591,6 +592,18 @@ async def chat(request_body):
                     parsed_data.get("testcase_data", {}), result, parsed_data
                 )
                 result["response"]["testcase_result"] = testcase_result
+
+                # Publish to PG conversation_logs (append-only, includes testcase_id)
+                parsed_data["historyParams"] = result.get("historyParams") or create_history_params(
+                    parsed_data, class_obj=class_obj, thread_info=thread_info
+                )
+                await _publish_history_to_queue(
+                    [parsed_data["usage"]],
+                    parsed_data["historyParams"],
+                    parsed_data["version_id"],
+                    thread_info=thread_info,
+                    parsed_data=parsed_data,
+                )
             else:
                 await process_background_tasks_for_playground(result, parsed_data)
         

@@ -1417,6 +1417,11 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
     thread_id = parsed_data.get("thread_id") or (thread_info.get("thread_id") if thread_info else None)
     sub_thread_id = parsed_data.get("sub_thread_id") or (thread_info.get("sub_thread_id") if thread_info else None)
 
+    raw_testcase_id = (parsed_data.get("testcase_data") or {}).get("_id")
+    testcase_id = (
+        str(raw_testcase_id) if raw_testcase_id and raw_testcase_id != "direct_testcase" else None
+    )
+
     return {
         "thread_id": thread_id,
         "sub_thread_id": sub_thread_id,
@@ -1438,6 +1443,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
         "child_id": None,
         "prompt": parsed_data["configuration"].get("prompt"),
         "plans": parsed_data.get("plans"),
+        "testcase_id": testcase_id,
         "llm_urls": [],
         "user_urls": (
             [{"url": u, "type": "image"} for u in parsed_data.get("images", [])]
