@@ -1241,13 +1241,19 @@ def get_service_by_model(model):
 
 
 def restructure_json_schema(response_type, service):
+    # Service-specific shaping for response_type. Returns:
+    #   - dict: replace custom_config["response_type"] with the returned value
+    #   - None: drop custom_config["response_type"] entirely
+    if not isinstance(response_type, dict):
+        return response_type
+
     # Handle Template IDs -> Generate Schema
     if 'template_id' in response_type:
         template_ids = response_type['template_id']
         if not isinstance(template_ids, list):
             template_ids = [template_ids]
-            
-        schemas = []        
+
+        schemas = []
         if schemas:
              if len(schemas) == 1:
                  response_type['json_schema'] = schemas[0]
@@ -1266,21 +1272,30 @@ def restructure_json_schema(response_type, service):
                          "additionalProperties": False
                      }
                  }
-    
+
     match service:
         case "openai":
+            # OpenAI Responses API accepts text.format = {type, ...}. For json_schema,
+            # flatten the inner json_schema dict into response_type so service_formatter
+            # can wrap it directly. For json_object/text, pass through unchanged.
             schema = response_type.pop("json_schema", {})
-            for key, value in schema.items():
-                response_type[key] = value
+            if isinstance(schema, dict):
+                for key, value in schema.items():
+                    response_type[key] = value
             return response_type
         case "anthropic":
-            # ServiceKeys renames response_type -> output_config; value must be API output_config payload (no extra nesting)
+            # Anthropic output_config only accepts {effort, format} where
+            # format.type must be "json_schema" with a real schema. For any other
+            # response_type (json_object, text, missing/invalid schema), drop the
+            # field — Claude follows JSON output via prompt instructions.
+            if response_type.get("type") != "json_schema":
+                return None
             json_schema = response_type.get("json_schema") or {}
             if not isinstance(json_schema, dict):
-                return response_type
+                return None
             schema = json_schema.get("schema") if "schema" in json_schema else json_schema
             if not schema or not isinstance(schema, dict):
-                return response_type
+                return None
             schema = remove_additional_properties_with_anyof(schema)
             return {
                 "format": {
@@ -1289,7 +1304,29 @@ def restructure_json_schema(response_type, service):
                 }
             }
         case _:
+            # Gemini, Groq, Grok, OpenRouter, Mistral: service_formatter handles
+            # the renamed key and any further shaping (e.g. Gemini converts
+            # response_mime_type dict -> "application/json").
             return response_type
+
+
+def apply_response_type_conversion(custom_config, service):
+    """Run service-specific response_type conversion in place on custom_config.
+
+    Centralises the call to restructure_json_schema so every place that builds
+    a customConfig — the primary chat path, the fallback path, planner/executor
+    overrides — gets identical per-service handling.
+    """
+    if not isinstance(custom_config, dict):
+        return
+    response_type = custom_config.get("response_type")
+    if not isinstance(response_type, dict):
+        return
+    converted = restructure_json_schema(response_type, service)
+    if converted is None:
+        custom_config.pop("response_type", None)
+    else:
+        custom_config["response_type"] = converted
 
 
 def validate_json_schema_configuration(configuration):

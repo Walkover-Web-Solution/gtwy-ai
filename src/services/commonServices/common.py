@@ -36,7 +36,7 @@ from src.services.utils.common_utils import (
     save_error_history,
     process_background_tasks_for_playground,
     process_variable_state,
-    restructure_json_schema,
+    apply_response_type_conversion,
     validate_json_schema_configuration,
     setup_agent_tools,
     update_usage_metrics,
@@ -267,15 +267,12 @@ async def chat(request_body):
             memory,
             bridge_configurations,
         )
-        # Step 10: json_schema service conversion
+        # Step 10: validate response_type shape (service-specific conversion runs
+        # after planner setup below so planner mutations are captured).
         is_valid_schema, schema_error = validate_json_schema_configuration(custom_config)
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
-            custom_config["response_type"] = restructure_json_schema(
-                custom_config["response_type"], parsed_data["service"]
-            )
         if parsed_data.get("mode") == "todo":
             return await execute_advanced_workflow(
                 parsed_data=parsed_data,
@@ -296,6 +293,9 @@ async def chat(request_body):
                     bridge_configurations=bridge_configurations,
                 )
             await prepare_planner_request(parsed_data, bridge_configurations, custom_config)
+
+        # Convert response_type per service after all mutations (planner included).
+        apply_response_type_conversion(custom_config, parsed_data["service"])
 
         # Execute with retry mechanism
         class_obj = await Helper.create_service_handler(params, parsed_data["service"])
@@ -438,13 +438,7 @@ async def chat(request_body):
                     bridge_configurations,
                 )
 
-                if (
-                    "response_type" in fallback_custom_config
-                    and fallback_custom_config["response_type"].get("type") == "json_schema"
-                ):
-                    fallback_custom_config["response_type"] = restructure_json_schema(
-                        fallback_custom_config["response_type"], parsed_data["service"]
-                    )
+                apply_response_type_conversion(fallback_custom_config, parsed_data["service"])
 
                 class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
