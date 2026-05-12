@@ -7,6 +7,7 @@ from globals import logger
 from src.services.commonServices.streaming_service import StreamingService
 from src.services.todo import executor_service, plan_store
 from src.services.todo.plan_store import _get_tasks, _set_tasks
+from src.services.todo import synthesizer_service
 from src.db_services.metrics_service import publish_plan_history_update
 
 
@@ -132,13 +133,20 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             final_finish_reason = _derive_done_finish_reason(final_plan)
+            synthesized = ""
+            if final_plan:
+                synthesized = await synthesizer_service.synthesize_results(
+                    bridge_id, bridge_configurations, parsed_data, final_plan, streamer=streamer,
+                )
             formatted = _format_plan_response(
                 final_plan,
                 message_id,
                 model,
                 finish_reason=final_finish_reason,
-                extract_final_result=True,
+                extract_final_result=not synthesized,
             )
+            if synthesized:
+                formatted["data"]["content"] = synthesized
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
@@ -219,13 +227,20 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             final_finish_reason = _derive_done_finish_reason(final_plan)
+            synthesized = ""
+            if final_plan:
+                synthesized = await synthesizer_service.synthesize_results(
+                    bridge_id, bridge_configurations, parsed_data, final_plan, streamer=streamer,
+                )
             formatted = _format_plan_response(
                 final_plan,
                 message_id,
                 model,
                 finish_reason=final_finish_reason,
-                extract_final_result=True,
+                extract_final_result=not synthesized,
             )
+            if synthesized:
+                formatted["data"]["content"] = synthesized
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
@@ -275,13 +290,20 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             final_finish_reason = _derive_done_finish_reason(final_plan)
+            synthesized = ""
+            if final_plan:
+                synthesized = await synthesizer_service.synthesize_results(
+                    bridge_id, bridge_configurations, parsed_data, final_plan, streamer=streamer,
+                )
             formatted = _format_plan_response(
                 final_plan,
                 message_id,
                 model,
                 finish_reason=final_finish_reason,
-                extract_final_result=True,
+                extract_final_result=not synthesized,
             )
+            if synthesized:
+                formatted["data"]["content"] = synthesized
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
