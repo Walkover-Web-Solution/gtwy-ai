@@ -31,6 +31,22 @@ async def get_specific_prebuilt_prompt_service(org_id: str, prompt_key: str):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}") from e
 
 
+async def get_multiple_prebuilt_prompts_without_org_service(prompt_keys: list[str]) -> dict:
+    try:
+        query = {"$or": [{key: {"$exists": True}} for key in prompt_keys]}
+        projection = {"_id": 0, **{key: 1 for key in prompt_keys}}
+        result = {}
+        async for document in prebuilt_db.find(query, projection).sort("_id", -1):
+            for key in prompt_keys:
+                if key not in result and document.get(key):
+                    result[key] = document[key]
+            if all(key in result for key in prompt_keys):
+                break
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}") from e
+
+
 async def get_specific_prebuilt_prompt_without_org_service(prompt_key: str):
     try:
         query = {

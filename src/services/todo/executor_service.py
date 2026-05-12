@@ -5,7 +5,7 @@ import time
 import uuid
 
 from globals import logger
-from src.services.prebuilt_prompt_service import get_specific_prebuilt_prompt_without_org_service
+from src.services.prebuilt_prompt_service import get_multiple_prebuilt_prompts_without_org_service
 from src.services.todo import plan_store
 
 
@@ -68,14 +68,17 @@ WORKER_SYSTEM_PROMPT_TEMPLATE = """You are a task executor in a Planner→Execut
 _WORKER_PROMPT_TEMPLATE_CACHE = None
 _WORKER_PROMPT_TEMPLATE_FETCHED = False
 _WORKER_PROMPT_TEMPLATE_LOCK = asyncio.Lock()
+_SYNTHESIZER_PROMPT_CACHE = None
+
+
+async def get_synthesizer_prompt() -> str:
+    """Return cached synthesizer prompt (populated during worker prompt fetch)."""
+    return _SYNTHESIZER_PROMPT_CACHE or ""
 
 
 async def _get_worker_prompt_template_from_db(default_prompt):
-    """Fetch worker prompt template from DB only once per process.
-
-    Mirrors planner prompt override behavior while avoiding repeated DB reads.
-    """
-    global _WORKER_PROMPT_TEMPLATE_CACHE, _WORKER_PROMPT_TEMPLATE_FETCHED
+    """Fetch worker + synthesizer prompts from DB in one call, cache both."""
+    global _WORKER_PROMPT_TEMPLATE_CACHE, _WORKER_PROMPT_TEMPLATE_FETCHED, _SYNTHESIZER_PROMPT_CACHE
 
     if _WORKER_PROMPT_TEMPLATE_FETCHED:
         return _WORKER_PROMPT_TEMPLATE_CACHE or default_prompt
@@ -85,12 +88,17 @@ async def _get_worker_prompt_template_from_db(default_prompt):
             return _WORKER_PROMPT_TEMPLATE_CACHE or default_prompt
 
         try:
-            prompt_data = await get_specific_prebuilt_prompt_without_org_service("worker_prompt")
-            prompt_override = (prompt_data or {}).get("worker_prompt")
-            if isinstance(prompt_override, str) and prompt_override.strip():
-                _WORKER_PROMPT_TEMPLATE_CACHE = prompt_override
+            prompt_data = await get_multiple_prebuilt_prompts_without_org_service(
+                ["worker_prompt", "synthesizer_prompt"]
+            )
+            worker_override = prompt_data.get("worker_prompt")
+            synth_override = prompt_data.get("synthesizer_prompt")
+            if isinstance(worker_override, str) and worker_override.strip():
+                _WORKER_PROMPT_TEMPLATE_CACHE = worker_override
+            if isinstance(synth_override, str) and synth_override.strip():
+                _SYNTHESIZER_PROMPT_CACHE = synth_override
         except Exception as err:
-            logger.error(f"Error fetching worker_prompt from preBuiltPrompts: {err}")
+            logger.error(f"Error fetching prompts from preBuiltPrompts: {err}")
         finally:
             _WORKER_PROMPT_TEMPLATE_FETCHED = True
 
