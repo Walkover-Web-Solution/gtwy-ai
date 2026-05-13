@@ -265,9 +265,9 @@ async def _prepare_configuration_response(
         "api_collection":apikey_src,
         "limit": {
             "bridge": {
-                "limit": bridge_data.get("bridges", {}).get("bridge_limit"),
-                "limit_start_date": bridge_data.get("bridges", {}).get("bridge_limit_start_date"),
-                "limit_reset_period": bridge_data.get("bridges", {}).get("bridge_limit_reset_period"),
+                "limit": bridge_data.get("bridges", {}).get("agent_limit", {}).get("limit"),
+                "limit_start_date": bridge_data.get("bridges", {}).get("agent_limit", {}).get("start_date"),
+                "limit_reset_period": bridge_data.get("bridges", {}).get("agent_limit", {}).get("reset_period"),
             },
             "folder": {
                 "limit": bridge_data.get("bridges", {}).get("folder_limit"),
