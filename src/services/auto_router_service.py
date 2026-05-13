@@ -89,7 +89,7 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation, t
             )
             if execution_time_logs is not None:
                 execution_time_logs.append(
-                    {"step": f"NotDiamond select_model [Option: {tradeoff or "cost"}]", "time_taken": timer.stop("NotDiamond select_model")}
+                    {"step": f"NotDiamond select_model [Option: {tradeoff or 'cost'}]", "time_taken": timer.stop("NotDiamond select_model")}
                 )
     
             best_model = result.providers[0].model

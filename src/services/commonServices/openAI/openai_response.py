@@ -19,16 +19,14 @@ class OpenaiResponse(BaseService):
             openAIResponse = await self.image(self.customConfig, self.apikey, service_name["openai"])
             modelResponse = openAIResponse.get("modelResponse", {})
             if not openAIResponse.get("success"):
-                if not self.playground:
-                    await self.handle_failure(openAIResponse)
+                await self.handle_failure(openAIResponse)
                 raise ValueError(openAIResponse.get("error"))
             response = await Response_formatter(
                 modelResponse, service_name["openai"], tools, self.type, self.image_data
             )
-            if not self.playground:
-                historyParams = self.prepare_history_params(response, modelResponse, tools, None)
-                historyParams["message"] = "image generated successfully"
-                historyParams["type"] = "assistant"
+            historyParams = self.prepare_history_params(response, modelResponse, tools, None)
+            historyParams["message"] = "image generated successfully"
+            historyParams["type"] = "assistant"
         else:
             conversation = ConversationService.createOpenAiConversation(
                 self.configuration.get("conversation"), self.memory, self.files
@@ -99,8 +97,7 @@ class OpenaiResponse(BaseService):
                     item.pop("result", None)
 
             if not openAIResponse.get("success"):
-                if not self.playground:
-                    await self.handle_failure(openAIResponse)
+                await self.handle_failure(openAIResponse)
                 raise ValueError(openAIResponse.get("error"))
 
             # Check for function calls — streaming returns has_tool_calls flag directly
@@ -138,11 +135,10 @@ class OpenaiResponse(BaseService):
                     modelResponse, service_name["openai"], {}, self.type, self.image_data
                 )
 
-            if not self.playground:
-                transfer_config = (
-                    functionCallRes.get("transfer_agent_config") if has_function_call and functionCallRes else None
-                )
-                historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
+            transfer_config = (
+                functionCallRes.get("transfer_agent_config") if has_function_call and functionCallRes else None
+            )
+            historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
 
         # Add transfer_agent_config to return if transfer was detected
         result = {"success": True, "modelResponse": modelResponse, "historyParams": historyParams, "response": response}

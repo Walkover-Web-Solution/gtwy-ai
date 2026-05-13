@@ -97,6 +97,9 @@ async def handle_playground_testcase(result, parsed_data, Flag):
             update_data = {}
             if "conversation" in parsed_data["configuration"]:
                 update_data["conversation"] = parsed_data["configuration"]["conversation"]
+            else:
+                # Get conversation from existing testcase if not in configuration
+                update_data["conversation"] = existing_testcase.get("conversation", [])
             if "matching_type" in testcase_data:
                 update_data["matching_type"] = testcase_data["matching_type"]
 

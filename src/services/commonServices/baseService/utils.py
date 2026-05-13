@@ -551,7 +551,7 @@ async def make_request_data(request: Request):
     state_data = {}
     path_params = {}
 
-    attributes = ["is_playground", "version", "profile"]
+    attributes = ["version", "profile"]
     for attr in attributes:
         if hasattr(request.state, attr):
             state_data[attr] = getattr(request.state, attr)
@@ -564,8 +564,9 @@ async def make_request_data(request: Request):
 
     body = convert_datetime(body)
     state_data = convert_datetime(state_data)
+    id_to_use = body.get('version') if body.get('version') else (body.get('agent_id') or body.get('bridge_id'))
 
-    result = {"body": body, "state": state_data, "path_params": path_params}
+    result = {"body": body, "state": state_data, "path_params": path_params, "id_to_use": id_to_use}
     return result
 
 

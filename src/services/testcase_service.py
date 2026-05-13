@@ -220,7 +220,7 @@ async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str,
                 },
                 **db_config,
             },
-            "state": {"is_playground": True, "version": 2},
+            "state": {"version": 2},
         }
 
         # Call chat function

@@ -58,7 +58,6 @@ class BaseService:
         self.model = params.get("model")
         self.service = params.get("service")
         self.modelOutputConfig = params.get("modelOutputConfig")
-        self.playground = params.get("playground")
         self.template = params.get("template")
         self.response_format = params.get("response_format")
         self.thread_flag = params.get("thread_flag")
@@ -116,7 +115,7 @@ class BaseService:
 
     async def run_tool(self, responses, service):
         codes_mapping, function_list = make_code_mapping_by_service(responses, service)
-        if not self.playground and self.response_format["type"] != "webhook":
+        if self.response_format["type"] != "webhook":
             asyncio.create_task(
                 sendResponse(self.response_format, data={"function_call": True, "Name": function_list}, success=True)
             )
@@ -255,7 +254,7 @@ class BaseService:
         configuration, tools = self.update_configration(
             model_response, func_response_data, configuration, mapping_response_data, service, tools
         )
-        if not self.playground and not self.stream_mode and self.response_format["type"] != "webhook":
+        if not self.stream_mode and self.response_format["type"] != "webhook":
             asyncio.create_task(
                 sendResponse(
                     self.response_format,
@@ -515,7 +514,6 @@ class BaseService:
                     self.is_embed,
                     self.user_id,
                     self.thread_id,
-                    self.playground,
                     self.api_collection,
                 )
             elif service == service_name["anthropic"]:
@@ -643,7 +641,6 @@ class BaseService:
                     self.is_embed,
                     self.user_id,
                     self.thread_id,
-                    self.playground,
                     self.api_collection,
                 )
             if not response["success"]:

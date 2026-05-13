@@ -170,7 +170,6 @@ def parse_request_body(request_body):
         "plans": body.get("plans"),
         "model": body.get("configuration", {}).get("model"),
         "auto_model_select": body.get("auto_model_select", False),
-        "is_playground": state.get("is_playground") or body.get("is_playground") or False,
         "bridge": body.get("bridge"),
         "pre_tools": body.get("pre_tools"),
         "version": state.get("version"),
@@ -239,6 +238,7 @@ def parse_request_body(request_body):
         "meta": body.get("meta"),
         "limit": body.get("limit"),
         "is_rerun": body.get("is_rerun", False),
+        "is_playground": body.get("is_playground", False),
     }
 
 
@@ -712,7 +712,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             custom_config["response_type"] = {"type": "json_object"}
 
-        if not parsed_data["is_playground"] and bridge_type is None and model_config.get("response_type"):
+        if bridge_type is None and model_config.get("response_type"):
             res = parsed_data["body"].get("response_type") or parsed_data["body"].get("configuration", {}).get(
                 "response_type", {"type": "json_object"}
             )
@@ -762,7 +762,6 @@ def build_service_params(
         "model": parsed_data["model"],
         "service": parsed_data["service"],
         "modelOutputConfig": model_output_config,
-        "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data.get("response_format") or {},
         "thread_flag": parsed_data.get("thread_flag"),
@@ -949,6 +948,48 @@ async def process_background_tasks(
     """
     # Primary-agent sub-tasks inside plan mode skip per-call history; the
     # single final plan result is saved by todo_handler after full execution.
+    from bson import ObjectId
+    from src.controllers.testcase_controller import handle_playground_testcase
+    testcase_data = parsed_data.get("testcase_data", {})
+    if testcase_data is not None:
+        if testcase_data.get("testcase_id"):
+            Flag = False
+
+            # Update testcase in background (async task)
+            async def update_testcase_background():
+                try:
+                    await handle_playground_testcase(result, parsed_data, Flag)
+                except Exception as e:
+                    logger.error(f"Error updating testcase in background: {str(e)}")
+
+            asyncio.create_task(update_testcase_background())
+
+        else:
+            # Generate testcase_id immediately and add to response
+            new_testcase_id = str(ObjectId())
+            result["response"]["testcase_id"] = new_testcase_id
+            parsed_data["testcase_data"]["testcase_id"] = new_testcase_id
+            channel_id = f"{parsed_data.get('org_id')}_{parsed_data.get('bridge_id')}_{parsed_data.get('version_id')}"
+            playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
+            if playground_response_format:
+                await sendResponse(
+                    playground_response_format,
+                    parsed_data["testcase_data"],
+                    success=True,
+                    variables=parsed_data.get("variables", {}),
+                )
+
+            # Add the generated ID to testcase_data for the background task
+
+            # Save testcase data in background using the same function
+            async def create_testcase_background():
+                try:
+                    Flag = True
+                    await handle_playground_testcase(result, parsed_data, Flag)
+                except Exception as e:
+                    logger.error(f"Error creating testcase in background: {str(e)}")
+
+            asyncio.create_task(create_testcase_background())
     if parsed_data.get("skip_history"):
         return
 
@@ -1075,29 +1116,35 @@ async def process_background_tasks_for_error(parsed_data, error):
     if parsed_data.get("skip_history"):
         return
 
-    tasks = [
-        send_alert(
-            bridge_id=parsed_data["bridge_id"],
-            org_id=parsed_data["org_id"],
-            error_log={"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]},
-            error_type=alert_types["error"],
-            bridge_name=parsed_data.get("name"),
-            org_name=parsed_data.get("org_name"),
-            is_embed=parsed_data.get("is_embed"),
-            user_id=parsed_data.get("user_id"),
-            thread_id=parsed_data.get("thread_id"),
-            service=parsed_data.get("service"),
-            is_playground=parsed_data.get("is_playground"),
-            api_collection=parsed_data.get("api_collection"),
-            is_external_error=False,
-        ),
+    tasks = []
+    
+    # Only send alert if not in playground mode
+    if not parsed_data.get("is_playground"):
+        tasks.append(
+            send_alert(
+                bridge_id=parsed_data["bridge_id"],
+                org_id=parsed_data["org_id"],
+                error_log={"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]},
+                error_type=alert_types["error"],
+                bridge_name=parsed_data.get("name"),
+                org_name=parsed_data.get("org_name"),
+                is_embed=parsed_data.get("is_embed"),
+                user_id=parsed_data.get("user_id"),
+                thread_id=parsed_data.get("thread_id"),
+                service=parsed_data.get("service"),
+                api_collection=parsed_data.get("api_collection"),
+                is_external_error=False,
+            )
+        )
+    
+    tasks.extend([
         _publish_history_to_queue(
             [parsed_data["usage"]],
             parsed_data["historyParams"],
             parsed_data["version_id"],
             parsed_data=parsed_data,
         ),
-    ]
+    ])
     await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)
 
 
@@ -1165,7 +1212,6 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "model": parsed_data["model"],
         "service": parsed_data["service"],
         "modelOutputConfig": model_output_config,
-        "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data["response_format"],
         "thread_flag": parsed_data.get("thread_flag"),
@@ -1507,58 +1553,6 @@ async def add_files_to_parse_data(thread_id, sub_thread_id, bridge_id):
     return []
 
 
-async def process_background_tasks_for_playground(result, parsed_data):
-    from bson import ObjectId
-
-    from src.controllers.testcase_controller import handle_playground_testcase
-
-    try:
-        testcase_data = parsed_data.get("testcase_data", {})
-
-        # If testcase_id exists, update in background and return immediately
-        if testcase_data.get("testcase_id"):
-            Flag = False
-
-            # Update testcase in background (async task)
-            async def update_testcase_background():
-                try:
-                    await handle_playground_testcase(result, parsed_data, Flag)
-                except Exception as e:
-                    logger.error(f"Error updating testcase in background: {str(e)}")
-
-            asyncio.create_task(update_testcase_background())
-
-        else:
-            # Generate testcase_id immediately and add to response
-            new_testcase_id = str(ObjectId())
-            result["response"]["testcase_id"] = new_testcase_id
-            parsed_data["testcase_data"]["testcase_id"] = new_testcase_id
-            channel_id = f"{parsed_data.get('org_id')}_{parsed_data.get('bridge_id')}_{parsed_data.get('version_id')}"
-            playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
-            if playground_response_format:
-                await sendResponse(
-                    playground_response_format,
-                    parsed_data["testcase_data"],
-                    success=True,
-                    variables=parsed_data.get("variables", {}),
-                )
-
-            # Add the generated ID to testcase_data for the background task
-
-            # Save testcase data in background using the same function
-            async def create_testcase_background():
-                try:
-                    Flag = True
-                    await handle_playground_testcase(result, parsed_data, Flag)
-                except Exception as e:
-                    logger.error(f"Error creating testcase in background: {str(e)}")
-
-            asyncio.create_task(create_testcase_background())
-
-    except Exception as e:
-        logger.error(f"Error processing playground testcase: {str(e)}")
-
-
 async def update_cost_and_last_used(parsed_data):
     try:
         await update_cost(parsed_data)
@@ -1654,10 +1648,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
                         if not is_nested_stream_call:
                             await class_obj.streamer.close()
-                    if not parsed_data.get("is_playground"):
-                        await sendResponse(
-                            parsed_data.get("response_format"), str(retry_err), variables=parsed_data.get("variables", {})
-                        ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+                    await sendResponse(
+                        parsed_data.get("response_format"), str(retry_err), variables=parsed_data.get("variables", {})
+                    ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
                     if is_nested_stream_call:
                         await save_error_history(parsed_data, retry_err, params, timer, class_obj, thread_info)
                         return {"success": False, "message": str(retry_err), "response": {}}
@@ -1667,10 +1660,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                     await class_obj.streamer.emit_error(original_error)
                     if not is_nested_stream_call:
                         await class_obj.streamer.close()
-                if not parsed_data.get("is_playground"):
-                    await sendResponse(
-                        parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
-                    ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+                await sendResponse(
+                    parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
+                ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
                 if is_nested_stream_call:
                     await save_error_history(parsed_data, first_err, params, timer, class_obj, thread_info)
                     return {"success": False, "message": str(original_error), "response": {}}
@@ -1759,7 +1751,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
         params["execution_time_logs"].append({"step": "streaming", "time_taken": round(timer.stop("streaming"), 4)})
         latency = create_latency_object(timer, params)
-        if template_data and result.get("historyParams") and not parsed_data.get("is_playground"):
+        if template_data and result.get("historyParams"):
             result["historyParams"]["chatbot_message"] = json.dumps(rendered_content)
 
         if template_data and class_obj.streamer:
@@ -1769,7 +1761,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 metadata=template_data,
             )
 
-        if not parsed_data["is_playground"] and result.get("response") and result["response"].get("data"):
+        if result.get("response") and result["response"].get("data"):
             result["response"]["data"]["message_id"] = parsed_data["message_id"]
         update_usage_metrics(parsed_data, params, latency, result=result, success=True)
         result.setdefault("response", {}).setdefault("usage", {})
@@ -1796,22 +1788,19 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
         await handle_post_tool(parsed_data, result)
 
-        if not parsed_data["is_playground"]:
-            await sendResponse(
-                parsed_data.get("response_format"),
-                result["response"],
-                success=True,
-                variables=parsed_data.get("variables", {}),
-                meta=parsed_data.get("meta"),
-            )
-            if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
-                result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
+        await sendResponse(
+            parsed_data.get("response_format"),
+            result["response"],
+            success=True,
+            variables=parsed_data.get("variables", {}),
+            meta=parsed_data.get("meta"),
+        )
+        if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
+            result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
 
-            await process_background_tasks(
-                parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
-            )
-        else:
-            await process_background_tasks_for_playground(result, parsed_data)
+        await process_background_tasks(
+            parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
+        )
 
         if class_obj.streamer:
             if getattr(class_obj, "tool_call_limit_error", None):

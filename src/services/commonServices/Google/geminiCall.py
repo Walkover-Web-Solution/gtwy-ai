@@ -19,16 +19,14 @@ class GeminiHandler(BaseService):
             gemini_response = await self.image(self.customConfig, self.apikey, service_name["gemini"])
             model_response = gemini_response.get("modelResponse", {})
             if not gemini_response.get("success"):
-                if not self.playground:
-                    await self.handle_failure(gemini_response)
+                await self.handle_failure(gemini_response)
                 raise ValueError(gemini_response.get("error"))
             response = await Response_formatter(
                 model_response, service_name["gemini"], tools, self.type, self.image_data
             )
-            if not self.playground:
-                historyParams = self.prepare_history_params(response, model_response, tools, None)
-                historyParams["message"] = "image generated successfully"
-                historyParams["type"] = "assistant"
+            historyParams = self.prepare_history_params(response, model_response, tools, None)
+            historyParams["message"] = "image generated successfully"
+            historyParams["type"] = "assistant"
         elif self.file_data or self.youtube_url:
             self.customConfig["prompt"] = self.user
             if self.youtube_url:
@@ -36,16 +34,14 @@ class GeminiHandler(BaseService):
             gemini_response = await self.video(self.customConfig, self.apikey, service_name["gemini"])
             model_response = gemini_response.get("modelResponse", {})
             if not gemini_response.get("success"):
-                if not self.playground:
-                    await self.handle_failure(gemini_response)
+                await self.handle_failure(gemini_response)
                 raise ValueError(gemini_response.get("error"))
             self.type = "video"
             response = await Response_formatter(
                 model_response, service_name["gemini"], tools, self.type, self.file_data
             )
-            if not self.playground:
-                historyParams = self.prepare_history_params(response, model_response, tools, None)
-                historyParams["type"] = "assistant"
+            historyParams = self.prepare_history_params(response, model_response, tools, None)
+            historyParams["type"] = "assistant"
         else:
             conversation = ConversationService.createGeminiConversation(self.configuration.get('conversation'), self.memory).get('messages', [])
 
@@ -83,8 +79,7 @@ class GeminiHandler(BaseService):
                 gemini_response = await self.chats(self.customConfig, self.apikey, service_name['gemini'])
             model_response = gemini_response.get('modelResponse', {})
             if not gemini_response.get('success'):
-                if not self.playground:
-                    await self.handle_failure(gemini_response)
+                await self.handle_failure(gemini_response)
                 raise ValueError(gemini_response.get('error'))
             
 
@@ -105,10 +100,9 @@ class GeminiHandler(BaseService):
                 else:
                     response = await Response_formatter(model_response, service_name['gemini'], {}, self.type, self.image_data)
 
-                if not self.playground:
-                    transfer_config = functionCallRes.get('transfer_agent_config') if functionCallRes else None
-                    self.customConfig = serialize_config(self.customConfig) 
-                    historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
+                transfer_config = functionCallRes.get('transfer_agent_config') if functionCallRes else None
+                self.customConfig = serialize_config(self.customConfig)
+                historyParams = self.prepare_history_params(response, model_response, tools, transfer_config)
         
         result = {'success': True, 'modelResponse': model_response, 'historyParams': historyParams, 'response': response}
         if functionCallRes.get('transfer_agent_config'):

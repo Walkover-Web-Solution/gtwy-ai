@@ -15,7 +15,7 @@ DEFAULT_WEBHOOK_URL = "https://flow.sokt.io/func/scriYP8m551q"
 DEFAULT_ALERT_TYPES = [alert_types["error"], alert_types["variable"], alert_types["retry_mechanism"]]
 
 
-def build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api_name, is_playground, error_log, service):
+def build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api_name, error_log, service):
     payload = {
         **error_log,
         "agent_id": bridge_id,
@@ -24,8 +24,7 @@ def build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api
         "org_name": org_name,
         "alert_type": error_type,
         "api_name": api_name,
-        "service": service,
-        "is_playground": is_playground if is_playground is not None else False,
+        "service": service
     }
     return payload
 
@@ -40,7 +39,7 @@ def get_details_payload(error_type, data_source, context):
     return payload_map.get(error_type, lambda: create_error_payload(data_source or {}, context))()
 
 
-def build_webhook_payload(details_payload, error_type, bridge_id, org_id, org_name, user_id, thread_id, service, is_playground, api_name, bridge_name, is_embed):
+def build_webhook_payload(details_payload, error_type, bridge_id, org_id, org_name, user_id, thread_id, service, api_name, bridge_name, is_embed):
     payload = {
         "details": details_payload,
         "alert_type": error_type,
@@ -50,7 +49,7 @@ def build_webhook_payload(details_payload, error_type, bridge_id, org_id, org_na
         "user_id": user_id,
         "thread_id": thread_id,
         "service": service,
-        "source": "playground" if is_playground else "api",
+        "source": "api",
     }
     
     if api_name is not None:
@@ -59,8 +58,6 @@ def build_webhook_payload(details_payload, error_type, bridge_id, org_id, org_na
         payload["bridge_name"] = bridge_name
     if is_embed is not None:
         payload["is_embed"] = is_embed
-    if is_playground is not None:
-        payload["is_playground"] = is_playground
     
     return payload
 
