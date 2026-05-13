@@ -16,7 +16,6 @@ from .getDataUsingBridgeId import add_configuration_data_to_body
 
 async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMessageRequest):
     try:
-        org_id = request.state.profile["org"]["id"]
         slugName = body.slugName
         isPublic = "ispublic" in request.state.profile
         user_email = (
@@ -24,6 +23,14 @@ async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMe
             if isPublic
             else request.state.profile.get("user", {}).get("email", "")
         )
+        
+        # For public users, extract org_id and slugName from combined format (orgId::slugName)
+        if isPublic and "::" in slugName:
+            org_id, slugName = slugName.split("::", 1)
+            request.state.profile["org"]["id"] = org_id
+
+        org_id = request.state.profile["org"]["id"]
+        
         if isPublic and "user" in request.state.profile:
             threadId = str(request.state.profile["user"]["id"])
         else:
@@ -39,8 +46,8 @@ async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMe
         channelId = f"{chatBotId}{threadId.strip() if threadId and threadId.strip() else userId}{subThreadId.strip() if subThreadId and subThreadId.strip() else userId}"
         channelId = channelId.replace(" ", "_")
         if isPublic:
-            bridge_response = await ConfigurationServices.get_agents_data(slugName, user_email)
-            org = {"id": bridge_response.get("org_id")}
+            bridge_response = await ConfigurationServices.get_agents_data(slugName, user_email, org_id)
+            org = {"id": bridge_response.get("org_id") or org_id}
             request.state.profile["org"] = org
         else:
             bridge_response = await ConfigurationServices.get_bridge_by_slugname(org_id, slugName)

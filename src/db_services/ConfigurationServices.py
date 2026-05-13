@@ -968,16 +968,17 @@ async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org
     return {"success": True, "result": updated_bridge}
 
 
-async def get_agents_data(slug_name, user_email):
+async def get_agents_data(slug_name, user_email, org_id):
     bridges = await configurationModel.find_one(
         {
             "$or": [
-                {"$and": [{"page_config.availability": "public"}, {"page_config.url_slugname": slug_name}]},
+                {"$and": [{"settings.publicAgentConfig.availability": "public"}, {"slugName": slug_name}, {"org_id": org_id}]},
                 {
                     "$and": [
-                        {"page_config.availability": "private"},
-                        {"page_config.url_slugname": slug_name},
-                        {"page_config.allowedUsers": user_email},
+                        {"settings.publicAgentConfig.availability": "private"},
+                        {"slugName": slug_name},
+                        {"settings.publicAgentConfig.allowedUsers": user_email},
+                        {"org_id": org_id},
                     ]
                 },
             ]
