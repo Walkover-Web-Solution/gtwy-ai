@@ -12,12 +12,16 @@ from config import Config
 from globals import logger
 from models.Timescale.connections import init_async_dbservice
 from src.configs.model_configuration import background_listen_for_changes, init_model_configuration
+from src.middlewares.request_id_middleware import RequestIDMiddleware
 from src.routes.chatBot_routes import router as chatbot_router
 from src.routes.image_process_routes import router as image_process_routes
 from src.routes.rag_routes import router as rag_routes
 from src.routes.v2.modelRouter import router as v2_router
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueService import queue_obj
+from src.services.usage_limits.reconciliation_job import reconciliation_job
+from src.services.usage_limits.timescale_worker import timescale_worker
+from src.services.usage_limits.usage_limits_service import usage_limits_service
 from src.services.utils.auto_router_utils import run_supported_services_refresh_loop
 from src.services.utils.batch_script import repeat_function
 
@@ -48,6 +52,13 @@ async def lifespan(app: FastAPI):
     change_stream_task = asyncio.create_task(background_listen_for_changes())
     supported_services_refresh_task = asyncio.create_task(run_supported_services_refresh_loop())
 
+    logger.info("Initializing usage limits service...")
+    await usage_limits_service.initialize()
+    await timescale_worker.initialize()
+    await reconciliation_job.start()
+
+    timescale_task = asyncio.create_task(timescale_worker.consume_and_batch())
+
     yield  # Startup logic is complete
 
     # Shutdown logic
@@ -56,6 +67,9 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down MongoDB change stream listener.")
     change_stream_task.cancel()
     supported_services_refresh_task.cancel()
+    timescale_task.cancel()
+
+    await reconciliation_job.stop()
 
     if consume_task:
         consume_task.cancel()
@@ -86,6 +100,11 @@ async def lifespan(app: FastAPI):
         await supported_services_refresh_task
     except asyncio.CancelledError:
         logger.info("Supported services refresh task successfully cancelled.")
+
+    try:
+        await timescale_task
+    except asyncio.CancelledError:
+        logger.info("TimescaleDB worker task successfully cancelled.")
 
 
 # Initialize the FastAPI app
