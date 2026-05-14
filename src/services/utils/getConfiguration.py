@@ -158,7 +158,8 @@ async def _prepare_configuration_response(
     configuration["tool_choice"] = setup_tool_choice(configuration, result, service)
 
     bridge = result.get("bridges")
-    variables_path_bridge = bridge.get("variables_path", {})
+    connected_tools = bridge.get("connected_tools", {})
+    variables_path_bridge = connected_tools.get("variables_path", bridge.get("variables_path", {}))
 
     tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(result, variables_path_bridge, extra_tools)
     configuration.pop("tools", None)
@@ -195,7 +196,7 @@ async def _prepare_configuration_response(
             "config": raw_post_tool.get("config", {}),
         }
 
-    rag_data = bridge.get("doc_ids")
+    rag_data = connected_tools.get("doc_ids", bridge.get("doc_ids"))
     gpt_memory_context = bridge.get("gpt_memory_context")
     gpt_memory = result.get("bridges", {}).get("gpt_memory")
 
@@ -207,11 +208,11 @@ async def _prepare_configuration_response(
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
 
-    gtwy_web_search_filters = web_search_filters or result.get("bridges", {}).get("gtwy_web_search_filters") or {}
+    gtwy_web_search_filters = web_search_filters or connected_tools.get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
         tools,
         tool_id_and_name_mapping,
-        built_in_tools or result.get("bridges", {}).get("built_in_tools"),
+        built_in_tools or connected_tools.get("built_in_tools"),
         gtwy_web_search_filters,
     )
     if rag_data:
@@ -220,10 +221,11 @@ async def _prepare_configuration_response(
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
     add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_flag)
-    web_search_filters_value = web_search_filters or result.get("bridges", {}).get("web_search_filters") or {}
+    web_search_filters_value = web_search_filters or connected_tools.get("web_search_filters") or {}
 
     base_config = {
         "configuration": configuration,
+        "connected_tools": connected_tools,
         "pre_tools_data": pre_tools_data_for_later,
         "post_tool_data": post_tool_data,
         "service": service,
@@ -248,8 +250,8 @@ async def _prepare_configuration_response(
         "name": bridge_data.get("name") or bridge_data.get("bridges", {}).get("name") or "",
         "org_name": org_name,
         "bridge_id": result["bridges"].get("parent_id", result["bridges"].get("_id")),
-        "variables_state": result.get("bridges", {}).get("variables_state", {}),
-        "built_in_tools": built_in_tools or result.get("bridges", {}).get("built_in_tools"),
+        "variables_state": connected_tools.get("variables_state", result.get("bridges", {}).get("variables_state", {})),
+        "built_in_tools": built_in_tools or connected_tools.get("built_in_tools"),
         "is_embed": result.get("bridges", {}).get("folder_type") == "embed",
         "user_id": result.get("bridges", {}).get("user_id"),
         "folder_id": result.get("bridges", {}).get("folder_id"),
@@ -292,7 +294,7 @@ async def _collect_connected_agent_configs(result, org_id, visited):
         return {}
 
     bridge_payload = result.get("bridges", {})
-    connected_agents = bridge_payload.get("connected_agents", {})
+    connected_agents = bridge_payload.get("connected_tools", {}).get("connected_agents", bridge_payload.get("connected_agents", {}))
     connected_agent_details = bridge_payload.get("connected_agent_details", {})
 
     aggregated_configs = {}
@@ -313,15 +315,20 @@ async def _collect_connected_agent_configs(result, org_id, visited):
         apikey_override = merged_info.get("apikey")
         template_id_override = merged_info.get("template_id")
         variables_override = merged_info.get("variables") if isinstance(merged_info.get("variables"), dict) else {}
-        variables_path_override = merged_info.get("variables_path")
+        merged_connected_tools = merged_info.get("connected_tools", {}) if isinstance(merged_info.get("connected_tools"), dict) else {}
+        variables_path_override = merged_connected_tools.get("variables_path", merged_info.get("variables_path"))
         extra_tools_override = (
             merged_info.get("extra_tools") if isinstance(merged_info.get("extra_tools"), list) else []
         )
         built_in_tools_override = (
-            merged_info.get("built_in_tools") if isinstance(merged_info.get("built_in_tools"), list) else []
+            merged_connected_tools.get("built_in_tools")
+            if isinstance(merged_connected_tools.get("built_in_tools"), list)
+            else (merged_info.get("built_in_tools") if isinstance(merged_info.get("built_in_tools"), list) else [])
         )
         web_search_filters_override = (
-            merged_info.get("web_search_filters") if isinstance(merged_info.get("web_search_filters"), dict) else {}
+            merged_connected_tools.get("web_search_filters")
+            if isinstance(merged_connected_tools.get("web_search_filters"), dict)
+            else (merged_info.get("web_search_filters") if isinstance(merged_info.get("web_search_filters"), dict) else {})
         )
         guardrails_override = merged_info["guardrails"] if "guardrails" in merged_info else None
 

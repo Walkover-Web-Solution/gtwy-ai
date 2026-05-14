@@ -22,6 +22,7 @@ async def add_configuration_data_to_body(request: Request):
         if chatbotData:
             del request.state.chatbot
         version_id = body.get("version_id") or request.path_params.get("version_id")
+        connected_tools = body.get("connected_tools") or {}
         db_config = await getConfiguration(
             body.get("configuration"),
             body.get("service"),
@@ -30,12 +31,12 @@ async def add_configuration_data_to_body(request: Request):
             body.get("template_id"),
             body.get("variables", {}),
             org_id,
-            body.get("variables_path"),
+            connected_tools.get("variables_path"),
             version_id=version_id,
             extra_tools=body.get("extra_tools", []),
-            built_in_tools=body.get("built_in_tools"),
+            built_in_tools=connected_tools.get("built_in_tools"),
             guardrails=body.get("guardrails"),
-            web_search_filters=body.get("web_search_filters"),
+            web_search_filters=connected_tools.get("web_search_filters"),
             orchestrator_flag=body.get("orchestrator_flag"),
             chatbot=body.get("chatbot", False),
             override_fields=body
