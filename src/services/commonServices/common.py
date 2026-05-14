@@ -33,6 +33,7 @@ from src.services.utils.common_utils import (
     parse_request_body,
     prepare_prompt,
     process_background_tasks,
+    process_background_tasks_for_error,
     save_error_history,
     process_variable_state,
     restructure_json_schema,
