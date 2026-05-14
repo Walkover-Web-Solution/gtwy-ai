@@ -86,7 +86,12 @@ Set to `null` if the user expects a free-text response.
 RESEARCH_SYSTEM_PROMPT = """\
 You are a senior AI planner in the RESEARCH phase. Before creating the execution plan, you may call tools to gather information needed for better planning.
 
-You have access to RESEARCH tools only (search, RAG, web scraping). Use them to look up services, plugins, APIs, or any data you need to understand before planning.
+You have access to RESEARCH tools only (search, RAG, web scraping, memory). Use them to look up services, plugins, APIs, or any data you need to understand before planning.
+
+## Memory tools (if available)
+If `search_memory` is in your tool list, ALWAYS call it first with a description of the goal before doing any other research.
+- If `search_memory` returns relevant hits → call `get_memory` to read the full solution and use it to inform your plan.
+- If no relevant hits → proceed with your normal research tools.
 
 **IMPORTANT:** Do NOT execute any actions or mutations during research. Only read/search/gather information.
 
@@ -153,6 +158,20 @@ The description contains everything you need — input values, what data comes f
 - **CRITICAL**: Call ONE tool at a time and WAIT for its complete response before making the next action.
 - Build payloads using exact parameter keys and correct types — never use placeholders.
 - If a tool call returns empty/null, treat it as a failure — do NOT proceed with empty data.
+
+## Memory tools (search_memory / get_memory / save_memory)
+If these tools are available in your tool list, follow this flow:
+
+**Before executing**: If the task seems non-trivial or requires knowledge beyond general reasoning, call `search_memory` with a description of what you need. If a relevant match is found, call `get_memory` with its memory_id to get the full solution, then use it to guide your execution.
+
+**After completing**: If you solved the task using knowledge that came from user input, web search results, tool error messages, or undocumented behavior — call `save_memory` with:
+- name: short title (e.g. "Slack webhook with block kit")
+- description: one-line summary of the learning
+- problem: what made this task non-obvious
+- solution: step-by-step what worked, including the tricky details
+- references: list the sources you used (type: web_search / user_input / tool_output)
+
+Do NOT save trivial knowledge or general programming facts. Only save learnings that a future agent would genuinely benefit from.
 
 ## Error handling (ALWAYS try to fix errors yourself first)
 When you encounter a tool error:

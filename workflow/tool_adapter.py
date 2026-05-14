@@ -10,6 +10,7 @@ from pydantic import Field as PydanticField, create_model
 from src.configs.constant import inbuild_tools
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.services.commonServices.baseService.utils import axios_work
+from src.services.memory.memory_tools import build_memory_tools
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 
@@ -319,5 +320,14 @@ def build_langchain_tools(parsed_data: dict, bridge_configurations: dict) -> tup
             research_tools.append(tool)
         else:
             execution_tools.append(tool)
+
+    # Inject memory tools when the agent has self-learning enabled
+    agent_id = parsed_data.get("bridge_id")
+    if agent_id and parsed_data.get("configuration", {}).get("enable_memory", False):
+        memory_tools = build_memory_tools(agent_id)
+        # search + get available in research phase so planner can query past learnings
+        research_tools.extend(t for t in memory_tools if t.name in ("search_memory", "get_memory"))
+        # all three available in execution phase so executor can search, retrieve, and save
+        execution_tools.extend(memory_tools)
 
     return research_tools, execution_tools, extract_tool_schemas(tool_defs)
