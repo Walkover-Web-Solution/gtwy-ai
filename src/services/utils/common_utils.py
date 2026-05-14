@@ -1803,12 +1803,13 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         )
 
         if class_obj.streamer:
-            if isinstance(result, dict) and result.get("error"):
+            if getattr(class_obj, "tool_call_limit_error", None):
+                result["error"] = class_obj.tool_call_limit_error
+            if result.get("error"):
                 formatted_response["error"] = result["error"]
 
             finish_reason = (
-                "maximum_iteration_limit_reached" if class_obj.maximum_iteration_limit_reached
-                else result.get("stream_finish_reason")
+                result.get("stream_finish_reason")
                 or model_response.get("finish_reason")
                 or model_response.get("status")
                 or ""

@@ -34,10 +34,8 @@ from .utils import (
     sendResponse,
     tool_call_formatter,
     validate_tool_call,
-    reasoning_formatter,
-    disable_tool_call
+    reasoning_formatter
 )
-from src.services.utils.maximum_iterations_utils import build_tool_count_key, decrement_tool_count, get_tool_count
 from src.exceptions import ApiCallError
 
 executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
@@ -99,7 +97,7 @@ class BaseService:
         self.user_id = params.get("user_id")
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
-        self.maximum_iteration_limit_reached = False
+        self.tool_call_limit_error = None
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
             self.streamer = StreamingService(mode="sse")
@@ -216,8 +214,6 @@ class BaseService:
     async def function_call(self, configuration, service, response, loop_count=0, tools=None):
         if tools is None:
             tools = {}
-        tool_count_key = build_tool_count_key(self.bridge_id, self.message_id)
-
         if not response.get("success"):
             return {"success": False, "error": response.get("error")}
 
@@ -227,14 +223,16 @@ class BaseService:
                 configuration["tool_choice"] = {"type": "auto"}
             else:
                 configuration["tool_choice"] = "auto"
-        if not validate_tool_call(service, model_response):
+        if validate_tool_call(service, model_response) and loop_count <= int(self.maximum_iterations):
+            loop_count += 1
+        else:
+            if validate_tool_call(service, model_response):
+                tool_call_limit_msg = "Execution stopped in between because tool call limit exceeded."
+                response["error"] = tool_call_limit_msg
+                self.tool_call_limit_error = tool_call_limit_msg
+            if self.stream_mode and self.streamer and response.get("has_tool_calls"):
+                response["stream_finish_reason"] = "tool_call_limit_reached"
             return response
-
-        loop_count += 1
-        remaining = decrement_tool_count(tool_count_key)
-        if remaining <= 0:
-            disable_tool_call(configuration, service)
-            self.maximum_iteration_limit_reached = True
         func_response_data, mapping_response_data, tools_call_data = await self.run_tool(model_response, service)
         self.func_tool_call_data.append(tools_call_data)
 
@@ -406,7 +404,7 @@ class BaseService:
             "folder_id": self.folder_id,
             "prompt": self.configuration.get("prompt"),
             "is_cached": is_cached,
-            "error": "",
+            "error": self.tool_call_limit_error or "",
             "plans": self.parsed_data.get("plans") if hasattr(self, 'parsed_data') else None,
         }
 
@@ -488,11 +486,6 @@ class BaseService:
             if service == service_name["deepgram"]:
                 if new_config.get("model_option"):
                     new_config["model"] = f"{new_config['model']}-{new_config.pop('model_option')}"
-
-            remaining = get_tool_count(build_tool_count_key(self.bridge_id, self.message_id))
-            if remaining is not None and remaining == 0:
-                disable_tool_call(new_config, service)
-                self.maximum_iteration_limit_reached = True
 
             return new_config
         except Exception as e:

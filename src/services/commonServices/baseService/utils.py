@@ -140,31 +140,6 @@ async def axios_work(data, function_payload):
         return {"response": str(err), "metadata": {"type": "function"}, "status": 0}
 
 
-def disable_tool_call(configuration: dict, service: str):
-    if service in (
-        service_name["openai"],
-        service_name["openai_completion"],
-        service_name["mistral"],
-        service_name["groq"],
-        service_name["grok"],
-        service_name["open_router"]
-    ):
-        configuration["tool_choice"] = "none"
-
-    elif service == service_name["gemini"]:
-        # Disabling Tool Call
-        configuration["config"].tool_config = types.ToolConfig(
-            function_calling_config=types.FunctionCallingConfig(
-                mode="NONE"
-            )
-        )
-        # Disabling Auto Tool call (Required)
-        configuration["config"].automatic_function_calling = types.AutomaticFunctionCallingConfig(
-            disable=True
-        )
-
-    elif service == service_name["anthropic"]:
-        configuration["tool_choice"] = {"type": "none"}
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
     if (
@@ -406,7 +381,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                         "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
                         "user": tool_data.get("args").get("_query"),
                         "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
-                        "message_id": self.message_id
+                        "message_id": self.message_id,
                     }
 
                     if self.stream_mode and self.streamer:
@@ -427,7 +402,6 @@ async def process_data_and_run_tools(codes_mapping, self):
                     # Pass bridge_configurations if available
                     if hasattr(self, "bridge_configurations") and self.bridge_configurations:
                         agent_args["bridge_configurations"] = self.bridge_configurations
-
 
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
