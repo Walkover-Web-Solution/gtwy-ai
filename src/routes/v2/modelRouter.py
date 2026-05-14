@@ -48,7 +48,8 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
     
     response_format = data_to_send.get("body", {}).get("settings", {}).get("response_format",{}) 
     mode = data_to_send.get("body", {}).get("mode")
-    if (response_format and response_format.get("type") != "default") or mode == "todo":
+    is_webhook_playground = response_format and response_format.get("type") == "webhook" and is_playground
+    if ((response_format and response_format.get("type") != "default" and not is_webhook_playground) or mode == "todo"):
         try:
             # Publish the message to the queue
             await queue_obj.publish_message(data_to_send)
