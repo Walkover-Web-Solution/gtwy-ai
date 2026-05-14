@@ -12,6 +12,7 @@ from models.mongo_connection import db
 from src.configs.constant import redis_keys, alert_types
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
+from src.services.utils.maximum_iterations_utils import build_tool_count_key, cleanup_tool_count, init_tool_count
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
@@ -145,6 +146,8 @@ async def chat_multiple_agents(request_body):
 async def chat(request_body): 
     result = {}
     class_obj = {}
+    tool_count_key_for_cleanup = None
+    tool_count_owner_token = None
     first_execution_error_code = None
     fallback_service = None
     fallback_error_code = None
@@ -168,6 +171,19 @@ async def chat(request_body):
         if reviewer_bridge_id and reviewer_bridge_id in bridge_configurations:
             parsed_data["_reviewer_bridge_id"] = reviewer_bridge_id
 
+        tool_count_key_for_cleanup = build_tool_count_key(
+            parsed_data.get("bridge_id"),
+            parsed_data.get("message_id"),
+        )
+        # Claim ownership of the tool-call counter for this agent invocation.
+        # If a child instance (agent-as-tool recursion) re-enters with the same
+        # bridge_id+message_id, it gets token=None and therefore cannot wipe
+        # the parent's counter in its own finally block.
+        tool_count_owner_token = init_tool_count(
+            tool_count_key_for_cleanup,
+            parsed_data.get("maximum_iterations") or 3,
+        )
+        
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
         
@@ -475,8 +491,8 @@ async def chat(request_body):
             raise ValueError(result)
         # Add message_id to response
         result["response"]["data"]["message_id"] = parsed_data["message_id"]
-        if getattr(class_obj, 'tool_call_limit_error', None):
-            result["error"] = class_obj.tool_call_limit_error
+        if getattr(class_obj, 'maximum_iteration_limit_reached', False):
+            result["response"]["data"]["finish_reason"] = "maximum_iteration_limit_reached"
         if result.get("error"):
             result["response"]["error"] = result["error"]
 
@@ -648,6 +664,7 @@ async def chat(request_body):
         completion_success = False
         raise ValueError(error_object) from None
     finally:
+        cleanup_tool_count(tool_count_key_for_cleanup, tool_count_owner_token)
         await update_cost_usage_and_apikey_status_in_background(
             original_service,
             parsed_data,
