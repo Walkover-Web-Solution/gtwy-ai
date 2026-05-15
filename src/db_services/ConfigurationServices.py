@@ -316,19 +316,19 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                 "$expr": {
                                     "$and": [
                                         {"$in": ["$_id", "$$bridge_ids"]},
-                                        {"$ne": ["$connected_agent_details", None]},
-                                        {"$ne": ["$connected_agent_details", {}]},
+                                        {"$ne": ["$agent_info", None]},
+                                        {"$ne": ["$agent_info", {}]},
                                     ]
                                 }
                             }
                         },
-                        {"$project": {"_id": 1, "connected_agent_details": 1}},
+                        {"$project": {"_id": 1, "agent_info": 1}},
                         {"$addFields": {"_id": {"$toString": "$_id"}}},
                     ],
                     "as": "agent_details_docs",
                 }
             },
-            # Stage 9: Create connected_agent_details object with bridge_id as key
+            # Stage 9: Create agent_info object with bridge_id as key, spreading agent_info properties
             {
                 "$addFields": {
                     "connected_agent_details": {
@@ -339,7 +339,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                     "$map": {
                                         "input": "$agent_details_docs",
                                         "as": "doc",
-                                        "in": ["$$doc._id", "$$doc.connected_agent_details"],
+                                        "in": ["$$doc._id", "$$doc.agent_info"],
                                     }
                                 }
                             },

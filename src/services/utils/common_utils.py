@@ -212,7 +212,7 @@ def parse_request_body(request_body):
         "name": body.get("name"),
         "api_collection": body.get("api_collection"),
         "org_name": body.get("org_name"),
-        "variables_state": body.get("variables_state"),
+        "variables_state": body.get("agent_info", {}).get("variables_state"),
         "built_in_tools": body.get("built_in_tools") or [],
         "thread_flag": body.get("thread_flag") or False,
         "files": body.get("files") or [],
