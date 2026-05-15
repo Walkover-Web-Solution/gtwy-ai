@@ -36,20 +36,27 @@ def _build_limit_error(limit_type, current_usage, limit_value):
     }
 
 
-async def _check_limit(limit_type, data, version_id):
-    """Check a specific limit type against the provided data with Redis cache first."""
+async def _check_limit(limit_type, bridges, version_id):
+    """Check a specific limit type against the provided bridges dict with Redis cache first."""
     limit_field = f"{limit_type}_limit"
     usage_field = f"{limit_type}_usage"
-    bridge_id = data.get("_id") or data.get("bridges", {}).get("_id")
 
-    # Get limit value from data
+    # For version documents, parent_id holds the actual bridge id so all versions share one counter
+    version_doc_id = bridges.get("_id")
+    parent_bridge_id = bridges.get("parent_id")
+    bridge_id = parent_bridge_id or version_doc_id
+
+    service = bridges.get("service")
+    # Use apikeys_combined (pre-normalization) for full limit metadata; fall back to folder_apikeys
+    apikey_src = (bridges.get("apikeys_combined") or {}).get(service) or \
+                 (bridges.get("folder_apikeys") or {}).get(service) or {}
+
+    # Get limit value
     try:
         if limit_type == "apikey":
-            limit_value = float(((data.get("apikeys_combined") or {}).get(data.get("service")) or {}).get(limit_field, 0) or 0) or float(
-                (data.get("folder_apikeys", {}).get(data.get("service")) or {}).get(limit_field, 0) or 0
-            )
+            limit_value = float(apikey_src.get(limit_field, 0) or 0)
         else:
-            limit_value = float(data.get(limit_field, 0) or 0) or float(data.get("bridges", {}).get(limit_field) or 0)
+            limit_value = float(bridges.get(limit_field, 0) or 0)
     except (ValueError, TypeError):
         limit_value = 0.0
 
@@ -57,87 +64,76 @@ async def _check_limit(limit_type, data, version_id):
     if limit_value <= 0:
         return None
 
-    # Create Redis key based on limit_type and identifier
-    identifier = None
+    # Determine the identifier for Redis key
     if limit_type == "bridge":
         identifier = bridge_id
     elif limit_type == "folder":
-        identifier = data.get("folder_id")
+        identifier = bridges.get("folder_id")
     elif limit_type == "apikey":
-        service = data.get("service")
-        apikey_object_id = data.get("apikey_object_id") or {}
-        identifier = apikey_object_id.get(service)
+        identifier = (bridges.get("apikey_object_id") or {}).get(service)
+    else:
+        identifier = None
 
     usage_value = 0.0
 
     if identifier:
-        # Try to get usage from Redis first bridgeusage_
         cache_key = f"{redis_keys[f'{limit_type}usedcost_']}{identifier}"
         try:
             cached_data = await find_in_cache(cache_key)
-            # Always extract reset_period and setup_date from source data
+            # Always extract reset_period and setup_date from source data (authoritative)
             reset_period_field = f"{limit_type}_limit_reset_period"
             setup_date_field = f"{limit_type}_limit_start_date"
             if limit_type == "apikey":
-                reset_period_from_data = (data.get("apikeys", {}).get(data.get("service")) or {}).get(reset_period_field) or \
-                                         (data.get("folder_apikeys", {}).get(data.get("service")) or {}).get(reset_period_field)
-                setup_date_from_data = (data.get("apikeys", {}).get(data.get("service")) or {}).get(setup_date_field) or \
-                                       (data.get("folder_apikeys", {}).get(data.get("service")) or {}).get(setup_date_field)
+                reset_period_from_data = apikey_src.get(reset_period_field)
+                setup_date_from_data = apikey_src.get(setup_date_field)
             else:
-                reset_period_from_data = data.get(reset_period_field) or data.get("bridges", {}).get(reset_period_field)
-                setup_date_from_data = data.get(setup_date_field) or data.get("bridges", {}).get(setup_date_field)
+                reset_period_from_data = bridges.get(reset_period_field)
+                setup_date_from_data = bridges.get(setup_date_field)
 
             if cached_data:
                 currentusagedata = json.loads(cached_data)
                 usage_value = float(currentusagedata.get("usage_value", 0))
 
-                # Add version_id to versions array if not already present
                 versions = currentusagedata.get("versions", [])
-                bridges = currentusagedata.get("bridges", [])
+                bridge_list = currentusagedata.get("bridges", [])
 
                 if version_id and version_id not in versions:
                     versions.append(version_id)
 
-                if bridge_id and bridge_id not in bridges:
-                    bridges.append(bridge_id)
+                if bridge_id and bridge_id not in bridge_list:
+                    bridge_list.append(bridge_id)
 
                 # Use source-data reset_period/setup_date (authoritative) for correct TTL anchoring
                 reset_period = reset_period_from_data or currentusagedata.get("reset_period") or "monthly"
                 setup_date = setup_date_from_data or currentusagedata.get("setup_date")
                 ttl = calculate_limit_ttl(reset_period, setup_date)
 
-                # Different data structure based on limit_type
                 if limit_type == "bridge":
                     updated_data = {"usage_value": usage_value, "versions": versions, "reset_period": reset_period, "setup_date": setup_date}
                 else:
-                    updated_data = {"usage_value": usage_value, "versions": versions, "bridges": bridges, "reset_period": reset_period, "setup_date": setup_date}
+                    updated_data = {"usage_value": usage_value, "versions": versions, "bridges": bridge_list, "reset_period": reset_period, "setup_date": setup_date}
 
                 await store_in_cache(cache_key, updated_data, ttl=ttl)
             else:
-                # If data is not available in Redis, get it from bridge data
+                # No Redis cache — seed from bridge data
                 try:
                     if limit_type == "apikey":
-                        usage_value = float(
-                            data.get("apikeys", {}).get(data.get("service"), {}).get(usage_field, 0) or 0
-                        ) or float(data.get("folder_apikeys", {}).get(data.get("service"), {}).get(usage_field, 0) or 0)
+                        usage_value = float(apikey_src.get(usage_field, 0) or 0)
                     else:
-                        usage_value = float(data.get(usage_field, 0) or 0) or float(
-                            data.get("bridges", {}).get(usage_field) or 0
-                        )
+                        usage_value = float(bridges.get(usage_field, 0) or 0)
                 except (ValueError, TypeError):
                     usage_value = 0.0
 
                 reset_period = reset_period_from_data
                 setup_date = setup_date_from_data
-
-                # Calculate TTL (defaults to monthly if not specified)
                 ttl = calculate_limit_ttl(reset_period or "monthly", setup_date)
 
-                # Store in Redis with new data structure based on limit_type
+                # Deduplicate initial versions list
+                initial_versions = list({v for v in [version_id, version_doc_id] if v})
                 if limit_type == "bridge":
-                    usage_data = {"usage_value": usage_value, "versions": [version_id], "reset_period": reset_period, "setup_date": setup_date}
+                    usage_data = {"usage_value": usage_value, "versions": initial_versions, "reset_period": reset_period, "setup_date": setup_date}
                 else:
-                    usage_data = {"usage_value": usage_value, "versions": [version_id], "bridges": [bridge_id], "reset_period": reset_period, "setup_date": setup_date}
+                    usage_data = {"usage_value": usage_value, "versions": initial_versions, "bridges": [bridge_id], "reset_period": reset_period, "setup_date": setup_date}
                 await store_in_cache(cache_key, usage_data, ttl=ttl)
 
         except Exception:
@@ -146,13 +142,9 @@ async def _check_limit(limit_type, data, version_id):
     else:
         try:
             if limit_type == "apikey":
-                usage_value = float(
-                    data.get("apikeys", {}).get(data.get("service"), {}).get(usage_field, 0) or 0
-                ) or float(data.get("folder_apikeys", {}).get(data.get("service"), {}).get(usage_field, 0) or 0)
+                usage_value = float(apikey_src.get(usage_field, 0) or 0)
             else:
-                usage_value = float(data.get(usage_field, 0) or 0) or float(
-                    data.get("bridges", {}).get(usage_field) or 0
-                )
+                usage_value = float(bridges.get(usage_field, 0) or 0)
         except (ValueError, TypeError):
             usage_value = 0.0
 
@@ -162,27 +154,28 @@ async def _check_limit(limit_type, data, version_id):
     return None
 
 
-async def check_bridge_api_folder_limits(result, bridge_data, version_id):
+async def check_bridge_api_folder_limits(agent_data, version_id):
     """Validate folder, bridge, and API usage against their limits."""
-    if not isinstance(bridge_data, dict):
+    if not isinstance(agent_data, dict):
         return None
 
-    folder_identifier = result.get("folder_id")
-    if folder_identifier:
-        folder_error = await _check_limit(limit_types["folder"], data=result, version_id=version_id)
+    bridges = agent_data.get("bridges", {})
+
+    if bridges.get("folder_id"):
+        folder_error = await _check_limit(limit_types["folder"], bridges=bridges, version_id=version_id)
         if folder_error:
             return folder_error
 
-    bridge_error = await _check_limit(limit_types["bridge"], data=bridge_data, version_id=version_id)
+    bridge_error = await _check_limit(limit_types["bridge"], bridges=bridges, version_id=version_id)
     if bridge_error:
         return bridge_error
 
-    service_identifier = result.get("service")
-    if service_identifier and (
-        (result.get("apikeys_combined") and service_identifier in result.get("apikeys_combined", {}))
-        or (result.get("folder_apikeys") and service_identifier in result.get("folder_apikeys", {}))
+    service = bridges.get("service")
+    if service and (
+        (bridges.get("apikeys_combined") and service in bridges.get("apikeys_combined", {}))
+        or (bridges.get("folder_apikeys") and service in bridges.get("folder_apikeys", {}))
     ):
-        api_error = await _check_limit(limit_types["apikey"], data=result, version_id=version_id)
+        api_error = await _check_limit(limit_types["apikey"], bridges=bridges, version_id=version_id)
         if api_error:
             return api_error
 

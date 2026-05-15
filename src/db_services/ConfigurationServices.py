@@ -461,6 +461,71 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     }
                 }
             },
+            # Stage A (version only, no bridge_id): Convert parent_id string → ObjectId for $lookup
+            # Skipped when bridge_id is also provided — caller already has parent bridge context
+            *([{
+                "$addFields": {
+                    "parent_bridge_oid": {
+                        "$convert": {
+                            "input": "$parent_id",
+                            "to": "objectId",
+                            "onError": None,
+                            "onNull": None,
+                        }
+                    }
+                }
+            },
+            # Stage B (version only): Lookup the parent bridge doc from configurations
+            {
+                "$lookup": {
+                    "from": "configurations",
+                    "let": {"parent_oid": "$parent_bridge_oid"},
+                    "pipeline": [
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        {"$ne": ["$$parent_oid", None]},
+                                        {"$eq": ["$_id", "$$parent_oid"]},
+                                    ]
+                                }
+                            }
+                        },
+                        {"$project": {"configuration.encoded_prompt": 0}},
+                    ],
+                    "as": "parent_bridge_docs",
+                }
+            },
+            # Stage C (version only): Pull only bridge-level fields from parent doc into version doc.
+            # Uses $ifNull so version-level value wins if already set; parent fills only when absent.
+            {
+                "$addFields": {
+                    "bridge_status": {
+                        "$ifNull": ["$bridge_status", {"$arrayElemAt": ["$parent_bridge_docs.bridge_status", 0]}]
+                    },
+                    "bridgeType": {
+                        "$ifNull": ["$bridgeType", {"$arrayElemAt": ["$parent_bridge_docs.bridgeType", 0]}]
+                    },
+                    "name": {
+                        "$ifNull": ["$name", {"$arrayElemAt": ["$parent_bridge_docs.name", 0]}]
+                    },
+                    "chatbot_auto_answers": {
+                        "$ifNull": ["$chatbot_auto_answers", {"$arrayElemAt": ["$parent_bridge_docs.chatbot_auto_answers", 0]}]
+                    },
+                    "bridge_limit": {
+                        "$ifNull": ["$bridge_limit", {"$arrayElemAt": ["$parent_bridge_docs.bridge_limit", 0]}]
+                    },
+                    "bridge_usage": {
+                        "$ifNull": ["$bridge_usage", {"$arrayElemAt": ["$parent_bridge_docs.bridge_usage", 0]}]
+                    },
+                    "bridge_limit_start_date": {
+                        "$ifNull": ["$bridge_limit_start_date", {"$arrayElemAt": ["$parent_bridge_docs.bridge_limit_start_date", 0]}]
+                    },
+                    "bridge_limit_reset_period": {
+                        "$ifNull": ["$bridge_limit_reset_period", {"$arrayElemAt": ["$parent_bridge_docs.bridge_limit_reset_period", 0]}]
+                    },
+                }
+            }] if version_id and not bridge_id else []),
             # Stage 10: Remove temporary fields to clean up the output
             {
                 "$project": {
@@ -472,8 +537,11 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "agent_details_docs": 0,
                     "template_ids_to_fetch": 0,
                     "templates_docs": 0,
-                    "agent_names_docs": 0
-                    # Exclude additional temporary fields as needed
+                    "agent_names_docs": 0,
+                    **({
+                        "parent_bridge_oid": 0,
+                        "parent_bridge_docs": 0,
+                    } if version_id and not bridge_id else {}),
                 }
             },
         ]
