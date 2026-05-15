@@ -41,7 +41,8 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         data_to_send['body']['settings']['response_format'] = data_to_send['body']['configuration']['response_format']
         del data_to_send['body']['configuration']['response_format']
     
-    if is_playground and db_config.get('bridge_configurations', {}).get(current_id, {}).get('configuration', {}).get('stream') == False:
+    stream_config = db_config.get('bridge_configurations', {}).get(current_id, {}).get('configuration', {}).get('stream')
+    if is_playground and (stream_config == False or stream_config is None or stream_config == 'default'):
         channel_id = f"{data_to_send.get('state', {}).get('profile', {}).get('org', {}).get('id')}_{db_config.get('bridge_configurations', {}).get(current_id, {}).get('bridge_id')}_{db_config.get('bridge_configurations', {}).get(current_id, {}).get('version_id')}"
         playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
         data_to_send['body']['settings']['response_format'] = playground_response_format
