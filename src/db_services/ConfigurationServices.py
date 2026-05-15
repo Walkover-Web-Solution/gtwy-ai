@@ -33,7 +33,19 @@ async def get_bridges_with_redis(bridge_id=None, org_id=None, version_id=None):
             {
                 "$addFields": {
                     "_id": {"$toString": "$_id"},
-                    "function_ids": {"$map": {"input": "$function_ids", "as": "fid", "in": {"$toString": "$$fid"}}},
+                    "function_ids": {
+                        "$map": {
+                            "input": {
+                                "$filter": {
+                                    "input": {"$ifNull": ["$connected_tools.tools", []]},
+                                    "as": "tool",
+                                    "cond": {"$eq": ["$$tool.type", "tool"]},
+                                }
+                            },
+                            "as": "tool",
+                            "in": {"$toString": "$$tool.id"},
+                        }
+                    },
                 }
             },
         ]
@@ -87,12 +99,47 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             {"$match": {"_id": ObjectId(id_to_use), "org_id": org_id}},
             {"$project": {"configuration.encoded_prompt": 0}},
             # Stage 1: Lookup to join with 'apicalls' collection
-            {"$lookup": {"from": "apicalls", "localField": "function_ids", "foreignField": "_id", "as": "apiCalls"}},
+            {
+                "$lookup": {
+                    "from": "apicalls",
+                    "let": {
+                        "tool_ids": {
+                            "$map": {
+                                "input": {
+                                    "$filter": {
+                                        "input": {"$ifNull": ["$connected_tools.tools", []]},
+                                        "as": "tool",
+                                        "cond": {"$eq": ["$$tool.type", "tool"]}
+                                    }
+                                },
+                                "as": "tool",
+                                "in": "$$tool.id"
+                            }
+                        }
+                    },
+                    "pipeline": [
+                        {"$match": {"$expr": {"$in": ["$_id", "$$tool_ids"]}}}
+                    ],
+                    "as": "apiCalls",
+                }
+            },
             # Stage 2: Restructure fields for _id, function_ids and apiCalls
             {
                 "$addFields": {
                     "_id": {"$toString": "$_id"},
-                    "function_ids": {"$map": {"input": "$function_ids", "as": "fid", "in": {"$toString": "$$fid"}}},
+                    "function_ids": {
+                        "$map": {
+                            "input": {
+                                "$filter": {
+                                    "input": {"$ifNull": ["$connected_tools.tools", []]},
+                                    "as": "tool",
+                                    "cond": {"$eq": ["$$tool.type", "tool"]}
+                                }
+                            },
+                            "as": "tool",
+                            "in": {"$toString": "$$tool.id"},
+                        }
+                    },
                     "apiCalls": {
                         "$arrayToObject": {
                             "$map": {
@@ -266,25 +313,24 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "as": "pre_tools_data",
                 }
             },
-            # Stage 7: Extract bridge_ids from connected_agents if it exists
+            # Stage 7: Extract bridge_ids from connected_agents array
             {
                 "$addFields": {
                     "connected_agents_bridge_ids": {
                         "$cond": [
                             {
                                 "$and": [
-                                    {"$ne": ["$connected_agents", None]},
-                                    {"$ne": ["$connected_agents", {}]},
-                                    {"$eq": [{"$type": "$connected_agents"}, "object"]},
+                                    {"$ne": ["$connected_tools.connected_agents", None]},
+                                    {"$eq": [{"$type": "$connected_tools.connected_agents"}, "array"]},
                                 ]
                             },
                             {
                                 "$map": {
-                                    "input": {"$objectToArray": "$connected_agents"},
+                                    "input": "$connected_tools.connected_agents",
                                     "as": "agent",
                                     "in": {
                                         "$convert": {
-                                            "input": "$$agent.v.bridge_id",
+                                            "input": "$$agent.bridge_id",
                                             "to": "objectId",
                                             "onError": None,
                                             "onNull": None,
@@ -959,10 +1005,17 @@ async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org
         raise BadRequestException("Bridge not found or no records updated")
 
     updated_bridge["_id"] = str(updated_bridge["_id"])  # Convert ObjectId to string
-    if "function_ids" in updated_bridge and updated_bridge["function_ids"] is not None:
-        updated_bridge["function_ids"] = [
-            str(fid) for fid in updated_bridge["function_ids"]
-        ]  # Convert function_ids to string
+    if "connected_tools" in updated_bridge and updated_bridge["connected_tools"] is not None:
+        # Convert tools array IDs to strings
+        if "tools" in updated_bridge["connected_tools"] and updated_bridge["connected_tools"]["tools"]:
+            for tool in updated_bridge["connected_tools"]["tools"]:
+                if "id" in tool:
+                    tool["id"] = str(tool["id"])
+        # Convert docs array IDs to strings
+        if "docs" in updated_bridge["connected_tools"] and updated_bridge["connected_tools"]["docs"]:
+            for doc in updated_bridge["connected_tools"]["docs"]:
+                if "id" in doc:
+                    doc["id"] = str(doc["id"])
 
     await delete_in_cache(f"{redis_keys['bridge_data_with_tools_']}{cache_key}")
     return {"success": True, "result": updated_bridge}

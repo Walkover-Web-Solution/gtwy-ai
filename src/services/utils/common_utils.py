@@ -141,6 +141,7 @@ def parse_request_body(request_body):
     body = request_body.get("body", {})
     state = request_body.get("state", {})
     path_params = request_body.get("path_params", {})
+    connected_tools = body.get("connected_tools") or {}
 
     return {
         "body": body,
@@ -177,7 +178,8 @@ def parse_request_body(request_body):
         "is_rich_text": body.get("configuration", {}).get("is_rich_text", False),
         "actions": body.get("actions", {}),
         "user_reference": body.get("user_reference", ""),
-        "variables_path": body.get("variables_path") or {},
+        "connected_tools": connected_tools,
+        "variables_path": connected_tools.get("variables_path") or body.get("variables_path") or {},
         "tool_id_and_name_mapping": body.get("tool_id_and_name_mapping"),
         "suggest": body.get("suggest", False),
         "message_id": body.get("message_id"),
@@ -207,13 +209,13 @@ def parse_request_body(request_body):
         "bridge_summary": body.get("bridge_summary"),
         "batch": body.get("batch") or [],
         "batch_webhook": body.get("webhook"),
-        "doc_ids": body.get("ddc_ids"),
+        "doc_ids": connected_tools.get("doc_ids") or body.get("ddc_ids"),
         "rag_data": body.get("rag_data"),
         "name": body.get("name"),
         "api_collection": body.get("api_collection"),
         "org_name": body.get("org_name"),
-        "variables_state": body.get("variables_state"),
-        "built_in_tools": body.get("built_in_tools") or [],
+        "variables_state": connected_tools.get("variables_state") or body.get("variables_state"),
+        "built_in_tools": connected_tools.get("built_in_tools") or body.get("built_in_tools") or [],
         "thread_flag": body.get("thread_flag") or False,
         "files": body.get("files") or [],
         "fall_back": body.get("settings", {}).get("fall_back") or {},
@@ -226,7 +228,7 @@ def parse_request_body(request_body):
         "file_data": body.get("video_data") or {},
         "youtube_url": body.get("youtube_url") or None,
         "folder_id": body.get("folder_id"),
-        "web_search_filters": body.get("web_search_filters") or None,
+        "web_search_filters": connected_tools.get("web_search_filters") or body.get("web_search_filters") or None,
         "parent_bridge_id": body.get("parent_bridge_id"),
         "transfer_request_id": body.get("transfer_request_id"),
         "orchestrator_flag": body.get("orchestrator_flag"),
@@ -768,6 +770,7 @@ def build_service_params(
         "execution_time_logs": parsed_data.get("execution_time_logs", []),
         "function_time_logs": [],
         "timer": timer,
+        "connected_tools": parsed_data.get("connected_tools", {}),
         "variables_path": parsed_data["variables_path"],
         "message_id": parsed_data["message_id"],
         "bridgeType": parsed_data["bridgeType"],
