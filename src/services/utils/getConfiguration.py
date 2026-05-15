@@ -50,7 +50,6 @@ async def _prepare_configuration_response(
     template_id=None,
     variables=None,
     org_id="",
-    variables_path=None,
     version_id=None,
     extra_tools=None,
     built_in_tools=None,
@@ -158,9 +157,18 @@ async def _prepare_configuration_response(
     configuration["tool_choice"] = setup_tool_choice(configuration, result, service)
 
     bridge = result.get("bridges")
-    variables_path_bridge = bridge.get("variables_path", {})
+    connected_tools = bridge.get("connected_tools", {})
+    
+    # Extract args from connected_agents array
+    args_bridge = {}
+    if "connected_agents" in connected_tools and isinstance(connected_tools["connected_agents"], list):
+        for agent in connected_tools["connected_agents"]:
+            if isinstance(agent, dict) and "args" in agent:
+                agent_id = agent.get("bridge_id") or agent.get("id")
+                if agent_id:
+                    args_bridge[agent_id] = agent["args"]
 
-    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(result, variables_path_bridge, extra_tools)
+    tools, tool_id_and_name_mapping, args_bridge = setup_tools(result, args_bridge, extra_tools)
     configuration.pop("tools", None)
     configuration["tools"] = tools
 
@@ -188,14 +196,30 @@ async def _prepare_configuration_response(
     raw_post_tool_script_id = raw_post_tool.get('script_id', {}) if raw_post_tool else {}
     post_tool_data = None
     if raw_post_tool:
-        variables_path_post_tool = bridge.get("variables_path", {}).get(raw_post_tool_script_id, {})
+        post_tool_args = bridge.get("post_tools_args", {}).get(raw_post_tool_script_id, {})
         post_tool_data = {
             **raw_post_tool,
-            "args": variables_path_post_tool,
+            "args": post_tool_args,
             "config": raw_post_tool.get("config", {}),
         }
 
-    rag_data = bridge.get("doc_ids")
+    # Extract doc_ids from docs array or fallback to old structure
+    rag_data = None
+    if "docs" in connected_tools and isinstance(connected_tools["docs"], list):
+        rag_data = [doc.get("id") for doc in connected_tools["docs"] if isinstance(doc, dict) and "id" in doc]
+    if not rag_data:
+        rag_data = connected_tools.get("doc_ids", bridge.get("doc_ids"))
+    
+    # Extract built_in_tools from tools array or fallback to old structure
+    built_in_tools_list = built_in_tools
+    if not built_in_tools_list and "tools" in connected_tools and isinstance(connected_tools["tools"], list):
+        built_in_tools_list = [
+            tool.get("id") for tool in connected_tools["tools"]
+            if isinstance(tool, dict) and tool.get("type") == "built_in_tool" and "id" in tool
+        ]
+    if not built_in_tools_list:
+        built_in_tools_list = connected_tools.get("built_in_tools")
+    
     gpt_memory_context = bridge.get("gpt_memory_context")
     gpt_memory = result.get("bridges", {}).get("gpt_memory")
 
@@ -207,11 +231,11 @@ async def _prepare_configuration_response(
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
 
-    gtwy_web_search_filters = web_search_filters or result.get("bridges", {}).get("gtwy_web_search_filters") or {}
+    gtwy_web_search_filters = web_search_filters or connected_tools.get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
         tools,
         tool_id_and_name_mapping,
-        built_in_tools or result.get("bridges", {}).get("built_in_tools"),
+        built_in_tools_list,
         gtwy_web_search_filters,
     )
     if rag_data:
@@ -220,10 +244,11 @@ async def _prepare_configuration_response(
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
     add_connected_agents(result, tools, tool_id_and_name_mapping, orchestrator_flag)
-    web_search_filters_value = web_search_filters or result.get("bridges", {}).get("web_search_filters") or {}
+    web_search_filters_value = web_search_filters or connected_tools.get("web_search_filters") or {}
 
     base_config = {
         "configuration": configuration,
+        "connected_tools": connected_tools,
         "pre_tools_data": pre_tools_data_for_later,
         "post_tool_data": post_tool_data,
         "service": service,
@@ -236,7 +261,7 @@ async def _prepare_configuration_response(
         "RTLayer": RTLayer,
         "template": template_content.get("template") if template_content else None,
         "user_reference": result.get("bridges", {}).get("user_reference", ""),
-        "variables_path": variables_path or variables_path_bridge,
+        "variables_path": args_bridge,
         "tool_id_and_name_mapping": tool_id_and_name_mapping,
         "gpt_memory": gpt_memory,
         "version_id": version_id or result.get("bridges", {}).get("published_version_id"),
@@ -248,8 +273,8 @@ async def _prepare_configuration_response(
         "name": bridge_data.get("name") or bridge_data.get("bridges", {}).get("name") or "",
         "org_name": org_name,
         "bridge_id": result["bridges"].get("parent_id", result["bridges"].get("_id")),
-        "variables_state": result.get("bridges", {}).get("variables_state", {}),
-        "built_in_tools": built_in_tools or result.get("bridges", {}).get("built_in_tools"),
+        "variables_state": connected_tools.get("variables_state", result.get("bridges", {}).get("variables_state", {})),
+        "built_in_tools": built_in_tools_list,
         "is_embed": result.get("bridges", {}).get("folder_type") == "embed",
         "user_id": result.get("bridges", {}).get("user_id"),
         "folder_id": result.get("bridges", {}).get("folder_id"),
@@ -292,18 +317,29 @@ async def _collect_connected_agent_configs(result, org_id, visited):
         return {}
 
     bridge_payload = result.get("bridges", {})
-    connected_agents = bridge_payload.get("connected_agents", {})
-    connected_agent_details = bridge_payload.get("connected_agent_details", {})
+    connected_tools = bridge_payload.get("connected_tools", {})
+    
+    # Handle both array (new) and dict (old) formats for connected_agents
+    connected_agents_list = []
+    if isinstance(connected_tools.get("connected_agents"), list):
+        connected_agents_list = connected_tools.get("connected_agents", [])
+    else:
+        # Fallback to old dict format
+        connected_agents_dict = bridge_payload.get("connected_agents", {})
+        if isinstance(connected_agents_dict, dict):
+            connected_agents_list = list(connected_agents_dict.values())
 
     aggregated_configs = {}
 
-    for _, agent_info in connected_agents.items():
+    for agent_info in connected_agents_list:
+        if not isinstance(agent_info, dict):
+            continue
+        
         bridge_id_value = agent_info.get("bridge_id")
         if not bridge_id_value or bridge_id_value in visited:
             continue
 
-        agent_details = connected_agent_details.get(bridge_id_value) or {}
-        merged_info = {**agent_details, **agent_info}
+        merged_info = agent_info
 
         version_id_value = merged_info.get("version_id")
         configuration_override = (
@@ -313,7 +349,8 @@ async def _collect_connected_agent_configs(result, org_id, visited):
         apikey_override = merged_info.get("apikey")
         template_id_override = merged_info.get("template_id")
         variables_override = merged_info.get("variables") if isinstance(merged_info.get("variables"), dict) else {}
-        variables_path_override = merged_info.get("variables_path")
+        # Extract args from agent_info
+        args_override = merged_info.get("args", {})
         extra_tools_override = (
             merged_info.get("extra_tools") if isinstance(merged_info.get("extra_tools"), list) else []
         )
@@ -334,7 +371,7 @@ async def _collect_connected_agent_configs(result, org_id, visited):
                 template_id_override,
                 variables_override,
                 org_id,
-                variables_path_override,
+                args_override,
                 version_id_value,
                 extra_tools_override,
                 built_in_tools_override,
@@ -399,7 +436,6 @@ async def getConfiguration(
     template_id=None,
     variables=None,
     org_id="",
-    variables_path=None,
     version_id=None,
     extra_tools=None,
     built_in_tools=None,
@@ -421,7 +457,6 @@ async def getConfiguration(
         template_id,
         variables,
         org_id,
-        variables_path,
         version_id,
         extra_tools,
         built_in_tools,

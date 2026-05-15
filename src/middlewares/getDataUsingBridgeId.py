@@ -22,6 +22,18 @@ async def add_configuration_data_to_body(request: Request):
         if chatbotData:
             del request.state.chatbot
         version_id = body.get("version_id") or request.path_params.get("version_id")
+        connected_tools = body.get("connected_tools") or {}
+        
+        # Extract built_in_tools from tools array by type
+        built_in_tools_list = []
+        if "tools" in connected_tools and isinstance(connected_tools["tools"], list):
+            built_in_tools_list = [
+                tool.get("id") for tool in connected_tools["tools"]
+                if isinstance(tool, dict) and tool.get("type") == "built_in_tool" and "id" in tool
+            ]
+        if not built_in_tools_list:
+            built_in_tools_list = connected_tools.get("built_in_tools")
+        
         db_config = await getConfiguration(
             body.get("configuration"),
             body.get("service"),
@@ -30,12 +42,11 @@ async def add_configuration_data_to_body(request: Request):
             body.get("template_id"),
             body.get("variables", {}),
             org_id,
-            body.get("variables_path"),
             version_id=version_id,
             extra_tools=body.get("extra_tools", []),
-            built_in_tools=body.get("built_in_tools"),
+            built_in_tools=built_in_tools_list,
             guardrails=body.get("guardrails"),
-            web_search_filters=body.get("web_search_filters"),
+            web_search_filters=connected_tools.get("web_search_filters"),
             orchestrator_flag=body.get("orchestrator_flag"),
             chatbot=body.get("chatbot", False),
             override_fields=body
