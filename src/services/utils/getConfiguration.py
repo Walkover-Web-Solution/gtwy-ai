@@ -246,7 +246,7 @@ async def _prepare_configuration_response(
         "name": bridges.get("name") or "",
         "org_name": org_name,
         "bridge_id": bridges.get("parent_id", bridges.get("_id")),
-        "variables_state": result.get("bridges", {}).get("agent_info", {}).get("variables_state", {}),
+        "variables_state": bridges.get("agent_info", {}).get("variables_state", {}),
         "built_in_tools": built_in_tools or bridges.get("built_in_tools"),
         "is_embed": bridges.get("folder_type") == "embed",
         "user_id": bridges.get("user_id"),
