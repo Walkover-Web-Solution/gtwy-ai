@@ -72,6 +72,17 @@ redis_keys = {
     "plan_": "plan_",
 }
 
+tag_keys = {
+    "agent": "tag:agent:",
+    "version": "tag:version:",
+    "tool": "tag:tool:",
+    "apikey": "tag:apikey:",
+    "folder": "tag:folder:",
+    "connected_agent": "tag:connected_agent:",
+    "wrapper": "tag:wrapper:",
+    "rag": "tag:rag:",
+}
+
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
 
 new_agent_service = {

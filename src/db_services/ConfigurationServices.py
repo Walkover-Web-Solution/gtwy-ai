@@ -7,6 +7,7 @@ from models.mongo_connection import db
 from src.configs.constant import redis_keys
 
 from ..services.cache_service import delete_in_cache, find_in_cache, store_in_cache
+from ..services.cache_utils import extract_cache_tags, store_in_cache_with_tags
 
 configurationModel = db["configurations"]
 apiCallModel = db["apicalls"]
@@ -968,7 +969,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
 
         # Structure the final response
         response = {"success": True, "bridges": bridge_data}
-        await store_in_cache(cache_key, response)
+        tags = extract_cache_tags(response)
+        await store_in_cache_with_tags(cache_key, response, tags)
         return response
 
     except errors.InvalidId:

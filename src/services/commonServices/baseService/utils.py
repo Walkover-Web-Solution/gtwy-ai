@@ -617,7 +617,6 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "message_id": parsed_data.get("message_id"),
             "org_id": parsed_data.get("org_id"),
         },
-        "total_token_calculation": {"tokens": parsed_data.get("tokens", {}), "bridge_id": parsed_data.get("bridge_id")},
         "chatbot_suggestions": {
             "response_format": parsed_data.get("response_format"),
             "assistant": suggestion_content,
