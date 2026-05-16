@@ -68,8 +68,9 @@ def extract_cache_tags(bridge_response: dict) -> list[str]:
 
     doc_ids = bridge.get("doc_ids")
     if isinstance(doc_ids, list):
-        for doc_id in doc_ids:
-            _add(tag_keys["rag"], doc_id)
+        for doc in doc_ids:
+            if isinstance(doc, dict):
+                _add(tag_keys["rag"], doc.get("resource_id"))
 
     return sorted(tags)
 
