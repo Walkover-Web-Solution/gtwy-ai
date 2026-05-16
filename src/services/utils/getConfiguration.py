@@ -1,9 +1,11 @@
 import asyncio
+import json
 import logging
 
 import src.db_services.ConfigurationServices as ConfigurationService
 from models.mongo_connection import db
 from src.services.utils.common_utils import updateVariablesWithTimeZone
+from src.db_services.ConfigurationServices import transform_agent_config_to_frontend
 
 from .getConfiguration_utils import (
     add_connected_agents,
@@ -277,8 +279,7 @@ async def _prepare_configuration_response(
             },
         },
     }
-
-    return None, base_config, agent_data, resolved_bridge_id
+    return None, transform_agent_config_to_frontend(base_config), agent_data, resolved_bridge_id
 
 
 async def _collect_connected_agent_configs(agent_data, org_id, visited):
@@ -303,6 +304,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
         pending.append((bridge_id_value, merged_info))
 
     aggregated_configs = {}
+        merged_info = transform_agent_config_to_frontend(merged_info)
 
     if pending:
         async def _fetch_agent(bridge_id_value, merged_info):

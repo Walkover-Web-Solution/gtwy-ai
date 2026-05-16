@@ -5,6 +5,8 @@ from bson import ObjectId, errors
 from globals import BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
+from typing import Dict, Any, Set
+from src.configs.model_configuration import model_config_document
 
 from ..services.cache_service import delete_in_cache, find_in_cache, store_in_cache
 
@@ -16,6 +18,64 @@ version_model = db["configuration_versions"]
 threadsModel = db["threads"]
 foldersModel = db["folders"]
 prompt_wrappersModel = db["prompt_wrappers"]
+
+
+def get_advanced_param_keys(service: str, model: str) -> Set[str]:
+    """Get advanced parameter keys for a service/model combination"""
+    if not service or not model:
+        return set()
+    
+    service_lower = service.lower()
+    model_config = model_config_document.get(service_lower, {}).get(model)
+    
+    if not model_config:
+        return set()
+    
+    advanced_keys = set()
+    config = model_config.get('configuration', {})
+    
+    for key, value in config.items():
+        if key == "model":
+            continue
+        advanced_keys.add(key)
+    
+    return advanced_keys
+
+def transform_advanced_params_to_frontend(configuration: Dict[str, Any], service: str, model: str) -> Dict[str, Any]:
+    """Transform DB format {mode, value} to frontend format (flattened)"""
+    if not configuration or not isinstance(configuration, dict):
+        return configuration
+    
+    advanced_keys = get_advanced_param_keys(service, model)
+    transformed = {}
+    
+    for key, value in configuration.items():
+        if key in advanced_keys and isinstance(value, dict) and "mode" in value:
+            if value.get("mode") == "custom":
+                transformed[key] = value.get("value")
+            else:
+                transformed[key] = value.get("mode")
+        else:
+            transformed[key] = value
+    
+    return transformed
+
+def transform_agent_config_to_frontend(agent_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Transform complete agent configuration to frontend format"""
+    if not agent_config or not isinstance(agent_config, dict):
+        return agent_config
+    
+    transformed = agent_config.copy()
+    
+    if "configuration" in transformed and "service" in transformed:
+        service = transformed["service"]
+        model = transformed["configuration"].get("model")
+        if service and model:
+            original_config = transformed["configuration"]
+            transformed["configuration"] = transform_advanced_params_to_frontend(
+                transformed["configuration"], service, model
+            )    
+    return transformed
 
 
 async def get_bridges_with_redis(bridge_id=None, org_id=None, version_id=None):
