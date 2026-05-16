@@ -3,7 +3,7 @@ import asyncio
 from globals import logger
 from src.configs.constant import redis_keys
 
-from ..cache_service import acquire_lock, delete_in_cache, find_in_cache_with_prefix, make_json_serializable, release_lock
+from ..cache_service import find_in_cache, acquire_lock, delete_in_cache, find_in_cache_with_prefix, make_json_serializable, release_lock
 from ..commonServices.baseService.baseService import sendResponse
 from ..commonServices.queueService.queueLogService import sub_queue_obj
 from ..commonServices.queueService.queueMetricsService import metrics_queue_obj
@@ -154,6 +154,7 @@ async def check_batch_status():
                             input_tokens = usage.get('input_tokens') or 0 if usage else 0
                             output_tokens = usage.get('output_tokens') or 0 if usage else 0
                             total_tokens = usage.get('total_tokens') or 0 if usage else 0
+                            individual_cost = item_costs.get(message_id, 0)
 
                             update_data = {
                                 'llm_message': llm_message,
@@ -165,6 +166,7 @@ async def check_batch_status():
                                     'input_tokens': input_tokens,
                                     'output_tokens': output_tokens,
                                     'total_tokens': total_tokens,
+                                    'expected_cost': individual_cost,
                                 } if usage else None,
                                 'batch_data': {
                                     'status': 'completed',
@@ -183,7 +185,6 @@ async def check_batch_status():
                             })
 
                             if org_id and model:
-                                individual_cost = item_costs.get(message_id, 0)
                                 metrics_data.append({
                                     'org_id': org_id,
                                     'bridge_id': bridge_id or '',
@@ -201,20 +202,27 @@ async def check_batch_status():
                                     'service': service,
                                 })
 
-                        if batch_updates or metrics_data:
-                            queue_message = {}
-                            if batch_updates:
-                                queue_message['update_batch_history'] = batch_updates
-                            if metrics_data:
-                                queue_message['save_batch_metrics'] = metrics_data
+                        if batch_updates:
                             try:
-                                await sub_queue_obj.publish_message(make_json_serializable(queue_message))
+                                await sub_queue_obj.publish_message(
+                                    make_json_serializable({'update_batch_history': batch_updates})
+                                )
                                 logger.info(
-                                    f"Published {len(batch_updates)} updates and "
-                                    f"{len(metrics_data)} metrics for batch {batch_id}"
+                                    f"Published {len(batch_updates)} batch history updates for batch {batch_id}"
                                 )
                             except Exception as queue_error:
-                                logger.error(f"Error publishing to queue for batch {batch_id}: {queue_error}")
+                                logger.error(f"Error publishing batch history for batch {batch_id}: {queue_error}")
+
+                        if metrics_data:
+                            try:
+                                await metrics_queue_obj.publish_message(
+                                    make_json_serializable({'save_metrics': metrics_data})
+                                )
+                                logger.info(
+                                    f"Published {len(metrics_data)} metrics for batch {batch_id}"
+                                )
+                            except Exception as metrics_error:
+                                logger.error(f"Error publishing metrics for batch {batch_id}: {metrics_error}")
 
                     else:
                         # No results but completed — send generic error webhook
