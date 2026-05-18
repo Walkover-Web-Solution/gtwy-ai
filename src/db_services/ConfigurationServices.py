@@ -451,31 +451,38 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 }
             },
              # Stage 9.5: Extract template_ids from configuration.response_type if is_template is true
+            # Handles both old structure (is_template at root) and new structure (is_template in value)
             {
                 "$addFields": {
                     "template_ids_to_fetch": {
                         "$cond": [
                             {
-                                "$and": [
-                                    {"$eq": [{"$type": "$configuration.response_type"}, "object"]},
-                                    {"$eq": ["$configuration.response_type.is_template", True]},
-                                    {"$isArray": "$configuration.response_type.template_id"},
-                                    {"$gt": [{"$size": "$configuration.response_type.template_id"}, 0]},
-                                ]
+                               
+                                {
+                                    "$and": [
+                                        {"$eq": [{"$type": "$configuration.response_type"}, "object"]},
+                                        {"$eq": ["$configuration.response_type.value.is_template", True]},
+                                        {"$isArray": "$configuration.response_type.value.template_id"},
+                                        {"$gt": [{"$size": "$configuration.response_type.value.template_id"}, 0]},
+                                    ]
+                                },                                
                             },
                             {
-                                "$map": {
-                                    "input": "$configuration.response_type.template_id",
-                                    "as": "tid",
-                                    "in": {
-                                        "$convert": {
-                                            "input": "$$tid",
-                                            "to": "objectId",
-                                            "onError": None,
-                                            "onNull": None,
-                                        }
-                                    },
-                                }
+                            
+                                {
+                                    "$map": {
+                                        "input": "$configuration.response_type.value.template_id",
+                                        "as": "tid",
+                                        "in": {
+                                            "$convert": {
+                                                "input": "$$tid",
+                                                "to": "objectId",
+                                                "onError": None,
+                                                "onNull": None,
+                                            }
+                                        },
+                                    }
+                                },
                             },
                             [],
                         ]

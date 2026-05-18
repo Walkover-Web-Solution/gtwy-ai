@@ -45,7 +45,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
     agent_variables = parsed_data.get("variables", {})
 
     def resolve_args(tool_config, tool_args_mapping, is_custom=False):
-        resolved = dict(tool_config)
+        resolved = {}
         for param, var_name in tool_args_mapping.items():
             if var_name in agent_variables:
                 resolved[param] = agent_variables[var_name]
