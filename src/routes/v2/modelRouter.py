@@ -159,40 +159,59 @@ async def run_testcases_route(request: Request):
     """
     Execute testcases either from direct input or MongoDB
 
-    This route handles testcase execution with support for:
-    - Direct testcase data in request body
-    - Fetching testcases from MongoDB by bridge_id or testcase_id
-    - Parallel processing of multiple testcases
-    - Automatic scoring and history saving
+    Returns immediately and streams results to an RTLayer channel
+    `{org_id}_{bridge_id}` as each testcase completes. Avoids HTTP timeouts
+    on long testcase runs.
+
+    Events published to the channel:
+    - run_started        : { bridge_id, version_ids, total_testcases }
+    - testcase_result    : { version_id, result }
+    - version_completed  : { version_id, total_testcases, results }
+    - run_completed      : full final payload
+    - run_failed         : { error } on any unhandled execution error
     """
     request.state.version = 2
 
-    try:
-        # Get request body
-        body = await request.json()
-        org_id = request.state.profile["org"]["id"]
+    from src.services.testcase_service import (
+        TestcaseNotFoundError,
+        TestcaseValidationError,
+        build_rtlayer_cred,
+        execute_testcases,
+    )
 
-        # Execute testcases using the service
-        from src.services.testcase_service import TestcaseNotFoundError, TestcaseValidationError, execute_testcases
-
-        result = await execute_testcases(body, org_id)
-        return result
-
-    except TestcaseValidationError as ve:
-        raise HTTPException(status_code=400, detail={"success": False, "error": str(ve)}) from ve
-    except TestcaseNotFoundError as nfe:
-        # Handle not found cases gracefully
-        if "No testcase found for the given testcase_id" in str(nfe):
-            return {"success": False, "message": str(nfe), "results": []}
-        else:
-            return {"success": True, "message": str(nfe), "results": []}
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        logger.error(f"Error in run_testcases_route: {str(e)}")
+    body = await request.json()
+    org_id = request.state.profile["org"]["id"]
+    bridge_id = body.get("bridge_id")
+    if not bridge_id:
         raise HTTPException(
-            status_code=500, detail={"success": False, "error": f"Internal server error: {str(e)}"}
-        ) from e
+            status_code=400,
+            detail={"success": False, "error": "bridge_id is required for RTLayer-based testcase runs"},
+        )
+
+    channel_id = f"{org_id}_{bridge_id}"
+    rtlayer_cred = build_rtlayer_cred(channel_id)
+
+    async def _run():
+        try:
+            await execute_testcases(body, org_id, rtlayer_cred=rtlayer_cred)
+        except TestcaseValidationError as ve:
+            from src.services.commonServices.baseService.utils import send_message
+            await send_message(cred=rtlayer_cred, data={"event": "run_failed", "error": str(ve)})
+        except TestcaseNotFoundError as nfe:
+            from src.services.commonServices.baseService.utils import send_message
+            await send_message(cred=rtlayer_cred, data={"event": "run_completed", "success": True, "message": str(nfe), "results": []})
+        except Exception as e:
+            logger.error(f"Background testcase run failed for channel {channel_id}: {str(e)}")
+            from src.services.commonServices.baseService.utils import send_message
+            await send_message(cred=rtlayer_cred, data={"event": "run_failed", "error": f"Internal server error: {str(e)}"})
+
+    asyncio.create_task(_run())
+
+    return {
+        "success": True,
+        "channel_id": channel_id,
+        "message": "Your response will be sent through configured means.",
+    }
 
 
 @router.post("/rerun", dependencies=[Depends(auth_and_rate_limit)])
