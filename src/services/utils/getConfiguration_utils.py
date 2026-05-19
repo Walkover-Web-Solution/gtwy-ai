@@ -62,6 +62,12 @@ def setup_configuration(configuration, bridges, service):
 def setup_tool_choice(configuration, bridges, service):
     """Setup tool choice configuration"""
     tool_choice_ids = configuration.get("tool_choice", "")
+
+    # If caller already provided a fully-formed tool_choice (dict/list), pass it through
+    # unchanged — the lookup logic below only makes sense for a string ID.
+    if not isinstance(tool_choice_ids, str):
+        return tool_choice_ids
+
     toolchoice = None
 
     # Find tool choice from API calls
