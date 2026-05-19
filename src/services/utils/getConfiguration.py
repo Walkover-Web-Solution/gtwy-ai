@@ -95,9 +95,7 @@ async def _prepare_configuration_response(
 
     service = service.lower() if service else ""
 
-    config_with_service = {"configuration": configuration, "service": service}
-    transformed = transform_agent_config_to_frontend(config_with_service)
-    configuration = transformed.get("configuration", configuration)
+    configuration = transform_agent_config_to_frontend(configuration)
 
     # Initialize apikey_status with default value
     apikey_status = {}
@@ -283,7 +281,7 @@ async def _prepare_configuration_response(
             },
         },
     }
-    return None, transform_agent_config_to_frontend(base_config), agent_data, resolved_bridge_id
+    return None, base_config, agent_data, resolved_bridge_id
 
 
 async def _collect_connected_agent_configs(agent_data, org_id, visited):

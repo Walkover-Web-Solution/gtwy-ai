@@ -42,41 +42,22 @@ def get_advanced_param_keys(service: str, model: str) -> Set[str]:
     
     return advanced_keys
 
-def transform_advanced_params_to_frontend(configuration: Dict[str, Any], service: str, model: str) -> Dict[str, Any]:
-    """Transform DB format {mode, value} to frontend format (flattened)"""
-    if not configuration or not isinstance(configuration, dict):
-        return configuration
-    
-    advanced_keys = get_advanced_param_keys(service, model)
-    transformed = {}
-    
-    for key, value in configuration.items():
-        if key in advanced_keys and isinstance(value, dict) and "mode" in value:
-            if value.get("mode") == "custom":
-                transformed[key] = value.get("value")
-            else:
-                transformed[key] = value.get("mode")
-        else:
-            transformed[key] = value
-    
-    return transformed
-
 def transform_agent_config_to_frontend(agent_config: Dict[str, Any]) -> Dict[str, Any]:
-    """Transform complete agent configuration to frontend format"""
+    """Transform configuration to frontend format"""
     if not agent_config or not isinstance(agent_config, dict):
         return agent_config
     
-    transformed = agent_config.copy()
+    transformed_config = {}
+    for key, value in agent_config.items():
+        if isinstance(value, dict) and "mode" in value:
+            if value.get("mode") == "custom":
+                transformed_config[key] = value.get("value")
+            else:
+                transformed_config[key] = value.get("mode")
+        else:
+            transformed_config[key] = value
     
-    if "configuration" in transformed and "service" in transformed:
-        service = transformed["service"]
-        model = transformed["configuration"].get("model")
-        if service and model:
-            original_config = transformed["configuration"]
-            transformed["configuration"] = transform_advanced_params_to_frontend(
-                transformed["configuration"], service, model
-            )    
-    return transformed
+    return transformed_config
 
 
 async def get_bridges_with_redis(bridge_id=None, org_id=None, version_id=None):
