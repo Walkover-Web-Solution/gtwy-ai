@@ -95,6 +95,10 @@ async def _prepare_configuration_response(
 
     service = service.lower() if service else ""
 
+    config_with_service = {"configuration": configuration, "service": service}
+    transformed = transform_agent_config_to_frontend(config_with_service)
+    configuration = transformed.get("configuration", configuration)
+
     # Initialize apikey_status with default value
     apikey_status = {}
 
