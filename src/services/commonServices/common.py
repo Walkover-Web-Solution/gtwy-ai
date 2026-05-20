@@ -586,8 +586,14 @@ async def chat(request_body):
         if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
             result["response"]["data"]["content"] = post_tool_response.get("response")
 
-        # Create latency object using utility function
-        latency = create_latency_object(timer, params)
+        # Reuse the latency captured before the review loop — the main timer was
+        # already consumed there, so re-calling create_latency_object would yield
+        # over_all_time=0 and overwrite the correct value. Update execution_time_logs
+        # in-place so any re-run entries accumulated during the review loop are included.
+        latency["execution_time_logs"] = params.get("execution_time_logs") or {}
+        latency["model_execution_time"] = (
+            sum(log.get("time_taken", 0) for log in (params.get("execution_time_logs") or [])) or ""
+        )
         if result.get("response") and result["response"].get("data"):
             result["response"]["data"]["message_id"] = parsed_data["message_id"]
         await sendResponse(

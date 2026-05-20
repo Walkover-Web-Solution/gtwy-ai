@@ -305,10 +305,17 @@ async def run_review_loop(
         # Update parsed_data["usage"] with the new attempt's tokens, then accumulate
         # them into our running sum (then write the running sum back so the next
         # iteration / final publish sees the cumulative total).
+        # Preserve the latency already in parsed_data["usage"] — it was set
+        # before the review loop with the correct over_all_time from the original
+        # timer measurement. update_usage_metrics would overwrite it with a
+        # zero-over_all_time value because the main timer was already consumed.
+        _pre_rerun_latency = parsed_data["usage"].get("latency")
         latency_for_metrics = _new_main_latency
         update_usage_metrics(
             parsed_data, _new_main_params, latency_for_metrics, result=new_main_result, success=True
         )
+        if _pre_rerun_latency is not None:
+            parsed_data["usage"]["latency"] = _pre_rerun_latency
         round_main_tokens = _read_usage_tokens(parsed_data["usage"])
         _add_tokens(summed_main_tokens, round_main_tokens)
         parsed_data["usage"]["inputTokens"] = summed_main_tokens["input"]

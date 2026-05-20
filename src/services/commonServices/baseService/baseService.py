@@ -691,7 +691,23 @@ class BaseService:
             else:
                 raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
 
-            stream_state = await run_stream_and_collect(generator, self.streamer)
+            if self.timer:
+                self.timer.start()
+            _stream_exc = None
+            try:
+                stream_state = await run_stream_and_collect(generator, self.streamer)
+            except Exception as _exc:
+                _stream_exc = _exc
+            finally:
+                if self.timer and self.timer.start_times:
+                    _elapsed = self.timer.stop(f"{service} stream")
+                    if _stream_exc is None:
+                        self.execution_time_logs.append({
+                            "step": f"{service} stream time for call :- {count + 1}",
+                            "time_taken": round(_elapsed, 4),
+                        })
+            if _stream_exc is not None:
+                raise _stream_exc
             accumulated_content = stream_state["accumulated_content"]
             final_tool_calls = stream_state["final_tool_calls"]
             final_usage = stream_state["final_usage"]
