@@ -15,7 +15,12 @@ async def validate_bridge(agent_data):
     if not agent_data.get("success"):
         return {"success": False, "error": "Agent does not exist in this organization"}
 
-    bridge_status = agent_data.get("bridges", {}).get("bridge_status")
+    bridges = agent_data.get("bridges", {})
+
+    if bridges.get("deletedAt"):
+        return {"success": False, "error": "Agent has been deleted"}
+
+    bridge_status = bridges.get("bridge_status")
     if bridge_status == 0:
         raise Exception("Agent is Currently Paused")
 
