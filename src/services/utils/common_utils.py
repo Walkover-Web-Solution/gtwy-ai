@@ -1,6 +1,8 @@
 import asyncio
 import json
 import uuid
+
+import pydash
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
@@ -45,11 +47,18 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
         return
     agent_variables = parsed_data.get("variables", {})
 
+    _MISSING = object()
+
     def resolve_args(tool_config, tool_args_mapping, is_custom=False):
         resolved = {}
         for param, var_name in tool_args_mapping.items():
-            if var_name in agent_variables:
+            # Try literal key first (handles keys that contain dots), then dotted path traversal
+            if isinstance(var_name, str) and var_name in agent_variables:
                 resolved[param] = agent_variables[var_name]
+                continue
+            value = pydash.get(agent_variables, var_name, _MISSING)
+            if value is not _MISSING:
+                resolved[param] = value
         for param in tool_config.get("required", []):
             if param not in resolved and param in agent_variables:
                 resolved[param] = agent_variables[param]
