@@ -1582,7 +1582,6 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
     is_nested_stream_call = bool(
         (request_body.get("body", {}) if isinstance(request_body, dict) else {}).get("_nested_stream_call")
     )
-    timer.start()
     original_error = None
     template_data = None
 
@@ -1745,7 +1744,6 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             )
             result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
 
-        params["execution_time_logs"].append({"step": "streaming", "time_taken": round(timer.stop("streaming"), 4)})
         latency = create_latency_object(timer, params)
         if template_data and result.get("historyParams"):
             result["historyParams"]["chatbot_message"] = json.dumps(rendered_content)
