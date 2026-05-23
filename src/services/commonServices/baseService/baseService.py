@@ -753,26 +753,42 @@ class BaseService:
     async def replace_variables_in_args(self, codes_mapping):
         variables = self.variables
         variables_path = self.variables_path
-        if variables_path is None:
+
+        if not variables_path or not variables:
             return codes_mapping
 
-        for _key, value in codes_mapping.items():
+        tool_mapping_dict = self.tool_id_and_name_mapping
+
+        for value in codes_mapping.values():
             args = value.get("args")
-            function_name = value.get("name")
-            if self.tool_id_and_name_mapping.get(value.get("name"), {}).get("type", "") == "AGENT":
-                function_name = self.tool_id_and_name_mapping.get(value.get("name"), {}).get("bridge_id", "")
-            else:
-                function_name = self.tool_id_and_name_mapping.get(value.get("name"), {}).get("name", value.get("name"))
+            if not isinstance(args, dict):
+                continue
 
-            if args is not None and function_name in variables_path:
-                function_variables_path = variables_path[function_name]
-                for path_key, path_value in function_variables_path.items():
-                    value_to_set = _.objects.get(variables, path_value)
+            tool_mapping = tool_mapping_dict.get(value.get("name"), {})
+            function_name = (
+                tool_mapping.get("bridge_id")
+                if tool_mapping.get("type") == "AGENT"
+                else tool_mapping.get("name", value.get("name"))
+            )
 
-                    if value_to_set is not None:
-                        _.objects.set_(args, path_key, value_to_set)
+            function_variables_path = variables_path.get(function_name)
+            if not function_variables_path:
+                continue
 
-                value["args"] = args
+            for path_key, path_value in function_variables_path.items():
+                value_to_set = _.objects.get(variables, path_value)
+                if value_to_set is None:
+                    continue
+
+                keys = path_key.split('.')
+                current = args
+                for key in keys[:-1]:
+                    next_node = current.get(key)
+                    if not isinstance(next_node, dict):
+                        current[key] = {}
+                        next_node = current[key]
+                    current = next_node
+                current[keys[-1]] = value_to_set
 
         return codes_mapping
 
