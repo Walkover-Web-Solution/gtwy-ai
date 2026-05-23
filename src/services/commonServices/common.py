@@ -655,8 +655,8 @@ async def chat(request_body):
         if not isinstance(error, BadRequestException):
             logger.error(f"Error in chat service: %s, {str(error)}, {traceback.format_exc()}")
         await sendResponse(
-            parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
-        ) if parsed_data["response_format"]["type"] != "default" else None
+            parsed_data.get("response_format") or {}, result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
+        ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
         # save_error_history builds latency + usage metrics + historyParams and
         # publishes a single error history row. parsed_data["firstAttemptError"]
         # set during fallback retry (above) flows into the row via
@@ -947,8 +947,8 @@ async def image(request_body):
                 parsed_data["sub_thread_id"] = thread_info["sub_thread_id"]
 
         await sendResponse(
-            parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
-        ) if parsed_data["response_format"]["type"] != "default" else None
+            parsed_data.get("response_format") or {}, result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
+        ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
         # save_error_history builds latency + usage metrics + historyParams and
         # publishes a single error history row (with firstAttemptError populated
         # from parsed_data when fallback was attempted).
