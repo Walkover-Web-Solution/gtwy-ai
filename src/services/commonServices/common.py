@@ -622,8 +622,8 @@ async def chat(request_body):
                     meta=parsed_data.get("meta"),
             )
 
-            if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
-                result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
+        if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
+            result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
 
         # Process background tasks (handles both transfer and non-transfer cases)
         await process_background_tasks(
