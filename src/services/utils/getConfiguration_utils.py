@@ -107,6 +107,7 @@ def process_api_call_tool(api_data, variables_path_bridge):
         "url": f"https://flow.sokt.io/func/{api_data.get('script_id')}",
         "headers": {},
         "name": api_data.get("script_id"),
+        "method": "POST"
     }
 
     # Process variables filled by gateway
@@ -159,7 +160,7 @@ def process_extra_tool(tool):
         "required": required,
     }
 
-    tool_mapping = {"url": tool.get("url"), "headers": tool.get("headers", {}), "name": tool_name}
+    tool_mapping = {"url": tool.get("url"), "headers": tool.get("headers", {}), "name": tool_name, "method": tool.get("method", "POST").upper()}
     variable_path = tool.get("tool_and_variable_path", {}) or {}
     # Remove properties that are filled by gateway
     for key in variable_path:

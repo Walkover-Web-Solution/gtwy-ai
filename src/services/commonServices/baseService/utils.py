@@ -127,7 +127,7 @@ def validate_tool_call(service, response):
 async def axios_work(data, function_payload):
     try:
         response, rs_headers = await fetch(
-            function_payload.get("url"), "POST", function_payload.get("headers", {}), None, data
+            function_payload.get("url"), function_payload.get("method", "POST"), function_payload.get("headers", {}), None, data
         )  # required is not send then it will still hit the curl
         return {
             "response": response,
