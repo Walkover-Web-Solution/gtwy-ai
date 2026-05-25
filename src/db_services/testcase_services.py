@@ -59,6 +59,47 @@ async def update_testcase_by_id(testcase_id, update_data):
         raise e
 
 
+async def get_version_updated_at(version_id):
+    """Return updatedAt for a configuration version, or None."""
+    try:
+        version_model = db["configuration_versions"]
+        doc = await version_model.find_one(
+            {"_id": ObjectId(version_id)},
+            {"updatedAt": 1},
+        )
+        if not doc:
+            return None
+        return doc.get("updatedAt")
+    except Exception as e:
+        logger.error(f"Error fetching version updatedAt: {str(e)}")
+        return None
+
+
+async def update_testcase_last_executed(testcase_ids):
+    """Update execution.lastExecutedAt for the given testcase ids"""
+    try:
+        if not testcase_ids:
+            return None
+        # Filter out non-ObjectId entries (e.g. 'direct_testcase')
+        object_ids = []
+        for tid in testcase_ids:
+            try:
+                object_ids.append(ObjectId(tid))
+            except Exception:
+                continue
+        if not object_ids:
+            return None
+        now = datetime.datetime.utcnow()
+        result = await testcases_model.update_many(
+            {"_id": {"$in": object_ids}},
+            {"$set": {"execution.lastExecutedAt": now, "updatedAt": now}},
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error updating testcase lastExecutedAt: {str(e)}")
+        return None
+
+
 async def create_testcases_history(data):
     result = await testcases_history_model.insert_many(data)
     for obj in data:

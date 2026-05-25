@@ -74,8 +74,7 @@ class Anthropic(BaseService):
         modelResponse = antrophic_response.get("modelResponse", {})
 
         if not antrophic_response.get("success"):
-            if not self.playground:
-                await self.handle_failure(antrophic_response)
+            await self.handle_failure(antrophic_response)
             raise ValueError(antrophic_response.get("error"))
         functionCallRes = await self.function_call(
             self.customConfig, service_name["anthropic"], antrophic_response, 0, {}
@@ -88,9 +87,8 @@ class Anthropic(BaseService):
         tools = functionCallRes.get("tools", {})
         final_model_response = functionCallRes.get("modelResponse") or modelResponse
         response = await Response_formatter(final_model_response, service_name["anthropic"], tools, self.type, self.image_data)
-        if not self.playground:
-            transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
-            historyParams = self.prepare_history_params(response, final_model_response, tools, transfer_config)
+        transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
+        historyParams = self.prepare_history_params(response, final_model_response, tools, transfer_config)
         # Add transfer_agent_config to return if transfer was detected
         result = {"success": True, "modelResponse": final_model_response, "historyParams": historyParams, "response": response}
         if functionCallRes.get("transfer_agent_config"):

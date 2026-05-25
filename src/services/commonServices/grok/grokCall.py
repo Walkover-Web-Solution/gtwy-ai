@@ -39,8 +39,7 @@ class Grok(BaseService):
         model_response = grok_response.get("modelResponse", {})
 
         if not grok_response.get("success"):
-            if not self.playground:
-                await self.handle_failure(grok_response)
+            await self.handle_failure(grok_response)
             raise ValueError(grok_response.get("error"))
 
         choices = model_response.get("choices") or []
@@ -53,8 +52,7 @@ class Grok(BaseService):
             )
 
             if not function_call_response.get("success"):
-                if not self.playground:
-                    await self.handle_failure(function_call_response)
+                await self.handle_failure(function_call_response)
                 raise ValueError(function_call_response.get("error"))
 
             self.update_model_response(model_response, function_call_response)
@@ -62,9 +60,8 @@ class Grok(BaseService):
 
         response = await Response_formatter(model_response, service_name["grok"], tools, self.type, self.image_data)
 
-        if not self.playground:
-            transfer_config = function_call_response.get("transfer_agent_config") if function_call_response else None
-            history_params = self.prepare_history_params(response, model_response, tools, transfer_config)
+        transfer_config = function_call_response.get("transfer_agent_config") if function_call_response else None
+        history_params = self.prepare_history_params(response, model_response, tools, transfer_config)
 
         result = {
             "success": True,

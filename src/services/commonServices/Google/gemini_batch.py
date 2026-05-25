@@ -90,7 +90,7 @@ class GeminiBatch(BaseService):
             message_id = str(uuid.uuid4())
 
             # Construct Gemini native format request with history
-            contents = [{"role": "system", "parts": [{"text": self.processed_prompts[idx]}]}]
+            contents = []
             
             # Add thread history first (if available)
             if thread_history:
@@ -103,6 +103,7 @@ class GeminiBatch(BaseService):
 
             request_content = {"contents": contents}            
             request_content["generation_config"] = formatted_config["config"].model_dump(exclude_none=True)
+            request_content["system_instruction"] = {'parts': [{'text': self.processed_prompts[idx]}]}
 
             # Create JSONL entry with message_id sent as key (required by Gemini API)
             batch_entry = {
@@ -132,7 +133,7 @@ class GeminiBatch(BaseService):
             "id": batch_job.name,
             "state": batch_job.state,
             "create_time": batch_job.create_time,
-            "model": batch_job.model or self.model,
+            "model": self.model,
             "apikey": self.apikey,
             "webhook": self.webhook,
             "batch_variables": batch_variables,

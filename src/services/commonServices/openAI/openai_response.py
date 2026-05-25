@@ -1,6 +1,9 @@
+import base64
+
 from src.configs.constant import service_name
 from src.configs.model_configuration import model_config_document
 from src.services.utils.ai_middleware_format import Response_formatter
+from src.services.utils.gcp_upload_service import uploadDoc
 
 from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService
@@ -16,16 +19,14 @@ class OpenaiResponse(BaseService):
             openAIResponse = await self.image(self.customConfig, self.apikey, service_name["openai"])
             modelResponse = openAIResponse.get("modelResponse", {})
             if not openAIResponse.get("success"):
-                if not self.playground:
-                    await self.handle_failure(openAIResponse)
+                await self.handle_failure(openAIResponse)
                 raise ValueError(openAIResponse.get("error"))
             response = await Response_formatter(
                 modelResponse, service_name["openai"], tools, self.type, self.image_data
             )
-            if not self.playground:
-                historyParams = self.prepare_history_params(response, modelResponse, tools, None)
-                historyParams["message"] = "image generated successfully"
-                historyParams["type"] = "assistant"
+            historyParams = self.prepare_history_params(response, modelResponse, tools, None)
+            historyParams["message"] = "image generated successfully"
+            historyParams["type"] = "assistant"
         else:
             conversation = ConversationService.createOpenAiConversation(
                 self.configuration.get("conversation"), self.memory, self.files
@@ -54,22 +55,27 @@ class OpenaiResponse(BaseService):
                 del self.customConfig["parallel_tool_calls"]
 
             if len(self.built_in_tools) > 0:
-                if (
-                    "web_search" in self.built_in_tools
-                    and "tools" in model_config_document[self.service][self.model]["configuration"]
-                ):
+                if "tools" in model_config_document[self.service][self.model]["configuration"]:
                     if "tools" not in self.customConfig:
                         self.customConfig["tools"] = []
 
-                    if self.web_search_filters and isinstance(self.web_search_filters, list):
-                        web_search_tool = {
-                            "type": "web_search",
-                            "filters": {"allowed_domains": self.web_search_filters},
-                        }
-                    else:
-                        web_search_tool = {"type": "web_search_preview"}
+                    tools_to_append = []
 
-                    self.customConfig["tools"].append(web_search_tool)
+                    if "web_search" in self.built_in_tools:
+                        if self.web_search_filters and isinstance(self.web_search_filters, list):
+                            web_search_tool = {
+                                "type": "web_search",
+                                "filters": {"allowed_domains": self.web_search_filters},
+                            }
+                        else:
+                            web_search_tool = {"type": "web_search_preview"}
+                        tools_to_append.append(web_search_tool)
+
+                    if "image_generation" in self.built_in_tools:
+                        image_generation_tool = {"type": "image_generation"}
+                        tools_to_append.append(image_generation_tool)
+
+                    self.customConfig["tools"].extend(tools_to_append)
 
             if self.stream_mode:
                 openAIResponse = await self.stream(self.customConfig, self.apikey, service_name["openai"])
@@ -77,9 +83,21 @@ class OpenaiResponse(BaseService):
                 openAIResponse = await self.chats(self.customConfig, self.apikey, service_name["openai"])
             modelResponse = openAIResponse.get("modelResponse", {})
 
+            for item in modelResponse.get("output", []):
+                if item.get("type") == "image_generation_call" and item.get("result"):
+                    image_bytes = base64.b64decode(item["result"].strip())
+                    gcp_url = await uploadDoc(
+                        file=image_bytes,
+                        folder="generated-images",
+                        real_time=True,
+                        content_type="image/png",
+                    )
+                    item["image_url"] = gcp_url
+                    item["permanent_url"] = gcp_url
+                    item.pop("result", None)
+
             if not openAIResponse.get("success"):
-                if not self.playground:
-                    await self.handle_failure(openAIResponse)
+                await self.handle_failure(openAIResponse)
                 raise ValueError(openAIResponse.get("error"))
 
             # Check for function calls — streaming returns has_tool_calls flag directly
@@ -117,11 +135,10 @@ class OpenaiResponse(BaseService):
                     modelResponse, service_name["openai"], {}, self.type, self.image_data
                 )
 
-            if not self.playground:
-                transfer_config = (
-                    functionCallRes.get("transfer_agent_config") if has_function_call and functionCallRes else None
-                )
-                historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
+            transfer_config = (
+                functionCallRes.get("transfer_agent_config") if has_function_call and functionCallRes else None
+            )
+            historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
 
         # Add transfer_agent_config to return if transfer was detected
         result = {"success": True, "modelResponse": modelResponse, "historyParams": historyParams, "response": response}

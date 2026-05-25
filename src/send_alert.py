@@ -29,7 +29,6 @@ async def send_alert(
     user_question=None,
     variables=None,
     api_collection=None,
-    is_playground=None,
     is_external_error=False,
     error_location=None,
 ):
@@ -39,7 +38,7 @@ async def send_alert(
 
         # Internal errors: Send directly to default webhook
         if not is_external_error:
-            payload = build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api_name, is_playground, error_log, service)
+            payload = build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api_name, error_log, service)
             await send_internal_alert(payload, error_location)
             return
 
@@ -63,7 +62,7 @@ async def send_alert(
         data_source = response if error_type == alert_types["broadcast_response"] else error_log
         context = {
             "api_name": api_name,
-            "source": "playground" if is_playground else "api",
+            "source": "api",
             "service": service,
         }
 
@@ -88,7 +87,7 @@ async def send_alert(
             # Build webhook payload
             payload = build_webhook_payload(
                 details_payload, error_type, bridge_id, org_id, org_name, user_id,
-                thread_id, service, is_playground, api_name, bridge_name, is_embed
+                thread_id, service, api_name, bridge_name, is_embed
             )
 
             # Add embed user ID if available

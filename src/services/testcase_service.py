@@ -15,11 +15,45 @@ from typing import Any
 
 from bson import ObjectId
 
+from config import Config
 from models.mongo_connection import db
+from src.services.commonServices.baseService.utils import send_message
 from src.services.commonServices.common import chat
 from src.services.utils.getConfiguration import getConfiguration
 
 logger = logging.getLogger(__name__)
+
+
+def build_rtlayer_cred(channel_id: str) -> dict[str, Any]:
+    """Build RTLayer credentials for a given channel."""
+    return {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively convert datetime/ObjectId and other non-JSON types to serializable forms."""
+    from datetime import date, datetime
+
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
+async def _publish_event(rtlayer_cred: dict[str, Any] | None, event: str, payload: dict[str, Any]) -> None:
+    """Publish an event to RTLayer. Failures are logged and swallowed so they don't abort the run."""
+    if not rtlayer_cred:
+        return
+    try:
+        await send_message(cred=rtlayer_cred, data=_json_safe({"event": event, **payload}))
+    except Exception as e:
+        logger.error(f"Failed to publish '{event}' to RTLayer channel {rtlayer_cred.get('channel')}: {str(e)}")
 
 
 class TestcaseValidationError(Exception):
@@ -47,9 +81,11 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
     Raises:
         TestcaseValidationError: If required fields are missing or invalid
     """
-    version_id = body.get("version_id")
-    if not version_id:
-        raise TestcaseValidationError("version_id is required")
+    version_ids = body.get("version_ids")
+    if not version_ids:
+        raise TestcaseValidationError("version_ids is required")
+    if not isinstance(version_ids, list):
+        version_ids = [version_ids]
 
     bridge_id = body.get("bridge_id")
     testcase_id = body.get("testcase_id")
@@ -60,12 +96,12 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "bridge_id": bridge_id,
-        "version_id": version_id,
+        "version_ids": version_ids,
         "testcase_id": testcase_id,
         "testcases_flag": testcases_flag,
         "testcase_data": testcase_data,
         "variables": variables,
-        "matching_type": matching_type
+        "matching_type": matching_type,
     }
 
 
@@ -87,7 +123,7 @@ def validate_direct_testcase_data(testcase_data: dict[str, Any]) -> None:
 
 
 async def fetch_testcases_from_request(
-    testcases_flag: bool, testcase_data: dict[str, Any] | None, bridge_id: str | None, testcase_id: str | None
+    testcases_flag: bool, testcase_data: dict[str, Any] | None, bridge_id: str | None, testcase_id: str | None = None
 ) -> list[dict[str, Any]]:
     """
     Fetch testcases either from direct input or MongoDB
@@ -96,7 +132,7 @@ async def fetch_testcases_from_request(
         testcases_flag: Flag indicating if testcase data is provided directly
         testcase_data: Direct testcase data (if provided)
         bridge_id: Bridge ID for MongoDB query
-        testcase_id: Specific testcase ID for MongoDB query
+        testcase_id: Specific testcase ID for MongoDB query (single)
 
     Returns:
         List of testcase dictionaries
@@ -121,25 +157,23 @@ async def fetch_testcases_from_request(
 
         return [testcase]
 
-    else:
-        # Fetch from MongoDB
-        if not bridge_id:
-            raise TestcaseValidationError("bridge_id is required")
+    # Fetch from MongoDB
+    if not bridge_id:
+        raise TestcaseValidationError("bridge_id is required")
 
-        testcases_collection = db["testcases"]
+    testcases_collection = db["testcases"]
 
-        if testcase_id:
-            # Fetch specific testcase by ID
-            testcase = await testcases_collection.find_one({"_id": ObjectId(testcase_id)})
-            if not testcase:
-                raise TestcaseNotFoundError("No testcase found for the given testcase_id")
-            return [testcase]
-        else:
-            # Fetch all testcases for bridge_id
-            testcases = await testcases_collection.find({"bridge_id": bridge_id}).to_list(length=None)
-            if not testcases:
-                raise TestcaseNotFoundError("No testcases found for the given bridge_id")
-            return testcases
+    if testcase_id:
+        testcase = await testcases_collection.find_one({"_id": ObjectId(testcase_id)})
+        if not testcase:
+            raise TestcaseNotFoundError("No testcase found for the given testcase_id")
+        return [testcase]
+
+    # No testcase_id -> fetch all testcases for bridge_id
+    testcases = await testcases_collection.find({"bridge_id": bridge_id}).to_list(length=None)
+    if not testcases:
+        raise TestcaseNotFoundError("No testcases found for the given bridge_id")
+    return testcases
 
 
 async def get_testcase_configuration(
@@ -188,13 +222,22 @@ async def get_testcase_configuration(
     return bridge_configurations[primary_bridge_id]
 
 
-async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str, Any], override_matching_type: str | None) -> dict[str, Any]:
+async def process_single_testcase(
+    testcase: dict[str, Any],
+    db_config: dict[str, Any],
+    override_matching_type: str | None,
+    rtlayer_cred: dict[str, Any] | None = None,
+    version_id: str | None = None,
+) -> dict[str, Any]:
     """
     Process a single testcase
 
     Args:
         testcase: Testcase dictionary
         db_config: Configuration dictionary
+        override_matching_type: Optional override matching type
+        rtlayer_cred: Optional RTLayer credentials; when set, the result is pushed to the channel
+        version_id: Optional version id, included in the RTLayer payload
 
     Returns:
         Dictionary containing testcase result
@@ -204,8 +247,16 @@ async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str,
         if "configuration" in db_config:
             db_config["configuration"] = db_config["configuration"].copy()
 
+        # Merge testcase-stored variables (higher priority) with config/request variables
+        merged_variables = {**db_config.get("variables", {}), **testcase.get("variables", {})}
+        db_config["variables"] = merged_variables
+
         # Set conversation in db_config
         db_config["configuration"]["conversation"] = testcase.get("conversation", [])
+
+        # Force non-streaming for testcase execution so all versions return a
+        # parseable JSONResponse regardless of the bridge's configured stream flag.
+        db_config["configuration"]["stream"] = False
 
         # Create request data for this testcase
         testcase_request_data = {
@@ -217,10 +268,11 @@ async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str,
                     "_id": testcase.get("_id"),
                     "expected": testcase.get("expected"),
                     "type": testcase.get("type", "response"),
+                    "skip_testcase_creation": True,  # Don't create new testcases during execution
                 },
                 **db_config,
             },
-            "state": {"is_playground": True, "version": 2},
+            "state": {"version": 2},
         }
 
         # Call chat function
@@ -232,12 +284,28 @@ async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str,
         else:
             result_data = result
 
+        # Detect non-exception error responses (e.g. JSONResponse with success=False)
+        if isinstance(result_data, dict) and result_data.get("success") is False:
+            err_msg = result_data.get("error") or "Unknown error from chat service"
+            outcome = {
+                "testcase_id": str(testcase.get("_id")) if testcase.get("_id") != "direct_testcase" else "direct_testcase",
+                "bridge_id": testcase.get("bridge_id"),
+                "expected": testcase.get("expected"),
+                "actual_result": None,
+                "score": 0,
+                "matching_type": testcase.get("matching_type", "cosine"),
+                "error": err_msg,
+                "success": False,
+            }
+            await _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": outcome})
+            return outcome
+
         # Extract testcase result with score if available
         testcase_result = (
             result_data.get("response", {}).get("testcase_result", {}) if isinstance(result_data, dict) else {}
         )
 
-        return {
+        outcome = {
             "testcase_id": str(testcase.get("_id")) if testcase.get("_id") != "direct_testcase" else "direct_testcase",
             "bridge_id": testcase.get("bridge_id"),
             "expected": testcase.get("expected"),
@@ -248,45 +316,143 @@ async def process_single_testcase(testcase: dict[str, Any], db_config: dict[str,
             "matching_type": testcase_result.get("matching_type") or testcase.get("matching_type", ""),
             "success": True,
         }
+        await _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": outcome})
+        return outcome
 
     except Exception as e:
-        logger.error(f"Error processing testcase {testcase.get('_id')}: {str(e)}")
-        return {
+        # chat() raises ValueError(error_object) where error_object is a dict
+        # like {"success": False, "error": "...", "message_id": "..."}
+        error_message = str(e)
+        err_args = getattr(e, "args", None)
+        if err_args and isinstance(err_args[0], dict):
+            error_message = err_args[0].get("error") or error_message
+        logger.error(f"Error processing testcase {testcase.get('_id')}: {error_message}")
+        outcome = {
             "testcase_id": str(testcase.get("_id")) if testcase.get("_id") != "direct_testcase" else "direct_testcase",
             "bridge_id": testcase.get("bridge_id"),
             "expected": testcase.get("expected"),
             "actual_result": None,
             "score": 0,
             "matching_type": testcase.get("matching_type", "cosine"),
-            "error": str(e),
+            "error": error_message,
             "success": False,
         }
+        await _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": outcome})
+        return outcome
 
 
-async def run_testcases_parallel(testcases: list[dict[str, Any]], db_config: dict[str, Any], override_matching_type: str | None) -> list[dict[str, Any]]:
+def _filter_testcases_to_run(
+    testcases: list[dict[str, Any]],
+    version_updated_at,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split testcases into (to_run, skipped) based on lastExecutedAt vs updatedAt.
+
+    Skip when both version.updatedAt <= lastExecutedAt and
+    testcase.updatedAt <= lastExecutedAt.
+    """
+    if not version_updated_at:
+        return testcases, []
+
+    to_run: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for tc in testcases:
+        tc_updated_at = tc.get("updatedAt") or tc.get("updated_at")
+        execution = tc.get("execution") or {}
+        last_executed_at = execution.get("lastExecutedAt")
+
+        if (
+            last_executed_at
+            and tc_updated_at
+            and version_updated_at <= last_executed_at
+            and tc_updated_at <= last_executed_at
+        ):
+            # Use same shape as executed results so the frontend can render uniformly.
+            # Coerce datetime/ObjectId to JSON-safe strings for RTLayer publish.
+            skipped.append({
+                "testcase_id": str(tc.get("_id")),
+                "bridge_id": str(tc.get("bridge_id")) if tc.get("bridge_id") else None,
+                "expected": tc.get("expected"),
+                "actual_result": None,
+                "score": None,
+                "matching_type": tc.get("matching_type", "cosine"),
+                "success": True,
+                "skipped": True,
+                "reason": "no_changes_since_last_execution",
+                "last_executed_at": last_executed_at.isoformat() if hasattr(last_executed_at, "isoformat") else str(last_executed_at),
+            })
+        else:
+            to_run.append(tc)
+    return to_run, skipped
+
+
+async def run_testcases_parallel(
+    testcases: list[dict[str, Any]],
+    db_config: dict[str, Any],
+    override_matching_type: str | None,
+    version_updated_at=None,
+    rtlayer_cred: dict[str, Any] | None = None,
+    version_id: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Run multiple testcases in parallel
 
     Args:
         testcases: List of testcase dictionaries
         db_config: Configuration dictionary
+        override_matching_type: Optional override matching type
+        version_updated_at: Optional version updatedAt timestamp (for skip logic)
+        rtlayer_cred: Optional RTLayer credentials for streaming results
+        version_id: Version id, included in published payloads
 
     Returns:
-        List of testcase results
+        List of testcase results (executed + skipped)
     """
-    # Process all testcases in parallel
-    results = await asyncio.gather(*[process_single_testcase(testcase, db_config.copy(), override_matching_type) for testcase in testcases])
+    # Filter out testcases that don't need rerun (version & testcase unchanged)
+    to_run, skipped = _filter_testcases_to_run(testcases, version_updated_at)
 
-    return results
+    # Notify skipped testcases up-front so the client can render them immediately
+    if skipped:
+        await asyncio.gather(*[
+            _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": s})
+            for s in skipped
+        ])
+
+    # Process pending testcases in parallel
+    results = await asyncio.gather(
+        *[
+            process_single_testcase(tc, db_config.copy(), override_matching_type, rtlayer_cred, version_id)
+            for tc in to_run
+        ]
+    )
+
+    # Update execution.lastExecutedAt for all executed testcases (skip direct_testcase)
+    try:
+        from src.db_services.testcase_services import update_testcase_last_executed
+        executed_ids = [
+            tc.get("_id") for tc in to_run
+            if tc.get("_id") and tc.get("_id") != "direct_testcase"
+        ]
+        if executed_ids:
+            await update_testcase_last_executed(executed_ids)
+    except Exception as e:
+        logger.error(f"Failed to update lastExecutedAt: {str(e)}")
+
+    return results + skipped
 
 
-async def execute_testcases(body: dict[str, Any], org_id: str) -> dict[str, Any]:
+async def execute_testcases(
+    body: dict[str, Any],
+    org_id: str,
+    rtlayer_cred: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Main function to execute testcases end-to-end
 
     Args:
         body: Request body dictionary
         org_id: Organization ID
+        rtlayer_cred: Optional RTLayer credentials. When provided, per-testcase and
+            lifecycle events are streamed to the channel as the run progresses.
 
     Returns:
         Dictionary containing execution results
@@ -295,6 +461,8 @@ async def execute_testcases(body: dict[str, Any], org_id: str) -> dict[str, Any]
         TestcaseValidationError: If validation fails
         TestcaseNotFoundError: If testcases are not found
     """
+    from src.db_services.testcase_services import get_version_updated_at
+
     # Validate request data
     request_data = validate_testcase_request_data(body)
 
@@ -306,27 +474,56 @@ async def execute_testcases(body: dict[str, Any], org_id: str) -> dict[str, Any]
         request_data["testcase_id"],
     )
 
-    # Get configuration
-    db_config = await get_testcase_configuration(
-        org_id,
-        request_data["version_id"],
-        request_data["bridge_id"],
-        request_data["testcases_flag"],
-        request_data["testcase_data"],
-        request_data["variables"]
+    version_ids = request_data["version_ids"]
+
+    await _publish_event(
+        rtlayer_cred,
+        "run_started",
+        {
+            "bridge_id": request_data["bridge_id"],
+            "version_ids": version_ids,
+            "total_testcases": len(testcases),
+        },
     )
 
-    # Run testcases in parallel
-    results = await run_testcases_parallel(testcases, db_config, request_data['matching_type'])
+    async def run_for_version(version_id):
+        db_config, version_updated_at = await asyncio.gather(
+            get_testcase_configuration(
+                org_id,
+                version_id,
+                request_data["bridge_id"],
+                request_data["testcases_flag"],
+                request_data["testcase_data"],
+                request_data["variables"],
+            ),
+            get_version_updated_at(version_id),
+        )
+        results = await run_testcases_parallel(
+            testcases,
+            db_config,
+            request_data["matching_type"],
+            version_updated_at=version_updated_at,
+            rtlayer_cred=rtlayer_cred,
+            version_id=version_id,
+        )
+        return {
+            "version_id": version_id,
+            "total_testcases": len(testcases),
+            "results": results,
+        }
 
-    # Return formatted response
-    return {
+    # Run all versions concurrently (works for 1 or N)
+    version_results = await asyncio.gather(*[run_for_version(vid) for vid in version_ids])
+
+    final_payload = {
         "success": True,
         "bridge_id": request_data["bridge_id"],
-        "version_id": request_data["version_id"],
-        "total_testcases": len(testcases),
-        "results": results,
+        "version_ids": version_ids,
+        "total_versions": len(version_ids),
+        "version_results": version_results,
         "testcase_source": "direct"
         if (request_data["testcases_flag"] and request_data["testcase_data"])
         else "mongodb",
     }
+    await _publish_event(rtlayer_cred, "run_completed", final_payload)
+    return final_payload

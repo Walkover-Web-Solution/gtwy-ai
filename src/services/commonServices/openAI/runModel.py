@@ -175,7 +175,6 @@ async def openai_response_model(
     is_embed=None,
     user_id=None,
     thread_id=None,
-    is_playground=None,
     api_collection=None,
 ):
     try:
@@ -227,7 +226,6 @@ async def openai_response_model(
             is_embed=is_embed,
             user_id=user_id,
             thread_id=thread_id,
-            is_playground=is_playground,
             api_collection=api_collection,
         )
 
@@ -257,7 +255,6 @@ async def openai_completion(
     is_embed=None,
     user_id=None,
     thread_id=None,
-    is_playground=None,
     api_collection=None,
 ):
     try:
@@ -287,7 +284,6 @@ async def openai_completion(
             is_embed=is_embed,
             user_id=user_id,
             thread_id=thread_id,
-            is_playground=is_playground,
             api_collection=api_collection,
         )
 

@@ -34,3 +34,33 @@ def is_finalized_batch_item(item):
     finish_reason = data.get("finish_reason")
 
     return content is not None and finish_reason in {"completed", "truncated", "tool_call"}
+
+def get_batch_result_data(result_item, service):
+    status_code = None
+    has_error = False
+
+    if service == "gemini":
+        message_id = result_item.get("key", None)
+        result_data = result_item.get("response", {})
+        has_error = bool(result_data.get("error"))
+
+    elif service == "anthropic":
+        message_id = result_item.get("custom_id", None)
+        result_data = result_item.get("result", {})
+        has_error = result_data.get("type") == "errored"
+        if not has_error:
+            result_data = result_data.get("message", {})
+
+    elif service in ["openai", "groq"]:
+        message_id = result_item.get("custom_id", None)
+        response = result_item.get("response", {})
+        result_data = response.get("body", {})
+        status_code = response.get("status_code", 200)
+        has_error = status_code >= 400 or bool(result_data.get("error"))
+
+    elif service == "mistral":
+        message_id = result_item.get("custom_id", None)
+        result_data = result_item.get("response", {})
+        has_error = bool(result_data.get("error"))
+
+    return message_id, result_data, status_code, has_error

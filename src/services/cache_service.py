@@ -33,6 +33,18 @@ async def find_in_cache(identifier: str) -> str | None:
         return None
 
 
+async def incr_in_cache(identifier: str, ttl: int = DEFAULT_REDIS_TTL) -> int:
+    try:
+        key = f"{REDIS_PREFIX}{identifier}"
+        value = await client.incr(key)
+        if value == 1:
+            await client.expire(key, int(ttl))
+        return value
+    except Exception as e:
+        logger.error(f"Error incrementing in cache: {str(e)}")
+        return 0
+
+
 async def delete_in_cache(identifiers: str | list[str]) -> bool:
     if not await client.ping():
         return False
@@ -126,13 +138,15 @@ def make_json_serializable(data):
         return str(data)
 
 
-async def acquire_lock(lock_key: str, ttl: int = 600) -> bool:
+async def acquire_lock(lock_key: str, ttl: int = 1800) -> bool:
     """
     Acquire a distributed lock using Redis SET NX EX pattern.
 
     Args:
         lock_key: Unique identifier for the lock
-        ttl: Time-to-live in seconds (default: 600 seconds = 10 minutes)
+        ttl: Time-to-live in seconds
+               Must be > poll_interval (900s) + max_processing_time
+               Default: 1800 seconds = 30 minutes
 
     Returns:
         True if lock was acquired, False otherwise

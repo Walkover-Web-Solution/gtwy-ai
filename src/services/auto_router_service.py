@@ -2,6 +2,7 @@ from config import Config
 from notdiamond import AsyncNotDiamond
 from globals import logger
 from src.configs.model_configuration import model_config_document
+from src.configs.constant import auto_model_tradeoff
 from src.services.utils.auto_router_utils import (
     PROVIDER_NAME_OVERRIDES,
     get_supported_models_by_provider,
@@ -20,6 +21,11 @@ async def apply_auto_model_selection(parsed_data, timer):
         service_apikeys = {key: value for key, value in service_apikeys.items() if key == service}
 
     configuration = parsed_data.get("configuration", {})
+
+    tradeoff = None
+    if isinstance(parsed_data["auto_model_select"], dict):
+        tradeoff = parsed_data["auto_model_select"].get("tradeoff")
+        
     execution_time_logs = parsed_data.setdefault("execution_time_logs", [])
     best_model, best_service = await find_best_model(
         service_apikeys=service_apikeys,
@@ -27,7 +33,8 @@ async def apply_auto_model_selection(parsed_data, timer):
         user_message=parsed_data.get("user", ""),
         conversation=configuration.get("conversation", []),
         timer=timer,
-        execution_time_logs=execution_time_logs
+        execution_time_logs=execution_time_logs,
+        tradeoff=tradeoff
     )
 
     if not best_model or not best_service:
@@ -43,7 +50,7 @@ async def apply_auto_model_selection(parsed_data, timer):
     if selected_apikey:
         parsed_data["apikey"] = selected_apikey
 
-async def find_best_model(service_apikeys, prompt, user_message, conversation, timer, execution_time_logs=None):
+async def find_best_model(service_apikeys, prompt, user_message, conversation, timer, execution_time_logs=None, tradeoff=None):
     available_services = list(service_apikeys.keys())
 
     conversation_messages = [
@@ -78,11 +85,11 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation, t
                     {"role": "user", "content": user_message},
                 ],
                 llm_providers=providers,
-                tradeoff="cost"
+                tradeoff=auto_model_tradeoff[tradeoff or "cost"]
             )
             if execution_time_logs is not None:
                 execution_time_logs.append(
-                    {"step": "NotDiamond select_model", "time_taken": timer.stop("NotDiamond select_model")}
+                    {"step": f"NotDiamond select_model [Option: {tradeoff or 'cost'}]", "time_taken": timer.stop("NotDiamond select_model")}
                 )
     
             best_model = result.providers[0].model

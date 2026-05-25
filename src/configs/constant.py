@@ -61,6 +61,7 @@ redis_keys = {
     "batch_": "batch_",
     "avg_response_time_": "avg_response_time_",
     "gpt_memory_": "gpt_memory_",
+    "gpt_memory_counter_": "gpt_memory_counter_",
     "timezone_and_org_": "timezone_and_org_",
     "conversation_": "conversation_",
     "bridgelastused_": "bridgelastused_",
@@ -70,6 +71,17 @@ redis_keys = {
     "apikeyusedcost_": "apikeyusedcost_",
     "last_transffered_agent_": "last_transffered_agent_",
     "plan_": "plan_",
+}
+
+tag_keys = {
+    "agent": "tag:agent:",
+    "version": "tag:version:",
+    "tool": "tag:tool:",
+    "apikey": "tag:apikey:",
+    "folder": "tag:folder:",
+    "connected_agent": "tag:connected_agent:",
+    "wrapper": "tag:wrapper:",
+    "rag": "tag:rag:",
 }
 
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
@@ -89,6 +101,8 @@ inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
 
 VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
 
+GPT_MEMORY_TURNS_PER_CYCLE = 3
+
 agent_config_update_keys = {
     "_response_type": "_response_type",
     "_user_message": "_user_message"
@@ -100,4 +114,10 @@ alert_types = {
     "metrix_limit_reached": "metrix_limit_reached",
     "retry_mechanism": "retry_mechanism",
     "broadcast_response": "broadcast_response",
+}
+
+auto_model_tradeoff = {
+    "quality": None,
+    "cost": "cost",
+    "speed": "latency"
 }

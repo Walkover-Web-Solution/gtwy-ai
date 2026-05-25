@@ -21,6 +21,23 @@ def _deserialize_cached_value(raw_value):
     return raw_value
 
 
+def _is_empty_memory_response(value) -> bool:
+    """Sokt flow returns {'success': True, 'message': 'No response'} when no memory exists for the thread."""
+    if not isinstance(value, dict):
+        return False
+    return value.get("success") is True and value.get("message") == "No response"
+
+
+def parse_memory(raw):
+    """Normalize a memory payload to either a dict (new structured form), a string (legacy), or None."""
+    parsed = _deserialize_cached_value(raw)
+    if parsed is None or _is_empty_memory_response(parsed):
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return str(parsed)
+
+
 async def _fetch_memory_from_cache(memory_id: str):
     cached_value = await find_in_cache(memory_id)
     return _deserialize_cached_value(cached_value)
@@ -29,8 +46,9 @@ async def _fetch_memory_from_cache(memory_id: str):
 async def _fetch_memory_from_remote(memory_id: str):
     try:
         response, _ = await fetch("https://flow.sokt.io/func/scriCJLHynCG", "POST", None, None, {"threadID": memory_id})
-        if response is not None:
-            await store_in_cache(memory_id, response)
+        if response is None or _is_empty_memory_response(response):
+            return None
+        await store_in_cache(memory_id, response)
         return response
     except Exception as err:
         logger.error(f"Error fetching GPT memory from remote for {memory_id}: {str(err)}")
@@ -48,7 +66,6 @@ async def get_gpt_memory(
     """Return GPT memory content for the provided identifiers."""
     memory_id = _build_memory_id(thread_id, sub_thread_id, bridge_id, version_id)
     memory = await _fetch_memory_from_cache(memory_id)
-
     if memory is None:
         memory = await _fetch_memory_from_remote(memory_id)
 

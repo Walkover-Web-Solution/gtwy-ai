@@ -14,6 +14,7 @@ only function downstream code is expected to call. These helpers cover:
 
 import json
 import re
+import time as _time_module
 import uuid
 from copy import deepcopy
 
@@ -360,6 +361,7 @@ async def _call_reviewer(
     if use_streaming:
         class_obj.streamer = streamer
         class_obj.stream_mode = True
+    _reviewer_call_start = _time_module.time()
     result = await class_obj.execute()
 
     if not isinstance(result, dict):
@@ -390,6 +392,10 @@ async def _call_reviewer(
         result["response"]["usage"]["cost"] = reviewer_parsed_data["tokens"].get("total_cost") or 0
 
     latency = create_latency_object(timer, params)
+    # The main timer is already consumed before the review loop starts, so
+    # over_all_time comes out as 0. Override it with the actual wall-clock
+    # time for this reviewer call instead.
+    latency["over_all_time"] = round(_time_module.time() - _reviewer_call_start, 4)
     # Honor the actual success flag from execute() — passing success=True
     # unconditionally would mask soft failures and skip the error field on the
     # dataset row, leaving us with a saved reviewer log that has no error.

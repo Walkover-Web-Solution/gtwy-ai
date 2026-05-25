@@ -43,8 +43,7 @@ class OpenRouter(BaseService):
             openRouterResponse = await self.chats(self.customConfig, self.apikey, service_name["open_router"])
         modelResponse = openRouterResponse.get("modelResponse", {})
         if not openRouterResponse.get("success"):
-            if not self.playground:
-                await self.handle_failure(openRouterResponse)
+            await self.handle_failure(openRouterResponse)
             raise ValueError(openRouterResponse.get("error"))
         if len(modelResponse.get("choices", [])[0].get("message", {}).get("tool_calls", [])) > 0:
             functionCallRes = await self.function_call(
@@ -58,9 +57,8 @@ class OpenRouter(BaseService):
         response = await Response_formatter(
             modelResponse, service_name["open_router"], tools, self.type, self.image_data
         )
-        if not self.playground:
-            transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
-            historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
+        transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
+        historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
         # Add transfer_agent_config to return if transfer was detected
         result = {"success": True, "modelResponse": modelResponse, "historyParams": historyParams, "response": response}
         if functionCallRes.get("transfer_agent_config"):

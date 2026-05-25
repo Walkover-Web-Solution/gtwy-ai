@@ -5,8 +5,11 @@ from bson import ObjectId, errors
 from globals import BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
+from typing import Dict, Any, Set
+from src.configs.model_configuration import model_config_document
 
 from ..services.cache_service import delete_in_cache, find_in_cache, store_in_cache
+from ..services.cache_utils import extract_cache_tags, store_in_cache_with_tags
 
 configurationModel = db["configurations"]
 apiCallModel = db["apicalls"]
@@ -16,6 +19,45 @@ version_model = db["configuration_versions"]
 threadsModel = db["threads"]
 foldersModel = db["folders"]
 prompt_wrappersModel = db["prompt_wrappers"]
+
+
+def get_advanced_param_keys(service: str, model: str) -> Set[str]:
+    """Get advanced parameter keys for a service/model combination"""
+    if not service or not model:
+        return set()
+    
+    service_lower = service.lower()
+    model_config = model_config_document.get(service_lower, {}).get(model)
+    
+    if not model_config:
+        return set()
+    
+    advanced_keys = set()
+    config = model_config.get('configuration', {})
+    
+    for key, value in config.items():
+        if key == "model":
+            continue
+        advanced_keys.add(key)
+    
+    return advanced_keys
+
+def transform_agent_config_to_frontend(agent_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Transform configuration to frontend format"""
+    if not agent_config or not isinstance(agent_config, dict):
+        return agent_config
+    
+    transformed_config = {}
+    for key, value in agent_config.items():
+        if isinstance(value, dict) and "mode" in value:
+            if value.get("mode") == "custom":
+                transformed_config[key] = value.get("value")
+            else:
+                transformed_config[key] = value.get("mode")
+        else:
+            transformed_config[key] = value
+    
+    return transformed_config
 
 
 async def get_bridges_with_redis(bridge_id=None, org_id=None, version_id=None):
@@ -316,19 +358,19 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                 "$expr": {
                                     "$and": [
                                         {"$in": ["$_id", "$$bridge_ids"]},
-                                        {"$ne": ["$connected_agent_details", None]},
-                                        {"$ne": ["$connected_agent_details", {}]},
+                                        {"$ne": ["$agent_info", None]},
+                                        {"$ne": ["$agent_info", {}]},
                                     ]
                                 }
                             }
                         },
-                        {"$project": {"_id": 1, "connected_agent_details": 1}},
+                        {"$project": {"_id": 1, "agent_info": 1}},
                         {"$addFields": {"_id": {"$toString": "$_id"}}},
                     ],
                     "as": "agent_details_docs",
                 }
             },
-            # Stage 9: Create connected_agent_details object with bridge_id as key
+            # Stage 9: Create agent_info object with bridge_id as key, spreading agent_info properties
             {
                 "$addFields": {
                     "connected_agent_details": {
@@ -339,7 +381,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                                     "$map": {
                                         "input": "$agent_details_docs",
                                         "as": "doc",
-                                        "in": ["$$doc._id", "$$doc.connected_agent_details"],
+                                        "in": ["$$doc._id", "$$doc.agent_info"],
                                     }
                                 }
                             },
@@ -390,6 +432,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 }
             },
              # Stage 9.5: Extract template_ids from configuration.response_type if is_template is true
+            # Handles both old structure (is_template at root) and new structure (is_template in value)
             {
                 "$addFields": {
                     "template_ids_to_fetch": {
@@ -397,14 +440,14 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                             {
                                 "$and": [
                                     {"$eq": [{"$type": "$configuration.response_type"}, "object"]},
-                                    {"$eq": ["$configuration.response_type.is_template", True]},
-                                    {"$isArray": "$configuration.response_type.template_id"},
-                                    {"$gt": [{"$size": "$configuration.response_type.template_id"}, 0]},
+                                    {"$eq": ["$configuration.response_type.value.is_template", True]},
+                                    {"$isArray": "$configuration.response_type.value.template_id"},
+                                    {"$gt": [{"$size": "$configuration.response_type.value.template_id"}, 0]},
                                 ]
                             },
                             {
                                 "$map": {
-                                    "input": "$configuration.response_type.template_id",
+                                    "input": "$configuration.response_type.value.template_id",
                                     "as": "tid",
                                     "in": {
                                         "$convert": {
@@ -461,6 +504,72 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     }
                 }
             },
+            # Stage A (version only): Convert parent_id string → ObjectId for $lookup.
+            # Runs whenever version_id is provided — bridge-level fields like bridgeType
+            # live on the bridge doc, not the version doc, so we must always enrich.
+            *([{
+                "$addFields": {
+                    "parent_bridge_oid": {
+                        "$convert": {
+                            "input": "$parent_id",
+                            "to": "objectId",
+                            "onError": None,
+                            "onNull": None,
+                        }
+                    }
+                }
+            },
+            # Stage B (version only): Lookup the parent bridge doc from configurations
+            {
+                "$lookup": {
+                    "from": "configurations",
+                    "let": {"parent_oid": "$parent_bridge_oid"},
+                    "pipeline": [
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        {"$ne": ["$$parent_oid", None]},
+                                        {"$eq": ["$_id", "$$parent_oid"]},
+                                    ]
+                                }
+                            }
+                        },
+                        {"$project": {"configuration.encoded_prompt": 0}},
+                    ],
+                    "as": "parent_bridge_docs",
+                }
+            },
+            # Stage C (version only): Pull only bridge-level fields from parent doc into version doc.
+            # Uses $ifNull so version-level value wins if already set; parent fills only when absent.
+            {
+                "$addFields": {
+                    "bridge_status": {
+                        "$ifNull": ["$bridge_status", {"$arrayElemAt": ["$parent_bridge_docs.bridge_status", 0]}]
+                    },
+                    "bridgeType": {
+                        "$ifNull": ["$bridgeType", {"$arrayElemAt": ["$parent_bridge_docs.bridgeType", 0]}]
+                    },
+                    "name": {
+                        "$ifNull": ["$name", {"$arrayElemAt": ["$parent_bridge_docs.name", 0]}]
+                    },
+                    "chatbot_auto_answers": {
+                        "$ifNull": ["$chatbot_auto_answers", {"$arrayElemAt": ["$parent_bridge_docs.chatbot_auto_answers", 0]}]
+                    },
+                    "bridge_limit": {
+                        "$ifNull": ["$bridge_limit", {"$arrayElemAt": ["$parent_bridge_docs.bridge_limit", 0]}]
+                    },
+                    "bridge_usage": {
+                        "$ifNull": ["$bridge_usage", {"$arrayElemAt": ["$parent_bridge_docs.bridge_usage", 0]}]
+                    },
+                    "bridge_limit_start_date": {
+                        "$ifNull": ["$bridge_limit_start_date", {"$arrayElemAt": ["$parent_bridge_docs.bridge_limit_start_date", 0]}]
+                    },
+                    "bridge_limit_reset_period": {
+                        "$ifNull": ["$bridge_limit_reset_period", {"$arrayElemAt": ["$parent_bridge_docs.bridge_limit_reset_period", 0]}]
+                    },
+                }
+            }] if version_id else []),
             # Stage 10: Remove temporary fields to clean up the output
             {
                 "$project": {
@@ -472,8 +581,11 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "agent_details_docs": 0,
                     "template_ids_to_fetch": 0,
                     "templates_docs": 0,
-                    "agent_names_docs": 0
-                    # Exclude additional temporary fields as needed
+                    "agent_names_docs": 0,
+                    **({
+                        "parent_bridge_oid": 0,
+                        "parent_bridge_docs": 0,
+                    } if version_id else {}),
                 }
             },
         ]
@@ -821,8 +933,23 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 
                 # Add folder pre_tool if not already present
                 if folder_pre_tool_id and folder_pre_tool_id not in bridge_data["pre_tools"]:
-                    bridge_data["pre_tools"].append(folder_pre_tool_id)
+                    # Build pre_tools_data with variables_path mapping
+                    script_id = folder_pre_tool.get("script_id")
+                    variables_path_pre_tool = folder_result[0].get("variables_path", {}).get(script_id, {}) if script_id else {}
+                    pre_tool_data_entry = {
+                        "type": 'custom_function',
+                        "config":{
+                            "function_id": folder_pre_tool_id,
+                            "script_id": script_id
+                        },
+                        "args": variables_path_pre_tool or folder_pre_tool.get("args", {}),
+                    }
                     bridge_data["pre_tools_data"].append(folder_pre_tool)
+                    bridge_data["pre_tools"].append(pre_tool_data_entry)
+
+            # Merge folder_post_tool into bridge_data
+            if folder_result and folder_result[0].get("folder_post_tool"):
+                bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
 
             # Merge folder_post_tool into bridge_data
             if folder_result and folder_result[0].get("folder_post_tool"):
@@ -889,7 +1016,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
 
         # Structure the final response
         response = {"success": True, "bridges": bridge_data}
-        await store_in_cache(cache_key, response)
+        tags = extract_cache_tags(response)
+        await store_in_cache_with_tags(cache_key, response, tags)
         return response
 
     except errors.InvalidId:
@@ -957,16 +1085,17 @@ async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org
     return {"success": True, "result": updated_bridge}
 
 
-async def get_agents_data(slug_name, user_email):
+async def get_agents_data(slug_name, user_email, org_id):
     bridges = await configurationModel.find_one(
         {
             "$or": [
-                {"$and": [{"page_config.availability": "public"}, {"page_config.url_slugname": slug_name}]},
+                {"$and": [{"settings.publicAgentConfig.availability": "public"}, {"slugName": slug_name}, {"org_id": org_id}]},
                 {
                     "$and": [
-                        {"page_config.availability": "private"},
-                        {"page_config.url_slugname": slug_name},
-                        {"page_config.allowedUsers": user_email},
+                        {"settings.publicAgentConfig.availability": "private"},
+                        {"slugName": slug_name},
+                        {"settings.publicAgentConfig.allowedUsers": user_email},
+                        {"org_id": org_id},
                     ]
                 },
             ]

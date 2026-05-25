@@ -1,6 +1,8 @@
 import asyncio
 import json
 import uuid
+
+import pydash
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
@@ -16,6 +18,7 @@ from src.db_services.metrics_service import (
     save_conversations_to_redis,
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
+from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
 from src.configs.constant import bridge_ids, redis_keys, alert_types
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
@@ -44,14 +47,19 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
         return
     agent_variables = parsed_data.get("variables", {})
 
+    _MISSING = object()
+
     def resolve_args(tool_config, tool_args_mapping, is_custom=False):
-        resolved = dict(tool_config)
+        resolved = {}
         for param, var_name in tool_args_mapping.items():
-            if var_name in agent_variables:
+            # Try literal key first (handles keys that contain dots), then dotted path traversal
+            if isinstance(var_name, str) and var_name in agent_variables:
                 resolved[param] = agent_variables[var_name]
-            elif not is_custom:
-                resolved[param] = var_name
-        for param in tool_config.get("required_params", []):
+                continue
+            value = pydash.get(agent_variables, var_name, _MISSING)
+            if value is not _MISSING:
+                resolved[param] = value
+        for param in tool_config.get("required", []):
             if param not in resolved and param in agent_variables:
                 resolved[param] = agent_variables[param]
         return resolved
@@ -170,7 +178,6 @@ def parse_request_body(request_body):
         "plans": body.get("plans"),
         "model": body.get("configuration", {}).get("model"),
         "auto_model_select": body.get("auto_model_select", False),
-        "is_playground": state.get("is_playground") or body.get("is_playground") or False,
         "bridge": body.get("bridge"),
         "pre_tools": body.get("pre_tools"),
         "version": state.get("version"),
@@ -213,7 +220,7 @@ def parse_request_body(request_body):
         "name": body.get("name"),
         "api_collection": body.get("api_collection"),
         "org_name": body.get("org_name"),
-        "variables_state": body.get("variables_state"),
+        "variables_state": body.get("agent_info", {}).get("variables_state"),
         "built_in_tools": body.get("built_in_tools") or [],
         "thread_flag": body.get("thread_flag") or False,
         "files": body.get("files") or [],
@@ -239,6 +246,7 @@ def parse_request_body(request_body):
         "meta": body.get("meta"),
         "limit": body.get("limit"),
         "is_rerun": body.get("is_rerun", False),
+        "is_playground": body.get("is_playground", False),
     }
 
 
@@ -429,6 +437,9 @@ async def handle_pre_tools(parsed_data, custom_config):
     if not pre_tools:
         return
 
+    pre_tool_response = None
+    entry = {}
+
     for tool in pre_tools:
         tool_type = tool.get("type")
         args = dict(tool.get("args", {}))
@@ -436,18 +447,26 @@ async def handle_pre_tools(parsed_data, custom_config):
         args["_response_type"] = parsed_data["configuration"]["response_type"]
 
         if tool_type == "custom_function":
-            pre_function_response = await axios_work(
+            pre_tool_response = await axios_work(
                 args,
                 {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
             )
-            if pre_function_response.get("status") == 0:
+            if pre_tool_response.get("status") == 0:
                 parsed_data["variables"]["pre_function"] = (
-                    f"Error while calling prefunction. Error message: {pre_function_response.get('response')}"
+                    f"Error while calling prefunction. Error message: {pre_tool_response.get('response')}"
                 )
             else:
-                parsed_data["variables"]["pre_function"] = pre_function_response.get("response")
-                response_data = pre_function_response.get("response", {})
+                parsed_data["variables"]["pre_function"] = pre_tool_response.get("response")
+                response_data = pre_tool_response.get("response", {})
                 Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
+                entry = {
+                    "id": tool.get("name", ""),
+                    "args": args,
+                    "data": pre_tool_response,
+                    "type": "pre_tool",
+                    "error": pre_tool_response.get("status", 0) != 1,
+                    "name": tool.get('name', "")
+                }
         
         elif tool_type == "query_refiner":
             prompt = args.get("prompt", "")
@@ -456,16 +475,24 @@ async def handle_pre_tools(parsed_data, custom_config):
             if prompt:
                 variables["prompt"] = prompt
             try:
-                optimised_query = await call_ai_middleware(
+                pre_tool_response = await call_ai_middleware(
                     user=user_query,
                     bridge_id=bridge_ids["query_refiner"],
                     variables=variables,
                     response_type="text",
                 )
-                optimised_query = optimised_query or user_query
+                optimised_query = pre_tool_response or user_query
             except Exception as e:
+                pre_tool_response = None
                 optimised_query = user_query
-         
+            entry = {
+                    "id" : uuid.uuid4().hex,
+                    "type" : "pre_tool",
+                    "name" : "Query Refiner",
+                    "data" : pre_tool_response,
+                    "args" : variables,
+                    "error" : pre_tool_response.get("status") != 1,
+                }
             parsed_data["user"] = optimised_query
             
         elif tool_type == "rag_knowledgebase":
@@ -474,10 +501,11 @@ async def handle_pre_tools(parsed_data, custom_config):
             owner_id = parsed_data.get("owner_id")
             resource_to_collection_mapping = {resource_id: collection_id} if resource_id and collection_id else {}
             if not resource_id or not collection_id:
+                pre_tool_response = None
                 parsed_data["variables"]["rag_pre_result"] = ""
                 logger.warning(f"rag_knowledgebase pre-tool missing resource_id or collection_id for bridge {parsed_data.get('bridge_id')}")
                 continue
-            rag_response = await get_text_from_vectorsQuery(
+            pre_tool_response = await get_text_from_vectorsQuery(
                 {
                     "resource_id": resource_id,
                     "query": parsed_data["user"],
@@ -488,20 +516,37 @@ async def handle_pre_tools(parsed_data, custom_config):
                 owner_id=owner_id,
                 resource_to_collection_mapping=resource_to_collection_mapping,
             )
-            if rag_response.get("status") == 1:
-                parsed_data["variables"]["rag_pre_result"] = rag_response.get("response")
+            if pre_tool_response.get("status") == 1:
+                parsed_data["variables"]["rag_pre_result"] = pre_tool_response.get("response")
             else:
-                parsed_data["variables"]["rag_pre_result"] = f"Error: {rag_response.get('response', 'unknown error')}"
+                parsed_data["variables"]["rag_pre_result"] = f"Error: {pre_tool_response.get('response', 'unknown error')}"
+            entry = {
+                    "id":uuid.uuid4().hex,
+                    "type":"pre_tool",
+                    "name":"RAG Knowledgebase",
+                    "data":pre_tool_response,
+                    "args":args,
+                    "error":pre_tool_response.get("status") != 1,
+                }
         
         elif tool_type == "gtwy_web_search":
-            web_response = await call_firecrawl_scrape(args)
-            if web_response.get("status") == 1:
-                parsed_data["variables"]["web_search_pre_result"] = web_response.get("response")
+            pre_tool_response = await call_firecrawl_scrape(args)
+            if pre_tool_response.get("status") == 1:
+                parsed_data["variables"]["web_search_pre_result"] = pre_tool_response.get("response")
             else:
-                response = web_response.get('response')
+                response = pre_tool_response.get('response')
                 error_msg = f"Error: {response.get('error', 'unknown error') if isinstance(response, dict) else response or 'unknown error'}"
                 parsed_data["variables"]["web_search_pre_result"] = error_msg
-
+            entry = {
+                    "id":uuid.uuid4().hex,
+                    "type":"pre_tool",
+                    "name":"Web Search",
+                    "data":pre_tool_response,
+                    "args":args,
+                    "error":pre_tool_response.get("status") != 1,
+                }
+    parsed_data.setdefault('pre_tool_response_to_save', {})
+    parsed_data['pre_tool_response_to_save'].update({entry['id']: entry})
 
 async def handle_post_tool(parsed_data, result):
     """Execute the folder-level post_tool after every AI call."""
@@ -644,18 +689,14 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
         id = f"{thread_info['thread_id']}_{thread_info['sub_thread_id']}_{parsed_data.get('version_id') or parsed_data.get('bridge_id')}"
         parsed_data["id"] = id
         if gpt_memory:
-            memory = await find_in_cache(id)
-            if memory:
-                # Convert bytes to string if needed
-                if isinstance(memory, bytes):
-                    memory = memory.decode("utf-8")
-                parsed_data["memory"] = memory
-            else:
-                response, _ = await fetch(
-                    "https://flow.sokt.io/func/scriCJLHynCG", "POST", None, None, {"threadID": id}
-                )
-                parsed_data["memory"] = response
-                memory = response
+            _memory_id, raw_memory = await get_gpt_memory(
+                bridge_id=parsed_data.get("bridge_id"),
+                thread_id=thread_info["thread_id"],
+                sub_thread_id=thread_info["sub_thread_id"],
+                version_id=parsed_data.get("version_id"),
+            )
+            memory = parse_memory(raw_memory)
+            parsed_data["memory"] = memory
         configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
             configuration.get("prompt") or "", variables
         )
@@ -675,7 +716,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             custom_config["response_type"] = {"type": "json_object"}
 
-        if not parsed_data["is_playground"] and bridge_type is None and model_config.get("response_type"):
+        if bridge_type is None and model_config.get("response_type"):
             res = parsed_data["body"].get("response_type") or parsed_data["body"].get("configuration", {}).get(
                 "response_type", {"type": "json_object"}
             )
@@ -725,7 +766,6 @@ def build_service_params(
         "model": parsed_data["model"],
         "service": parsed_data["service"],
         "modelOutputConfig": model_output_config,
-        "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data.get("response_format") or {},
         "thread_flag": parsed_data.get("thread_flag"),
@@ -912,6 +952,49 @@ async def process_background_tasks(
     """
     # Primary-agent sub-tasks inside plan mode skip per-call history; the
     # single final plan result is saved by todo_handler after full execution.
+    from bson import ObjectId
+    from src.controllers.testcase_controller import handle_playground_testcase
+    testcase_data = parsed_data.get("testcase_data", {})
+    # Skip testcase creation/update if running via testcase execution API
+    if testcase_data and not testcase_data.get("skip_testcase_creation"):
+        if testcase_data.get("testcase_id"):
+            Flag = False
+
+            # Update testcase in background (async task)
+            async def update_testcase_background():
+                try:
+                    await handle_playground_testcase(result, parsed_data, Flag)
+                except Exception as e:
+                    logger.error(f"Error updating testcase in background: {str(e)}")
+
+            asyncio.create_task(update_testcase_background())
+
+        else:
+            # Generate testcase_id immediately and add to response
+            new_testcase_id = str(ObjectId())
+            result["response"]["testcase_id"] = new_testcase_id
+            parsed_data["testcase_data"]["testcase_id"] = new_testcase_id
+            channel_id = f"{parsed_data.get('org_id')}_{parsed_data.get('bridge_id')}_{parsed_data.get('version_id')}"
+            playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
+            if playground_response_format:
+                await sendResponse(
+                    playground_response_format,
+                    parsed_data["testcase_data"],
+                    success=True,
+                    variables=parsed_data.get("variables", {}),
+                )
+
+            # Add the generated ID to testcase_data for the background task
+
+            # Save testcase data in background using the same function
+            async def create_testcase_background():
+                try:
+                    Flag = True
+                    await handle_playground_testcase(result, parsed_data, Flag)
+                except Exception as e:
+                    logger.error(f"Error creating testcase in background: {str(e)}")
+
+            asyncio.create_task(create_testcase_background())
     if parsed_data.get("skip_history"):
         return
 
@@ -1038,30 +1121,51 @@ async def process_background_tasks_for_error(parsed_data, error):
     if parsed_data.get("skip_history"):
         return
 
-    tasks = [
-        send_alert(
-            bridge_id=parsed_data["bridge_id"],
-            org_id=parsed_data["org_id"],
-            error_log={"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]},
-            error_type=alert_types["error"],
-            bridge_name=parsed_data.get("name"),
-            org_name=parsed_data.get("org_name"),
-            is_embed=parsed_data.get("is_embed"),
-            user_id=parsed_data.get("user_id"),
-            thread_id=parsed_data.get("thread_id"),
-            service=parsed_data.get("service"),
-            is_playground=parsed_data.get("is_playground"),
-            api_collection=parsed_data.get("api_collection"),
-            is_external_error=False,
-        ),
+    tasks = []
+    
+    # Only send alert if not in playground mode
+    if not parsed_data.get("is_playground"):
+        tasks.append(
+            send_alert(
+                bridge_id=parsed_data["bridge_id"],
+                org_id=parsed_data["org_id"],
+                error_log={"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]},
+                error_type=alert_types["error"],
+                bridge_name=parsed_data.get("name"),
+                org_name=parsed_data.get("org_name"),
+                is_embed=parsed_data.get("is_embed"),
+                user_id=parsed_data.get("user_id"),
+                thread_id=parsed_data.get("thread_id"),
+                service=parsed_data.get("service"),
+                api_collection=parsed_data.get("api_collection"),
+                is_external_error=False,
+            )
+        )
+    
+    tasks.extend([
         _publish_history_to_queue(
             [parsed_data["usage"]],
             parsed_data["historyParams"],
             parsed_data["version_id"],
             parsed_data=parsed_data,
         ),
-    ]
+    ])
     await asyncio.gather(*[task for task in tasks if task is not None], return_exceptions=True)
+
+
+async def save_error_history(parsed_data, error, params, timer, class_obj=None, thread_info=None):
+    """
+    Shared helper: calculates tokens (if not already set), builds latency, updates usage metrics,
+    sets historyParams, and publishes error history + alert via process_background_tasks_for_error.
+    All exceptions are swallowed and logged.
+    """
+    try:
+        latency = create_latency_object(timer, params)
+        update_usage_metrics(parsed_data, params, latency, error=error, success=False)
+        parsed_data["historyParams"] = create_history_params(parsed_data, error, class_obj, thread_info)
+        await process_background_tasks_for_error(parsed_data, error)
+    except Exception as hist_err:
+        logger.error(f"save_error_history failed: {hist_err}")
 
 
 async def process_batch_background_tasks(parsed_data, result, processed_prompts, batch_variables):
@@ -1113,7 +1217,6 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "model": parsed_data["model"],
         "service": parsed_data["service"],
         "modelOutputConfig": model_output_config,
-        "playground": parsed_data["is_playground"],
         "template": parsed_data["template"],
         "response_format": parsed_data["response_format"],
         "thread_flag": parsed_data.get("thread_flag"),
@@ -1455,58 +1558,6 @@ async def add_files_to_parse_data(thread_id, sub_thread_id, bridge_id):
     return []
 
 
-async def process_background_tasks_for_playground(result, parsed_data):
-    from bson import ObjectId
-
-    from src.controllers.testcase_controller import handle_playground_testcase
-
-    try:
-        testcase_data = parsed_data.get("testcase_data", {})
-
-        # If testcase_id exists, update in background and return immediately
-        if testcase_data.get("testcase_id"):
-            Flag = False
-
-            # Update testcase in background (async task)
-            async def update_testcase_background():
-                try:
-                    await handle_playground_testcase(result, parsed_data, Flag)
-                except Exception as e:
-                    logger.error(f"Error updating testcase in background: {str(e)}")
-
-            asyncio.create_task(update_testcase_background())
-
-        else:
-            # Generate testcase_id immediately and add to response
-            new_testcase_id = str(ObjectId())
-            result["response"]["testcase_id"] = new_testcase_id
-            parsed_data["testcase_data"]["testcase_id"] = new_testcase_id
-            channel_id = f"{parsed_data.get('org_id')}_{parsed_data.get('bridge_id')}_{parsed_data.get('version_id')}"
-            playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
-            if playground_response_format:
-                await sendResponse(
-                    playground_response_format,
-                    parsed_data["testcase_data"],
-                    success=True,
-                    variables=parsed_data.get("variables", {}),
-                )
-
-            # Add the generated ID to testcase_data for the background task
-
-            # Save testcase data in background using the same function
-            async def create_testcase_background():
-                try:
-                    Flag = True
-                    await handle_playground_testcase(result, parsed_data, Flag)
-                except Exception as e:
-                    logger.error(f"Error creating testcase in background: {str(e)}")
-
-            asyncio.create_task(create_testcase_background())
-
-    except Exception as e:
-        logger.error(f"Error processing playground testcase: {str(e)}")
-
-
 async def update_cost_and_last_used(parsed_data):
     try:
         await update_cost(parsed_data)
@@ -1540,172 +1591,170 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
     is_nested_stream_call = bool(
         (request_body.get("body", {}) if isinstance(request_body, dict) else {}).get("_nested_stream_call")
     )
-    timer.start()
     original_error = None
     template_data = None
 
     try:
         from src.services.commonServices.response_caching_service import handle_response_caching
-        result = await handle_response_caching(parsed_data=parsed_data, class_obj=class_obj)
 
-    except Exception as first_err:
-        original_error = str(first_err)
-        logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")
-        fall_back = parsed_data.get("fall_back")
+        try:
+            result = await handle_response_caching(parsed_data=parsed_data, class_obj=class_obj)
+        except Exception as first_err:
+            original_error = str(first_err)
+            logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")
+            fall_back = parsed_data.get("fall_back")
 
-        if fall_back and fall_back.get("is_enable", False):
-            try:
-                fallback_model = fall_back.get("model", parsed_data["model"])
-                fallback_service = fall_back.get("service", parsed_data["service"])
-                parsed_data["model"] = fallback_model
-                parsed_data["service"] = fallback_service
-                parsed_data["configuration"]["model"] = fallback_model
-                if fall_back.get("apikey"):
-                    parsed_data["apikey"] = fall_back["apikey"]
+            if fall_back and fall_back.get("is_enable", False):
+                try:
+                    fallback_model = fall_back.get("model", parsed_data["model"])
+                    fallback_service = fall_back.get("service", parsed_data["service"])
+                    parsed_data["model"] = fallback_model
+                    parsed_data["service"] = fallback_service
+                    parsed_data["configuration"]["model"] = fallback_model
+                    if fall_back.get("apikey"):
+                        parsed_data["apikey"] = fall_back["apikey"]
 
-                fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
-                    parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
-                )
-                fb_custom_config = await configure_custom_settings(
-                    fb_model_config["configuration"], fb_custom_config, parsed_data["service"]
-                )
-                fallback_params = build_service_params(
-                    parsed_data,
-                    fb_custom_config,
-                    fb_model_output_config,
-                    thread_info,
-                    timer,
-                    params.get("memory"),
-                    bridge_configurations,
-                )
-                fallback_class_obj = await Helper.create_service_handler(fallback_params, parsed_data["service"])
-
-                # Transfer the live streamer so the same SSE queue/RTLayer channel is reused
-                fallback_class_obj.streamer = class_obj.streamer
-                fallback_class_obj.stream_mode = True
-
-                from src.services.commonServices.response_caching_service import handle_response_caching
-                result = await handle_response_caching(parsed_data=parsed_data, class_obj=fallback_class_obj)
-
-                if result.get("response", {}).get("data") is not None:
-                    result["response"]["data"]["fallback"] = True
-                    result["response"]["data"]["firstAttemptError"] = (
-                        f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
-                        f"Retried with {parsed_data['service']}/{parsed_data['model']}"
+                    fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
+                        parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
                     )
+                    fb_custom_config = await configure_custom_settings(
+                        fb_model_config["configuration"], fb_custom_config, parsed_data["service"]
+                    )
+                    fallback_params = build_service_params(
+                        parsed_data,
+                        fb_custom_config,
+                        fb_model_output_config,
+                        thread_info,
+                        timer,
+                        params.get("memory"),
+                        bridge_configurations,
+                    )
+                    fallback_class_obj = await Helper.create_service_handler(fallback_params, parsed_data["service"])
 
-                class_obj = fallback_class_obj
-                params = fallback_params
+                    fallback_class_obj.streamer = class_obj.streamer
+                    fallback_class_obj.stream_mode = True
+                    result = await handle_response_caching(parsed_data=parsed_data, class_obj=fallback_class_obj)
 
-            except Exception as retry_err:
-                logger.error(f"SSE fallback attempt also failed ({parsed_data['service']}/{parsed_data['model']}): {retry_err}, {tb.format_exc()}")
-                if class_obj.streamer:
-                    await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
-                    if not is_nested_stream_call:
-                        await class_obj.streamer.close()
-                if not parsed_data.get("is_playground"):
+                    if result.get("response", {}).get("data") is not None:
+                        result["response"]["data"]["fallback"] = True
+                        result["response"]["data"]["firstAttemptError"] = (
+                            f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
+                            f"Retried with {parsed_data['service']}/{parsed_data['model']}"
+                        )
+
+                    class_obj = fallback_class_obj
+                    params = fallback_params
+                except Exception as retry_err:
+                    logger.error(
+                        f"SSE fallback attempt also failed ({parsed_data['service']}/{parsed_data['model']}): {retry_err}, {tb.format_exc()}"
+                    )
+                    if class_obj.streamer:
+                        await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
+                        if not is_nested_stream_call:
+                            await class_obj.streamer.close()
                     await sendResponse(
                         parsed_data.get("response_format"), str(retry_err), variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
                     ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
-                if is_nested_stream_call:
-                    return {"success": False, "message": str(retry_err), "response": {}}
-                return
-        else:
-            if class_obj.streamer:
-                await class_obj.streamer.emit_error(original_error)
-                if not is_nested_stream_call:
-                    await class_obj.streamer.close()
-            if not parsed_data.get("is_playground"):
+                    if is_nested_stream_call:
+                        await save_error_history(parsed_data, retry_err, params, timer, class_obj, thread_info)
+                        return {"success": False, "message": str(retry_err), "response": {}}
+                    raise
+            else:
+                if class_obj.streamer:
+                    await class_obj.streamer.emit_error(original_error)
+                    if not is_nested_stream_call:
+                        await class_obj.streamer.close()
                 await sendResponse(
                     parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
                 ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
-            if is_nested_stream_call:
-                return {"success": False, "message": str(original_error), "response": {}}
-            return
+                if is_nested_stream_call:
+                    await save_error_history(parsed_data, first_err, params, timer, class_obj, thread_info)
+                    return {"success": False, "message": str(original_error), "response": {}}
+                raise
 
-    template_data = render_template_if_applicable(parsed_data, result)
-    result.setdefault("response", {}).setdefault("data", {})
-    rendered_content = result["response"]["data"].get("content", {})
+        template_data = render_template_if_applicable(parsed_data, result)
+        result.setdefault("response", {}).setdefault("data", {})
+        rendered_content = result["response"]["data"].get("content", {})
 
-    # Handle agent transfer: save agent A's metrics/history, then fire agent B with the live streamer
-    transfer_agent_config = result.get("transfer_agent_config") if isinstance(result, dict) else None
-    if transfer_agent_config and transfer_agent_config.get("action_type") == "transfer" and chat_function and request_body:
-        try:
-            result["response"]["usage"] = params["token_calculator"].get_total_usage()
-            if parsed_data.get("type") != "image":
-                parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-                    parsed_data["model"], parsed_data["service"]
+        transfer_agent_config = result.get("transfer_agent_config") if isinstance(result, dict) else None
+        if transfer_agent_config and transfer_agent_config.get("action_type") == "transfer" and chat_function and request_body:
+            try:
+                result["response"]["usage"] = params["token_calculator"].get_total_usage()
+                if parsed_data.get("type") != "image":
+                    parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
+                        parsed_data["model"], parsed_data["service"]
+                    )
+                    result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
+
+                current_version_id = bridge_configurations.get(parsed_data["bridge_id"], {}).get(
+                    "version_id", parsed_data.get("version_id")
                 )
-                result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
+                latency = create_latency_object(timer, params)
+                update_usage_metrics(parsed_data, params, latency, result=result, success=True)
 
-            current_version_id = bridge_configurations.get(parsed_data["bridge_id"], {}).get(
-                "version_id", parsed_data.get("version_id")
-            )
-            latency = create_latency_object(timer, params)
-            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
-
-            current_history_data = {
-                "bridge_id": parsed_data["bridge_id"],
-                "history_params": result.get("historyParams"),
-                "dataset": [parsed_data.get("usage", {})],
-                "version_id": current_version_id,
-                "thread_info": thread_info,
-                "parent_id": parsed_data.get("parent_bridge_id", ""),
-            }
-            TRANSFER_HISTORY[transfer_request_id].append(current_history_data)
-
-            target_agent_id = transfer_agent_config.get("agent_id")
-            user_query = transfer_agent_config.get("user_query")
-
-            if target_agent_id and target_agent_id in bridge_configurations:
-                target_agent_cfg = bridge_configurations[target_agent_id]
-                transfer_body = request_body.get("body", {}).copy()
-                transfer_body.update(target_agent_cfg)
-                transfer_body["bridge_id"] = target_agent_id
-                transfer_body["user"] = user_query
-                transfer_body["parent_bridge_id"] = parsed_data["bridge_id"]
-                transfer_body["transfer_request_id"] = transfer_request_id
-                transfer_body["bridge_configurations"] = bridge_configurations
-                # Inject the live streamer so agent B writes to the same SSE connection
-                transfer_body["_injected_streamer"] = class_obj.streamer
-                if is_nested_stream_call:
-                    transfer_body["_nested_stream_call"] = True
-                    transfer_body["_sync_injected_stream_call"] = True
-
-                transfer_request_body = {
-                    "body": transfer_body,
-                    "state": request_body.get("state", {}).copy(),
-                    "path_params": request_body.get("path_params", {}),
+                current_history_data = {
+                    "bridge_id": parsed_data["bridge_id"],
+                    "history_params": result.get("historyParams"),
+                    "dataset": [parsed_data.get("usage", {})],
+                    "version_id": current_version_id,
+                    "thread_info": thread_info,
+                    "parent_id": parsed_data.get("parent_bridge_id", ""),
                 }
-                transfer_result = await chat_function(transfer_request_body)
-                if is_nested_stream_call:
-                    return transfer_result
-            else:
-                logger.warning(f"SSE transfer: target agent {target_agent_id} not found, closing stream")
+                TRANSFER_HISTORY[transfer_request_id].append(current_history_data)
+
+                target_agent_id = transfer_agent_config.get("agent_id")
+                user_query = transfer_agent_config.get("user_query")
+
+                if target_agent_id and target_agent_id in bridge_configurations:
+                    target_agent_cfg = bridge_configurations[target_agent_id]
+                    transfer_body = request_body.get("body", {}).copy()
+                    transfer_body.update(target_agent_cfg)
+                    transfer_body["bridge_id"] = target_agent_id
+                    transfer_body["user"] = user_query
+                    transfer_body["parent_bridge_id"] = parsed_data["bridge_id"]
+                    transfer_body["transfer_request_id"] = transfer_request_id
+                    transfer_body["bridge_configurations"] = bridge_configurations
+                    transfer_body["_injected_streamer"] = class_obj.streamer
+                    if is_nested_stream_call:
+                        transfer_body["_nested_stream_call"] = True
+                        transfer_body["_sync_injected_stream_call"] = True
+
+                    transfer_request_body = {
+                        "body": transfer_body,
+                        "state": request_body.get("state", {}).copy(),
+                        "path_params": request_body.get("path_params", {}),
+                    }
+                    transfer_result = await chat_function(transfer_request_body)
+                    if is_nested_stream_call:
+                        return transfer_result
+                else:
+                    logger.warning(f"SSE transfer: target agent {target_agent_id} not found, closing stream")
+                    if class_obj.streamer:
+                        await class_obj.streamer.emit_error(
+                            f"Transfer target agent {target_agent_id} not found in bridge_configurations"
+                        )
+                        if not is_nested_stream_call:
+                            await class_obj.streamer.close()
+            except Exception as transfer_err:
+                logger.error(f"SSE transfer handling error: {transfer_err}, {tb.format_exc()}")
                 if class_obj.streamer:
-                    await class_obj.streamer.emit_error(f"Transfer target agent {target_agent_id} not found in bridge_configurations")
+                    await class_obj.streamer.emit_error(str(transfer_err))
                     if not is_nested_stream_call:
                         await class_obj.streamer.close()
-        except Exception as transfer_err:
-            logger.error(f"SSE transfer handling error: {transfer_err}, {tb.format_exc()}")
-            if class_obj.streamer:
-                await class_obj.streamer.emit_error(str(transfer_err))
-                if not is_nested_stream_call:
-                    await class_obj.streamer.close()
-            if is_nested_stream_call:
-                return {"success": False, "message": str(transfer_err), "response": {}}
-        return  # Agent B owns emit_done + close from here
+                if is_nested_stream_call:
+                    await save_error_history(parsed_data, transfer_err, params, timer, class_obj, thread_info)
+                    return {"success": False, "message": str(transfer_err), "response": {}}
+            raise
 
-    try:
         result["response"]["usage"] = params["token_calculator"].get_total_usage()
         if parsed_data.get("type") != "image":
             parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
                 parsed_data["model"], parsed_data["service"]
             )
             result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
-        params["execution_time_logs"].append({"step": "streaming", "time_taken": round(timer.stop("streaming"), 4)})
+
         latency = create_latency_object(timer, params)
-        if template_data and result.get("historyParams") and not parsed_data.get("is_playground"):
+        if template_data and result.get("historyParams"):
             result["historyParams"]["chatbot_message"] = json.dumps(rendered_content)
 
         if template_data and class_obj.streamer:
@@ -1715,11 +1764,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 metadata=template_data,
             )
 
-        # Update usage and run the reviewer loop BEFORE the playground/non-
-        # playground split so both paths see the final, reviewed response with
-        # summed tokens. Reviewer + any re-runs share the same SSE connection
-        # (class_obj.streamer); emit_done is owned by this finalizer below.
-        if not parsed_data["is_playground"] and result.get("response") and result["response"].get("data"):
+        if result.get("response") and result["response"].get("data"):
             result["response"]["data"]["message_id"] = parsed_data["message_id"]
         update_usage_metrics(parsed_data, params, latency, result=result, success=True)
         result.setdefault("response", {}).setdefault("usage", {})
@@ -1727,6 +1772,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
         if parsed_data.get("_reviewer_bridge_id"):
             from src.services.commonServices.reviewer_service import run_review_loop
+
             result, _reviewer_summary = await run_review_loop(
                 parsed_data=parsed_data,
                 params=params,
@@ -1745,31 +1791,38 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
         await handle_post_tool(parsed_data, result)
 
-        if not parsed_data["is_playground"]:
-            await sendResponse(
-                parsed_data.get("response_format"),
-                result["response"],
-                success=True,
-                variables=parsed_data.get("variables", {}),
-                meta=parsed_data.get("meta"),
-            )
-            await process_background_tasks(
-                parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
-            )
-        else:
-            await process_background_tasks_for_playground(result, parsed_data)
+        await sendResponse(
+            parsed_data.get("response_format"),
+            result["response"],
+            success=True,
+            variables=parsed_data.get("variables", {}),
+            meta=parsed_data.get("meta"),
+        )
+        if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
+            result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
+
+        await process_background_tasks(
+            parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
+        )
 
         if class_obj.streamer:
-            if getattr(class_obj, 'tool_call_limit_error', None):
-                result["error"] = class_obj.tool_call_limit_error
-            if result.get("error"):
+            if isinstance(result, dict) and result.get("error"):
                 formatted_response["error"] = result["error"]
+
             finish_reason = (
-                result.get("stream_finish_reason")
+                "maximum_iteration_limit_reached" if class_obj.maximum_iteration_limit_reached
+                else result.get("stream_finish_reason")
                 or model_response.get("finish_reason")
                 or model_response.get("status")
                 or ""
             )
+            post_tool_response = await handle_post_tool(parsed_data, result)
+            if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                if formatted_response.get("data") is not None:
+                    formatted_response["data"]["content"] = post_tool_response.get("response")
+                if result.get("response", {}).get("data") is not None:
+                    result["response"]["data"]["content"] = post_tool_response.get("response")
+
             if not is_nested_stream_call:
                 accumulated_payload = None if template_data else formatted_response
                 await class_obj.streamer.emit_done(
@@ -1779,12 +1832,14 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                     accumulated_data=accumulated_payload,
                 )
                 await class_obj.streamer.close()
-            
         return {"success": True, "response": result.get("response", {})}
+
     except Exception as err:
-        logger.error(f"SSE finalization error: {str(err)}, {tb.format_exc()}")
+        logger.error(f"SSE error ({original_service}/{original_model}): {str(err)}, {tb.format_exc()}")
         if class_obj.streamer:
             await class_obj.streamer.emit_error(str(err))
             if not is_nested_stream_call:
                 await class_obj.streamer.close()
+        if not parsed_data.get("is_playground"):
+            await save_error_history(parsed_data, err, params, timer, class_obj, thread_info)
         return {"success": False, "message": str(err), "response": {}}

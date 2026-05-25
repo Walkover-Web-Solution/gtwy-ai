@@ -23,8 +23,8 @@ async def execute_api_call(
     is_embed=None,
     user_id=None,
     thread_id=None,
-    is_playground=None,
     api_collection=None,
+    is_playground=False,
 ):
     try:
         # Start timer
@@ -51,7 +51,7 @@ async def execute_api_call(
             traceback.print_exc()
 
             # Send alert if required (even on failure)
-            if alert_on_retry:
+            if alert_on_retry and not is_playground:
                 from src.send_alert import send_alert
                 from src.configs.constant import alert_types
                 asyncio.create_task(send_alert(
@@ -65,7 +65,6 @@ async def execute_api_call(
                     user_id=user_id,
                     thread_id=thread_id,
                     service=service,
-                    is_playground=is_playground,
                     api_collection=api_collection,
                     is_external_error=False,
                 ))

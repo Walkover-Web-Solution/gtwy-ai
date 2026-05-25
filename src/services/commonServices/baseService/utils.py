@@ -7,9 +7,9 @@ import httpx
 from fastapi import Request
 
 from globals import logger, traceback
-from src.configs.constant import inbuild_tools, redis_keys, service_name
+from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name
 from src.controllers.rag_controller import get_text_from_vectorsQuery
-from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, store_in_cache
+from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
@@ -21,11 +21,88 @@ from google.genai import types
 def clean_json(data):
     """Recursively remove keys with empty string, empty list, or empty dictionary."""
     if isinstance(data, dict):
-        return {k: clean_json(v) for k, v in data.items() if v not in ["", []]}
+        return {k: clean_json(v) for k, v in data.items() if v not in [{}, "", []]}
     elif isinstance(data, list):
         return [clean_json(item) for item in data]
     else:
         return data
+
+
+def get_nested_value(dictionary, key_path):
+    keys = key_path.split(".")
+    for key in keys:
+        if isinstance(dictionary, dict) and key in dictionary:
+            dictionary = dictionary[key]
+        else:
+            return None
+    return dictionary
+
+
+def apply_variable_path_filters(
+    properties, variables=None, variables_path=None, function_name=None, parent_key=None, parentValue=None
+):
+    if variables is None:
+        variables = {}
+    if variables_path is None:
+        variables_path = {}
+    if not isinstance(properties, dict):
+        return properties
+
+    transformed_properties = {}
+    function_variables_path = (variables_path or {}).get(function_name, {})
+
+    for key, value in properties.items():
+        if not isinstance(value, dict):
+            transformed_properties[key] = value
+            continue
+
+        transformed_value = value.copy()
+
+        key_to_find = f"{parent_key}.{key}" if parent_key else key
+        if key_to_find in function_variables_path:
+            variable_path_value = function_variables_path[key_to_find]
+            if_variable_has_value = get_nested_value(variables, variable_path_value)
+            if if_variable_has_value is not None:
+                if parentValue and "required" in parentValue and key in parentValue["required"]:
+                    parentValue["required"].remove(key)
+                continue
+
+        if isinstance(transformed_value.get("properties"), dict):
+            transformed_value["properties"] = apply_variable_path_filters(
+                transformed_value["properties"],
+                variables,
+                variables_path,
+                function_name,
+                key,
+                transformed_value,
+            )
+
+        items = transformed_value.get("items")
+        if isinstance(items, dict):
+            transformed_items = items.copy()
+            if isinstance(transformed_items.get("properties"), dict):
+                transformed_items["properties"] = apply_variable_path_filters(
+                    transformed_items["properties"],
+                    variables,
+                    variables_path,
+                    function_name,
+                    key,
+                    transformed_items,
+                )
+            if isinstance(transformed_items.get("items"), dict):
+                transformed_items["items"] = apply_variable_path_filters(
+                    transformed_items["items"],
+                    variables,
+                    variables_path,
+                    function_name,
+                    key,
+                    transformed_items,
+                )
+            transformed_value["items"] = transformed_items
+
+        transformed_properties[key] = transformed_value
+
+    return transformed_properties
 
 
 def validate_tool_call(service, response):
@@ -50,7 +127,7 @@ def validate_tool_call(service, response):
 async def axios_work(data, function_payload):
     try:
         response, rs_headers = await fetch(
-            function_payload.get("url"), "POST", function_payload.get("headers", {}), None, data
+            function_payload.get("url"), function_payload.get("method", "POST"), function_payload.get("headers", {}), None, data
         )  # required is not send then it will still hit the curl
         return {
             "response": response,
@@ -63,70 +140,31 @@ async def axios_work(data, function_payload):
         return {"response": str(err), "metadata": {"type": "function"}, "status": 0}
 
 
-# [?] won't work for the case addess.name[0]
-def get_nested_value(dictionary, key_path):
-    keys = key_path.split(".")
-    for key in keys:
-        if isinstance(dictionary, dict) and key in dictionary:
-            dictionary = dictionary[key]
-        else:
-            return None
-    return dictionary
+def disable_tool_call(configuration: dict, service: str):
+    if service in (
+        service_name["openai"],
+        service_name["openai_completion"],
+        service_name["mistral"],
+        service_name["groq"],
+        service_name["grok"],
+        service_name["open_router"]
+    ):
+        configuration["tool_choice"] = "none"
 
+    elif service == service_name["gemini"]:
+        # Disabling Tool Call
+        configuration["config"].tool_config = types.ToolConfig(
+            function_calling_config=types.FunctionCallingConfig(
+                mode="NONE"
+            )
+        )
+        # Disabling Auto Tool call (Required)
+        configuration["config"].automatic_function_calling = types.AutomaticFunctionCallingConfig(
+            disable=True
+        )
 
-# https://docs.google.com/document/d/1WkXnaeAhTUdAfo62SQL0WASoLw-wB9RD9N-IeUXw49Y/edit?tab=t.0 => to see the variables example
-def transform_required_params_to_required(
-    properties, variables=None, variables_path=None, function_name=None, parent_key=None, parentValue=None
-):
-    if variables is None:
-        variables = {}
-    if variables_path is None:
-        variables_path = {}
-    if not isinstance(properties, dict):
-        return properties
-    transformed_properties = properties.copy()
-    if properties.get("type") == "array" or properties.get("type") == "object":
-        return {"items": properties}
-    for key, value in properties.items():
-        if value.get("required_params") is not None:
-            transformed_properties[key]["required"] = value.pop("required_params")
-        key_to_find = f"{parent_key}.{key}" if parent_key else key
-        if (
-            variables_path is not None
-            and variables_path.get(function_name)
-            and key_to_find in variables_path[function_name]
-        ):
-            variable_path_value = variables_path[function_name][key_to_find]
-            if_variable_has_value = get_nested_value(variables, variable_path_value)
-            if if_variable_has_value:
-                del transformed_properties[key]
-                if parentValue and "required" in parentValue and key in parentValue["required"]:
-                    parentValue["required"].remove(key)
-                continue
-        for prop_key in ["parameter", "properties"]:
-            if prop_key in value:
-                transformed_properties[key]["properties"] = transform_required_params_to_required(
-                    value.pop(prop_key), variables, variables_path, function_name, key, value
-                )
-                break
-        else:
-            items = value.get("items", {})
-            item_type = items.get("type")
-            if item_type == "object":
-                nextedObject = {
-                    "properties": transform_required_params_to_required(
-                        items.get("properties", {}), variables, variables_path, function_name, key, value
-                    )
-                }
-                nextedObject = {**nextedObject, "required": items.get("required", []), "type": item_type}
-                transformed_properties[key]["items"] = nextedObject
-            elif item_type == "array":
-                transformed_properties[key]["items"] = transform_required_params_to_required(
-                    items.get("items", {}), variables, variables_path, function_name, key, value
-                )
-                transformed_properties[key]["items"]["type"] = "array"
-    return transformed_properties
-
+    elif service == service_name["anthropic"]:
+        configuration["tool_choice"] = {"type": "none"}
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
     if (
@@ -144,7 +182,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                     "parameters": {
                         "type": "object",
                         "properties": clean_json(
-                            transform_required_params_to_required(
+                            apply_variable_path_filters(
                                 transformed_tool.get("properties", {}),
                                 variables=variables,
                                 variables_path=variables_path,
@@ -169,7 +207,15 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                 "description": transformed_tool['description'],
                 "parameters": {
                     "type": "object",
-                    "properties": clean_json(transform_required_params_to_required(transformed_tool.get('properties', {}), variables=variables, variables_path=variables_path, function_name=transformed_tool['name'], parentValue={'required': transformed_tool.get('required', [])})),
+                    "properties": clean_json(
+                        apply_variable_path_filters(
+                            transformed_tool.get("properties", {}),
+                            variables=variables,
+                            variables_path=variables_path,
+                            function_name=transformed_tool["name"],
+                            parentValue={"required": transformed_tool.get("required", [])},
+                        )
+                    ),
                     "required": transformed_tool.get('required'),
                 }
             } for transformed_tool in configuration.get('tools', [])
@@ -189,7 +235,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                 "parameters": {
                     "type": "object",
                     "properties": clean_json(
-                        transform_required_params_to_required(
+                        apply_variable_path_filters(
                             transformed_tool.get("properties", {}),
                             variables=variables,
                             variables_path=variables_path,
@@ -214,7 +260,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                 "input_schema": {
                     "type": "object",
                     "properties": clean_json(
-                        transform_required_params_to_required(
+                        apply_variable_path_filters(
                             transformed_tool.get("properties", {}),
                             variables=variables,
                             variables_path=variables_path,
@@ -237,7 +283,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                     "parameters": {
                         "type": "object",
                         "properties": clean_json(
-                            transform_required_params_to_required(
+                            apply_variable_path_filters(
                                 transformed_tool.get("properties", {}),
                                 variables=variables,
                                 variables_path=variables_path,
@@ -310,6 +356,8 @@ async def send_message(cred, data):
 
 
 async def sendResponse(response_format, data, success=False, variables=None, meta=None):
+    if not response_format:
+        return
     if variables is None:
         variables = {}
     data_to_send = {"response" if success else "error": data, "success": success}
@@ -360,7 +408,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                         "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
                         "user": tool_data.get("args").get("_query"),
                         "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
-                        "message_id": self.message_id,
+                        "message_id": self.message_id
                     }
 
                     if self.stream_mode and self.streamer:
@@ -381,6 +429,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                     # Pass bridge_configurations if available
                     if hasattr(self, "bridge_configurations") and self.bridge_configurations:
                         agent_args["bridge_configurations"] = self.bridge_configurations
+
 
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
@@ -530,7 +579,7 @@ async def make_request_data(request: Request):
     state_data = {}
     path_params = {}
 
-    attributes = ["is_playground", "version", "profile"]
+    attributes = ["version", "profile"]
     for attr in attributes:
         if hasattr(request.state, attr):
             state_data[attr] = getattr(request.state, attr)
@@ -543,8 +592,9 @@ async def make_request_data(request: Request):
 
     body = convert_datetime(body)
     state_data = convert_datetime(state_data)
+    id_to_use = body.get('version') if body.get('version') else (body.get('agent_id') or body.get('bridge_id'))
 
-    result = {"body": body, "state": state_data, "path_params": path_params}
+    result = {"body": body, "state": state_data, "path_params": path_params, "id_to_use": id_to_use}
     return result
 
 
@@ -555,6 +605,26 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
     # Extract user and assistant messages for Hippocampus
     user_message = parsed_data.get("user", "")
     assistant_message = result.get("historyParams", {}).get("message", "")
+
+    gpt_memory_enabled = bool(parsed_data.get("gpt_memory"))
+    should_fire_gpt_memory = False
+    pending_turns: list = []
+    if gpt_memory_enabled and parsed_data.get("id"):
+        counter_key = f"{redis_keys['gpt_memory_counter_']}{parsed_data['id']}"
+        count = await incr_in_cache(counter_key)
+        should_fire_gpt_memory = count > 0 and count % GPT_MEMORY_TURNS_PER_CYCLE == 0
+        if should_fire_gpt_memory:
+            prior_conversation = (
+                parsed_data.get("configuration", {}).get("conversation") or []
+            )
+            pending_turns = [
+                msg
+                for msg in prior_conversation
+                if msg.get("role") not in ("tool", "tools_call")
+            ]
+            if user_message:
+                pending_turns.append({"role": "user", "content": user_message})
+            pending_turns.append({"role": "assistant", "content": assistant_message})
 
     data = {
         "metrics_service": {
@@ -569,7 +639,6 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "message_id": parsed_data.get("message_id"),
             "org_id": parsed_data.get("org_id"),
         },
-        "total_token_calculation": {"tokens": parsed_data.get("tokens", {}), "bridge_id": parsed_data.get("bridge_id")},
         "chatbot_suggestions": {
             "response_format": parsed_data.get("response_format"),
             "assistant": suggestion_content,
@@ -586,10 +655,12 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "assistant" : result.get('response'),
             "purpose" : parsed_data.get('memory'),
             "gpt_memory_context" : parsed_data.get('gpt_memory_context'),
-            "org_id" : parsed_data.get('org_id')
+            "org_id" : parsed_data.get('org_id'),
+            "pending_turns": pending_turns,
+            "bridge_summary": parsed_data.get("bridge_summary"),
         },
         "check_handle_gpt_memory": {
-            "gpt_memory": parsed_data.get("gpt_memory"),
+            "gpt_memory": gpt_memory_enabled and should_fire_gpt_memory,
             "type": parsed_data.get("configuration", {}).get("type"),
         },
         "check_chatbot_suggestions": {

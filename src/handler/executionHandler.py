@@ -21,9 +21,6 @@ def handle_exceptions(func):
             exc_type, exc_obj, exc_tb = sys.exc_info()
             path_params = request_body.get("path_params", {})
             state = request_body.get("state", {})
-            state.get("is_playground")
-
-            # Extract error location details
             tb = traceback.extract_tb(exc_tb)
             last_frame = tb[-1] if tb else None
             (f"{last_frame.filename.split('/')[-1]}:{last_frame.lineno}" if last_frame else "unknown location")
@@ -63,24 +60,26 @@ def handle_exceptions(func):
             user_id = body.get("user_id")
             thread_id = body.get("thread_id")
             service = body.get("service")
-            is_playground = state.get("is_playground") or body.get("is_playground") or False
             api_collection = body.get("api_collection")
-            asyncio.create_task(send_alert(
-                bridge_id=bridge_id,
-                org_id=org_id,
-                error_log=error_json,
-                error_type=alert_types["error"],
-                bridge_name=bridge_name,
-                org_name=org_name,
-                is_embed=is_embed,
-                user_id=user_id,
-                thread_id=thread_id,
-                service=service,
-                is_playground=is_playground,
-                api_collection=api_collection,
-                is_external_error=False,
-                error_location=error_location,
-            ))
+            is_playground = body.get("is_playground", False)
+            
+            # Only send alert if not in playground mode
+            if not is_playground:
+                asyncio.create_task(send_alert(
+                    bridge_id=bridge_id,
+                    org_id=org_id,
+                    error_log=error_json,
+                    error_type=alert_types["error"],
+                    bridge_name=bridge_name,
+                    org_name=org_name,
+                    is_embed=is_embed,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    service=service,
+                    api_collection=api_collection,
+                    is_external_error=False,
+                    error_location=error_location,
+                ))
             return JSONResponse(status_code=400, content=json.loads(json.dumps(error_json)))
 
     return wrapper

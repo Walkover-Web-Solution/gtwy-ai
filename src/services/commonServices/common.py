@@ -12,6 +12,12 @@ from models.mongo_connection import db
 from src.configs.constant import redis_keys, alert_types
 from src.handler.executionHandler import handle_exceptions
 from src.services.cache_service import find_in_cache, store_in_cache
+from src.services.utils.maximum_iterations_utils import (
+    build_tool_count_key,
+    cleanup_tool_count,
+    cleanup_tool_count_after,
+    init_tool_count,
+)
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
@@ -34,7 +40,7 @@ from src.services.utils.common_utils import (
     prepare_prompt,
     process_background_tasks,
     process_background_tasks_for_error,
-    process_background_tasks_for_playground,
+    save_error_history,
     process_variable_state,
     restructure_json_schema,
     validate_json_schema_configuration,
@@ -115,8 +121,7 @@ async def chat_multiple_agents(request_body):
         # Store the original primary_bridge_id for Redis key consistency
         primary_body["primary_bridge_id"] = primary_bridge_id
 
-        # Restore response_format set at request-level (e.g. RTLayer from playground/
-        # interface middleware) that was clobbered by the bridge-config merge above.
+        # Restore response_format set at request-level that was clobbered by the bridge-config merge above.
         if original_response_format is not None:
             primary_body.setdefault("settings", {})["response_format"] = original_response_format
             print(f"[chat_multiple_agents] response_format restored: type={original_response_format.get('type')}, channel={original_response_format.get('cred', {}).get('channel')}")
@@ -147,6 +152,8 @@ async def chat_multiple_agents(request_body):
 async def chat(request_body): 
     result = {}
     class_obj = {}
+    tool_count_key_for_cleanup = None
+    tool_count_owner_token = None
     first_execution_error_code = None
     fallback_service = None
     fallback_error_code = None
@@ -170,6 +177,19 @@ async def chat(request_body):
         if reviewer_bridge_id and reviewer_bridge_id in bridge_configurations:
             parsed_data["_reviewer_bridge_id"] = reviewer_bridge_id
 
+        tool_count_key_for_cleanup = build_tool_count_key(
+            parsed_data.get("bridge_id"),
+            parsed_data.get("message_id"),
+        )
+        # Claim ownership of the tool-call counter for this agent invocation.
+        # If a child instance (agent-as-tool recursion) re-enters with the same
+        # bridge_id+message_id, it gets token=None and therefore cannot wipe
+        # the parent's counter in its own finally block.
+        tool_count_owner_token = init_tool_count(
+            tool_count_key_for_cleanup,
+            parsed_data.get("maximum_iterations") or 3,
+        )
+        
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
         
@@ -229,7 +249,7 @@ async def chat(request_body):
         missing_vars = filter_missing_vars(missing_vars, parsed_data["variables_state"])
 
         # Handle missing variables
-        if missing_vars:
+        if missing_vars and not parsed_data.get("is_playground"):
             asyncio.create_task(send_alert(
                 bridge_id=parsed_data["bridge_id"],
                 org_id=parsed_data["org_id"],
@@ -241,7 +261,6 @@ async def chat(request_body):
                 user_id=parsed_data.get("user_id"),
                 thread_id=parsed_data.get("thread_id"),
                 service=parsed_data.get("service"),
-                is_playground=parsed_data.get("is_playground"),
                 api_collection=parsed_data.get("api_collection"),
                 is_external_error=False,
             ))
@@ -328,16 +347,28 @@ async def chat(request_body):
                         request_body=request_body, chat_function=chat,
                     )
                 # Agent-transfer: existing SSE connection owned by the caller — background task, no new StreamingResponse
-                asyncio.create_task(sse_stream_and_finalize(
+                _transfer_task = asyncio.create_task(sse_stream_and_finalize(
                     class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
                     request_body=request_body, chat_function=chat,
                 ))
+                # Defer tool-count cleanup until the background task finishes so the
+                # iteration limit is enforced for the streamed run instead of being
+                # wiped by chat()'s own finally before the loop executes.
+                asyncio.create_task(cleanup_tool_count_after(
+                    _transfer_task, tool_count_key_for_cleanup, tool_count_owner_token,
+                ))
+                tool_count_owner_token = None  # ownership transferred to the deferred cleanup
                 return JSONResponse(status_code=200, content={"success": True})
 
-            asyncio.create_task(sse_stream_and_finalize(
+            _stream_task = asyncio.create_task(sse_stream_and_finalize(
                 class_obj, parsed_data, params, timer, thread_info, transfer_request_id, bridge_configurations,
                 request_body=request_body, chat_function=chat,
             ))
+            # See note above: defer cleanup so streaming honors maximum_iterations.
+            asyncio.create_task(cleanup_tool_count_after(
+                _stream_task, tool_count_key_for_cleanup, tool_count_owner_token,
+            ))
+            tool_count_owner_token = None  # ownership transferred to the deferred cleanup
             return StreamingResponse(class_obj.streamer.generator(), media_type="text/event-stream")
 
         original_exception = None
@@ -478,12 +509,12 @@ async def chat(request_body):
             raise ValueError(result)
         # Add message_id to response
         result["response"]["data"]["message_id"] = parsed_data["message_id"]
-        if getattr(class_obj, 'tool_call_limit_error', None):
-            result["error"] = class_obj.tool_call_limit_error
+        if getattr(class_obj, 'maximum_iteration_limit_reached', False):
+            result["response"]["data"]["finish_reason"] = "maximum_iteration_limit_reached"
         if result.get("error"):
             result["response"]["error"] = result["error"]
 
-        if original_error:
+        if original_error and not parsed_data.get("is_playground"):
             asyncio.create_task(send_alert(
                 bridge_id=parsed_data["bridge_id"],
                 org_id=parsed_data["org_id"],
@@ -495,7 +526,6 @@ async def chat(request_body):
                 user_id=parsed_data.get("user_id"),
                 thread_id=parsed_data.get("thread_id"),
                 service=parsed_data.get("service"),
-                is_playground=parsed_data.get("is_playground"),
                 api_collection=parsed_data.get("api_collection"),
                 is_external_error=False,
             ))
@@ -517,8 +547,8 @@ async def chat(request_body):
 
         # Template HTML Generation
         template_data = render_template_if_applicable(parsed_data, result)
-        # Add template data to historyParams chatbot_message if template was used and not playground
-        if template_data and result.get('historyParams') and not parsed_data.get("is_playground"):
+        # Add template data to historyParams chatbot_message
+        if template_data and result.get('historyParams'):
             result['historyParams']['chatbot_message'] = json.dumps(result['response']['data']['content'])
 
         # Create latency object using utility function
@@ -556,44 +586,49 @@ async def chat(request_body):
         if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
             result["response"]["data"]["content"] = post_tool_response.get("response")
 
-        # Send data to playground (after review so playground sees final response)
-        if parsed_data.get("is_playground") and parsed_data.get("body", {}).get("bridge_configurations", {}).get(
-            "playground_response_format"
-        ):
-            await sendResponse(
-                parsed_data["body"]["bridge_configurations"]["playground_response_format"],
-                result["response"],
-                success=True,
-                variables=parsed_data.get("variables", {}),
+        # Reuse the latency captured before the review loop — the main timer was
+        # already consumed there, so re-calling create_latency_object would yield
+        # over_all_time=0 and overwrite the correct value. Update execution_time_logs
+        # in-place so any re-run entries accumulated during the review loop are included.
+        latency["execution_time_logs"] = params.get("execution_time_logs") or {}
+        latency["model_execution_time"] = (
+            sum(log.get("time_taken", 0) for log in (params.get("execution_time_logs") or [])) or ""
+        )
+        if result.get("response") and result["response"].get("data"):
+            result["response"]["data"]["message_id"] = parsed_data["message_id"]
+        await sendResponse(
+            parsed_data["response_format"],
+            result["response"],
+            success=True,
+            variables=parsed_data.get("variables", {}),
+        )
+        # Update usage metrics for successful API calls
+        update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+        result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
+
+        # If testcase_data is present, score the result and optionally push to RTLayer
+        if parsed_data.get("testcase_data", {}).get("run_testcase", False):
+            from src.services.commonServices.testcases import process_single_testcase_result
+            testcase_result = await process_single_testcase_result(
+                parsed_data.get("testcase_data", {}), result, parsed_data
+            )
+            result["response"]["testcase_result"] = testcase_result
+            if parsed_data.get("body", {}).get("bridge_configurations", {}).get("playground_response_format"):
+                await sendResponse(
+                    parsed_data["body"]["bridge_configurations"]["playground_response_format"],
+                    parsed_data["testcase_data"],
+                    success=True,
+                    variables=parsed_data.get("variables", {}),
+                    meta=parsed_data.get("meta"),
             )
 
-        if not parsed_data["is_playground"]:
-            if result.get("response") and result["response"].get("data"):
-                result["response"]["data"]["message_id"] = parsed_data["message_id"]
-            await sendResponse(
-                parsed_data["response_format"],
-                result["response"],
-                success=True,
-                variables=parsed_data.get("variables", {}),
-                meta=parsed_data.get("meta"),
-            )
+        if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
+            result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
 
-            # Process background tasks (handles both transfer and non-transfer cases)
-            await process_background_tasks(
-                parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
-            )
-        else:
-            if parsed_data.get("testcase_data", {}).get("run_testcase", False):
-                from src.services.commonServices.testcases import process_single_testcase_result
-
-                # Process testcase result and add score to response
-                testcase_result = await process_single_testcase_result(
-                    parsed_data.get("testcase_data", {}), result, parsed_data
-                )
-                result["response"]["testcase_result"] = testcase_result
-            else:
-                await process_background_tasks_for_playground(result, parsed_data)
-        
+        # Process background tasks (handles both transfer and non-transfer cases)
+        await process_background_tasks(
+            parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
+        )
 
         # Save agent bridge_id to Redis for 3 days (259200 seconds)
         thread_id = parsed_data.get("thread_id")
@@ -619,18 +654,14 @@ async def chat(request_body):
     except (Exception, ValueError, BadRequestException) as error:
         if not isinstance(error, BadRequestException):
             logger.error(f"Error in chat service: %s, {str(error)}, {traceback.format_exc()}")
-        if not parsed_data["is_playground"]:
-            # Create latency object and update usage metrics
-            latency = create_latency_object(timer, params)
-            update_usage_metrics(parsed_data, params, latency, error=error, success=False)
-
-            # Create history parameters
-            parsed_data["historyParams"] = create_history_params(parsed_data, error, class_obj)
-            await sendResponse(
-                parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
-            ) if parsed_data["response_format"]["type"] != "default" else None
-            # Process background tasks for error handling
-            await process_background_tasks_for_error(parsed_data, error)
+        await sendResponse(
+            parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
+        ) if parsed_data["response_format"]["type"] != "default" else None
+        # save_error_history builds latency + usage metrics + historyParams and
+        # publishes a single error history row. parsed_data["firstAttemptError"]
+        # set during fallback retry (above) flows into the row via
+        # create_history_params.
+        await save_error_history(parsed_data, error, params, timer, class_obj)
         # Check for a chained exception and create a structured error object
         if error.__cause__:
             # Combine both initial and fallback errors into a single string
@@ -650,18 +681,10 @@ async def chat(request_body):
                 f"{str(error)} (Type: {type(error).__name__}). For more support contact us at support@gtwy.ai"
             )
             error_object = {"success": False, "error": error_string, "message_id": parsed_data.get("message_id")}
-        if parsed_data["is_playground"] and parsed_data["body"]["bridge_configurations"].get(
-            "playground_response_format"
-        ):
-            await sendResponse(
-                parsed_data["body"]["bridge_configurations"]["playground_response_format"],
-                error_object,
-                success=False,
-                variables=parsed_data.get("variables", {}),
-            )
         completion_success = False
         raise ValueError(error_object) from None
     finally:
+        cleanup_tool_count(tool_count_key_for_cleanup, tool_count_owner_token)
         await update_cost_usage_and_apikey_status_in_background(
             original_service,
             parsed_data,
@@ -761,7 +784,7 @@ async def batch(request_body):
                 processed_prompts.append(original_prompt)
 
         # Send alert if there are any missing variables across all batch items
-        if all_missing_vars:
+        if all_missing_vars and not parsed_data.get("is_playground"):
             asyncio.create_task(send_alert(
                 bridge_id=parsed_data["bridge_id"],
                 org_id=parsed_data["org_id"],
@@ -773,7 +796,6 @@ async def batch(request_body):
                 user_id=parsed_data.get("user_id"),
                 thread_id=parsed_data.get("thread_id"),
                 service=parsed_data.get("service"),
-                is_playground=parsed_data.get("is_playground"),
                 api_collection=parsed_data.get("api_collection"),
                 is_external_error=False,
             ))
@@ -807,6 +829,10 @@ async def batch(request_body):
 
         # Store custom_config as AiConfig for batch conversation logs
         parsed_data["AiConfig"] = custom_config
+
+        if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
+                result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
+
 
         # Step 9: Process batch conversation logs in background
         await process_batch_background_tasks(
@@ -902,39 +928,33 @@ async def image(request_body):
             parsed_data["response_format"], result["response"], success=True, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
         )
         latency = create_latency_object(timer, params)
-        if not parsed_data["is_playground"]:
-            # Update usage metrics for successful API calls
-            update_usage_metrics(parsed_data, params, latency, result=result, success=True)
-            # Process background tasks (handles both transfer and non-transfer cases)
-            await process_background_tasks(
-                parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
-            )
+        # Update usage metrics for successful API calls
+        update_usage_metrics(parsed_data, params, latency, result=result, success=True)
+        # Process background tasks (handles both transfer and non-transfer cases)
+        await process_background_tasks(
+            parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
+        )
         return JSONResponse(status_code=200, content={"success": True, "response": result["response"]})
 
     except (Exception, ValueError, BadRequestException) as error:
         if not isinstance(error, BadRequestException):
             logger.error(f"Error in image service: {str(error)}, {traceback.format_exc()}")
-        if not parsed_data["is_playground"]:
-            # Update parsed_data with thread_info if available and thread_id/sub_thread_id are None
-            if "thread_info" in locals() and thread_info:
-                if not parsed_data.get("thread_id") and thread_info.get("thread_id"):
-                    parsed_data["thread_id"] = thread_info["thread_id"]
-                if not parsed_data.get("sub_thread_id") and thread_info.get("sub_thread_id"):
-                    parsed_data["sub_thread_id"] = thread_info["sub_thread_id"]
+        # Update parsed_data with thread_info if available and thread_id/sub_thread_id are None
+        if "thread_info" in locals() and thread_info:
+            if not parsed_data.get("thread_id") and thread_info.get("thread_id"):
+                parsed_data["thread_id"] = thread_info["thread_id"]
+            if not parsed_data.get("sub_thread_id") and thread_info.get("sub_thread_id"):
+                parsed_data["sub_thread_id"] = thread_info["sub_thread_id"]
 
-            # Create latency object and update usage metrics
-            latency = create_latency_object(timer, params)
-            update_usage_metrics(parsed_data, params, latency, error=error, success=False)
-
-            # Create history parameters
-            parsed_data["historyParams"] = create_history_params(
-                parsed_data, error, class_obj, thread_info if "thread_info" in locals() else None
-            )
-            await sendResponse(
-                parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
-            ) if parsed_data["response_format"]["type"] != "default" else None
-            # Process background tasks for error handling
-            await process_background_tasks_for_error(parsed_data, error)
+        await sendResponse(
+            parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
+        ) if parsed_data["response_format"]["type"] != "default" else None
+        # save_error_history builds latency + usage metrics + historyParams and
+        # publishes a single error history row (with firstAttemptError populated
+        # from parsed_data when fallback was attempted).
+        await save_error_history(
+            parsed_data, error, params, timer, class_obj, thread_info if "thread_info" in locals() else None
+        )
         # Check for a chained exception and create a structured error object
         if error.__cause__:
             # Combine both initial and fallback errors into a single string
@@ -954,13 +974,4 @@ async def image(request_body):
                 f"{str(error)} (Type: {type(error).__name__}). For more support contact us at support@gtwy.ai"
             )
             error_object = {"success": False, "error": error_string, "message_id": parsed_data.get("message_id")}
-        if parsed_data["is_playground"] and parsed_data["body"]["bridge_configurations"].get(
-            "playground_response_format"
-        ):
-            await sendResponse(
-                parsed_data["body"]["bridge_configurations"]["playground_response_format"],
-                error_object,
-                success=False,
-                variables=parsed_data.get("variables", {}),
-            )
         raise ValueError(error_object) from None

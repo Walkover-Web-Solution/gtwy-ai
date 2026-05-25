@@ -24,7 +24,6 @@ from src.services.session_manager import (
 from src.services.utils.common_utils import (
     create_latency_object,
     process_background_tasks,
-    process_background_tasks_for_playground,
     update_usage_metrics,
 )
 
@@ -424,17 +423,14 @@ async def _wait_for_human_input(run_id: str) -> None:
 async def _save_history(result: dict, session: WorkflowSession, params: dict = None, thread_info=None, transfer_request_id=None) -> None:
     parsed_data = session.parsed_data
     try:
-        if parsed_data.get("is_playground"):
-            await process_background_tasks_for_playground(result, parsed_data)
-        else:
-            await process_background_tasks(
-                parsed_data,
-                result,
-                params or {},
-                thread_info,
-                transfer_request_id,
-                session.bridge_configurations,
-            )
+        await process_background_tasks(
+            parsed_data,
+            result,
+            params or {},
+            thread_info,
+            transfer_request_id,
+            session.bridge_configurations,
+        )
     except Exception as e:
         logger.error(f"workflow history save error: {e}")
 

@@ -34,8 +34,10 @@ from .utils import (
     sendResponse,
     tool_call_formatter,
     validate_tool_call,
-    reasoning_formatter
+    reasoning_formatter,
+    disable_tool_call
 )
+from src.services.utils.maximum_iterations_utils import build_tool_count_key, decrement_tool_count, get_tool_count
 from src.exceptions import ApiCallError
 
 executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
@@ -58,7 +60,6 @@ class BaseService:
         self.model = params.get("model")
         self.service = params.get("service")
         self.modelOutputConfig = params.get("modelOutputConfig")
-        self.playground = params.get("playground")
         self.template = params.get("template")
         self.response_format = params.get("response_format")
         self.thread_flag = params.get("thread_flag")
@@ -99,6 +100,7 @@ class BaseService:
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
         self.tool_call_limit_error = None
+        self.maximum_iteration_limit_reached = False
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
             self.streamer = StreamingService(mode="sse")
@@ -116,7 +118,7 @@ class BaseService:
 
     async def run_tool(self, responses, service):
         codes_mapping, function_list = make_code_mapping_by_service(responses, service)
-        if not self.playground and self.response_format["type"] != "webhook":
+        if self.response_format.get("type", "") != "webhook":
             asyncio.create_task(
                 sendResponse(self.response_format, data={"function_call": True, "Name": function_list}, success=True)
             )
@@ -215,6 +217,8 @@ class BaseService:
     async def function_call(self, configuration, service, response, loop_count=0, tools=None):
         if tools is None:
             tools = {}
+        tool_count_key = build_tool_count_key(self.bridge_id, self.message_id)
+
         if not response.get("success"):
             return {"success": False, "error": response.get("error")}
 
@@ -224,16 +228,14 @@ class BaseService:
                 configuration["tool_choice"] = {"type": "auto"}
             else:
                 configuration["tool_choice"] = "auto"
-        if validate_tool_call(service, model_response) and loop_count <= int(self.maximum_iterations):
-            loop_count += 1
-        else:
-            if validate_tool_call(service, model_response):
-                tool_call_limit_msg = "Execution stopped in between because tool call limit exceeded."
-                response["error"] = tool_call_limit_msg
-                self.tool_call_limit_error = tool_call_limit_msg
-            if self.stream_mode and self.streamer and response.get("has_tool_calls"):
-                response["stream_finish_reason"] = "tool_call_limit_reached"
+        if not validate_tool_call(service, model_response):
             return response
+
+        loop_count += 1
+        remaining = decrement_tool_count(tool_count_key)
+        if remaining <= 0:
+            disable_tool_call(configuration, service)
+            self.maximum_iteration_limit_reached = True
         func_response_data, mapping_response_data, tools_call_data = await self.run_tool(model_response, service)
         self.func_tool_call_data.append(tools_call_data)
 
@@ -255,7 +257,7 @@ class BaseService:
         configuration, tools = self.update_configration(
             model_response, func_response_data, configuration, mapping_response_data, service, tools
         )
-        if not self.playground and not self.stream_mode and self.response_format["type"] != "webhook":
+        if not self.stream_mode and self.response_format.get("type", "") != "webhook":
             asyncio.create_task(
                 sendResponse(
                     self.response_format,
@@ -368,19 +370,24 @@ class BaseService:
             "chatbot_message": "",
             "tools_call_data": self.func_tool_call_data,
             "message_id": self.message_id,
-            "llm_urls": [
-                {"revised_prompt": img.get("revised_prompt"), "permanent_url": img.get("url"), "type": "image"}
-                for img in model_response.get("data", [])
-                if img.get("url")
-            ]
-            or [
-                {
-                    "revised_prompt": model_response.get("data", [{}])[0].get("revised_prompt", None),
-                    "permanent_url": model_response.get("data", [{}])[0].get("url", None),
-                }
-            ]
-            if model_response.get("data", [{}])[0].get("url")
-            else [],
+            "llm_urls": (
+                [
+                    {"revised_prompt": img.get("revised_prompt"), "permanent_url": img.get("url"), "type": "image"}
+                    for img in model_response.get("data", [])
+                    if img.get("url")
+                ]
+                + [
+                    {
+                        "revised_prompt": item.get("revised_prompt"),
+                        "permanent_url": item.get("image_url") or item.get("permanent_url") or item.get("url"),
+                        "type": "image",
+                    }
+                    for item in model_response.get("output", [])
+                    if isinstance(item, dict)
+                    and item.get("type") == "image_generation_call"
+                    and (item.get("image_url") or item.get("permanent_url") or item.get("url"))
+                ]
+            ),
             "revised_prompt": model_response.get("data", [{}])[0].get("revised_prompt", None),
             "user_urls": [
                 *({"url": u, "type": "image"} for u in (self.image_data or [])),
@@ -400,7 +407,7 @@ class BaseService:
             "folder_id": self.folder_id,
             "prompt": self.configuration.get("prompt"),
             "is_cached": is_cached,
-            "error": self.tool_call_limit_error or "",
+            "error": "",
             "plans": self.parsed_data.get("plans") if hasattr(self, 'parsed_data') else None,
         }
 
@@ -440,6 +447,12 @@ class BaseService:
                 data = new_config["text"]
                 new_config["text"] = {"format": data}
             
+            if new_config.get("verbosity") and service == service_name["openai"]:
+                verbosity = new_config.pop("verbosity", {})
+
+                if isinstance(verbosity, dict) and "level" in verbosity:
+                    new_config.setdefault("text", {})["verbosity"] = verbosity["level"]
+
             # Handle Reasoning config 
             if new_config.get("reasoning", False):
                 reasoning_formatter(service, new_config)
@@ -477,6 +490,11 @@ class BaseService:
                 if new_config.get("model_option"):
                     new_config["model"] = f"{new_config['model']}-{new_config.pop('model_option')}"
 
+            remaining = get_tool_count(build_tool_count_key(self.bridge_id, self.message_id))
+            if remaining is not None and remaining == 0:
+                disable_tool_call(new_config, service)
+                self.maximum_iteration_limit_reached = True
+
             return new_config
         except Exception as e:
             logger.error(f"An error occurred: {str(e)}")
@@ -504,7 +522,6 @@ class BaseService:
                     self.is_embed,
                     self.user_id,
                     self.thread_id,
-                    self.playground,
                     self.api_collection,
                 )
             elif service == service_name["anthropic"]:
@@ -632,7 +649,6 @@ class BaseService:
                     self.is_embed,
                     self.user_id,
                     self.thread_id,
-                    self.playground,
                     self.api_collection,
                 )
             if not response["success"]:
@@ -676,7 +692,23 @@ class BaseService:
             else:
                 raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
 
-            stream_state = await run_stream_and_collect(generator, self.streamer)
+            if self.timer:
+                self.timer.start()
+            _stream_exc = None
+            try:
+                stream_state = await run_stream_and_collect(generator, self.streamer)
+            except Exception as _exc:
+                _stream_exc = _exc
+            finally:
+                if self.timer and self.timer.start_times:
+                    _elapsed = self.timer.stop(f"{service} stream")
+                    if _stream_exc is None:
+                        self.execution_time_logs.append({
+                            "step": f"{service} stream time for call :- {count + 1}",
+                            "time_taken": round(_elapsed, 4),
+                        })
+            if _stream_exc is not None:
+                raise _stream_exc
             accumulated_content = stream_state["accumulated_content"]
             final_tool_calls = stream_state["final_tool_calls"]
             final_usage = stream_state["final_usage"]
@@ -722,26 +754,42 @@ class BaseService:
     async def replace_variables_in_args(self, codes_mapping):
         variables = self.variables
         variables_path = self.variables_path
-        if variables_path is None:
+
+        if not variables_path or not variables:
             return codes_mapping
 
-        for _key, value in codes_mapping.items():
+        tool_mapping_dict = self.tool_id_and_name_mapping
+
+        for value in codes_mapping.values():
             args = value.get("args")
-            function_name = value.get("name")
-            if self.tool_id_and_name_mapping.get(value.get("name"), {}).get("type", "") == "AGENT":
-                function_name = self.tool_id_and_name_mapping.get(value.get("name"), {}).get("bridge_id", "")
-            else:
-                function_name = self.tool_id_and_name_mapping.get(value.get("name"), {}).get("name", value.get("name"))
+            if not isinstance(args, dict):
+                continue
 
-            if args is not None and function_name in variables_path:
-                function_variables_path = variables_path[function_name]
-                for path_key, path_value in function_variables_path.items():
-                    value_to_set = _.objects.get(variables, path_value)
+            tool_mapping = tool_mapping_dict.get(value.get("name"), {})
+            function_name = (
+                tool_mapping.get("bridge_id")
+                if tool_mapping.get("type") == "AGENT"
+                else tool_mapping.get("name", value.get("name"))
+            )
 
-                    if value_to_set is not None:
-                        _.objects.set_(args, path_key, value_to_set)
+            function_variables_path = variables_path.get(function_name)
+            if not function_variables_path:
+                continue
 
-                value["args"] = args
+            for path_key, path_value in function_variables_path.items():
+                value_to_set = _.objects.get(variables, path_value)
+                if value_to_set is None:
+                    continue
+
+                keys = path_key.split('.')
+                current = args
+                for key in keys[:-1]:
+                    next_node = current.get(key)
+                    if not isinstance(next_node, dict):
+                        current[key] = {}
+                        next_node = current[key]
+                    current = next_node
+                current[keys[-1]] = value_to_set
 
         return codes_mapping
 
