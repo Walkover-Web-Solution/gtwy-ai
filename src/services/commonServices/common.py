@@ -59,7 +59,6 @@ from .baseService.utils import sendResponse
 from src.send_alert import send_alert
 from .response_caching_service import handle_response_caching
 from .reviewer_service import run_review_loop
-from workflow import execute_advanced_workflow
 from src.services.todo.todo_handler import handle_todo_mode
 from src.services.todo.planner_service import prepare_planner_request
 
@@ -295,16 +294,6 @@ async def chat(request_body):
             custom_config["response_type"] = restructure_json_schema(
                 custom_config["response_type"], parsed_data["service"]
             )
-        if parsed_data.get("mode") == "todo":
-            return await execute_advanced_workflow(
-                parsed_data=parsed_data,
-                bridge_configurations=bridge_configurations,
-                params=params,
-                timer=timer,
-                thread_info=thread_info,
-                transfer_request_id=transfer_request_id,
-            )
-
         if parsed_data.get("mode") == "plan":
             # Executor orchestration actions keep the existing pipeline.
             # The planner LLM call (no action) falls through to chat() with
