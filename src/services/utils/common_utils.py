@@ -1841,6 +1841,5 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             await class_obj.streamer.emit_error(str(err))
             if not is_nested_stream_call:
                 await class_obj.streamer.close()
-        if not parsed_data.get("is_playground"):
             await save_error_history(parsed_data, err, params, timer, class_obj, thread_info)
         return {"success": False, "message": str(err), "response": {}}
