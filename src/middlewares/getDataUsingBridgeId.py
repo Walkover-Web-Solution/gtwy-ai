@@ -1,5 +1,6 @@
 from fastapi import HTTPException, Request
 
+from config import Config
 from globals import logger, traceback
 from src.configs.model_configuration import model_config_document
 from src.services.utils.getConfiguration import getConfiguration
@@ -107,6 +108,25 @@ async def add_configuration_data_to_body(request: Request):
                 raise HTTPException(
                     status_code=400, detail={"success": False, "error": "model or service does not exist!"}
                 )
+
+        # Handle response format configuration
+        if body.get('configuration', {}).get('response_format') is not None:
+            body.setdefault('settings', {})['response_format'] = body['configuration']['response_format']
+            del body['configuration']['response_format']
+        
+        is_playground = body.get("is_playground", False)
+        current_id = db_config.get('primary_bridge_id')
+        stream_config = db_config.get('bridge_configurations', {}).get(current_id, {}).get('configuration', {}).get('stream', True)
+        
+        if is_playground and (stream_config == False or stream_config is None or stream_config == 'default'):
+            channel_id = f"{org_id}_{db_config.get('bridge_configurations', {}).get(current_id, {}).get('bridge_id')}_{db_config.get('bridge_configurations', {}).get(current_id, {}).get('version_id')}"
+            playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
+            body.setdefault('settings', {})['response_format'] = playground_response_format
+        
+        # Pre-compute response format and webhook response format flag for route handlers
+        response_format = body.get("settings", {}).get("response_format", {})
+        body["_response_format"] = response_format
+        body["_is_webhook_response_format_for_playground"] = response_format and response_format.get("type") == "webhook" and is_playground
 
         return db_config
     except HTTPException as he:

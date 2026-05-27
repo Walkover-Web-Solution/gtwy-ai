@@ -20,28 +20,6 @@ threadsModel = db["threads"]
 foldersModel = db["folders"]
 prompt_wrappersModel = db["prompt_wrappers"]
 
-
-def get_advanced_param_keys(service: str, model: str) -> Set[str]:
-    """Get advanced parameter keys for a service/model combination"""
-    if not service or not model:
-        return set()
-    
-    service_lower = service.lower()
-    model_config = model_config_document.get(service_lower, {}).get(model)
-    
-    if not model_config:
-        return set()
-    
-    advanced_keys = set()
-    config = model_config.get('configuration', {})
-    
-    for key, value in config.items():
-        if key == "model":
-            continue
-        advanced_keys.add(key)
-    
-    return advanced_keys
-
 def transform_agent_config_to_frontend(agent_config: Dict[str, Any]) -> Dict[str, Any]:
     """Transform configuration to frontend format"""
     if not agent_config or not isinstance(agent_config, dict):
