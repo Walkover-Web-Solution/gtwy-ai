@@ -27,10 +27,10 @@ async def validate_bridge(agent_data):
     return None
 
 
-async def get_bridge_data(bridge_id, org_id, version_id):
+async def get_bridge_data(bridge_id, org_id, version_id, environment=None):
     """Fetch bridge data from database"""
     agent_data = await ConfigurationService.get_bridges_with_tools_and_apikeys(
-        bridge_id=bridge_id, org_id=org_id, version_id=version_id
+        bridge_id=bridge_id, org_id=org_id, version_id=version_id, environment=environment
     )
 
     bridge_id = bridge_id or agent_data.get("bridges", {}).get("parent_id")
@@ -363,16 +363,16 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
 
     for _, bridge_info in connected_agents.items():
         bridge_id_value = bridge_info.get("bridge_id", "")
-        version_id_value = bridge_info.get("version_id", "")
-        # If version_id is present, use connected_agents data, otherwise use connected_agent_details
-        if version_id_value:
-            # Use data from connected_agents when version_id is present
+        environment_value = bridge_info.get("environment", "")
+        # If environment is present, use connected_agents data, otherwise use connected_agent_details
+        if environment_value:
+            # Use data from connected_agents when environment is present
             description = bridge_info.get("description", "")
             variables = bridge_info.get("variables", {})
             fields = variables.get("fields", {})
             required = variables.get("required", [])
         else:
-            # Use data from connected_agent_details when version_id is not present
+            # Use data from connected_agent_details when environment is not present
             agent_details = connected_agent_details.get(bridge_id_value)
             if agent_details and agent_details is not None:
                 description = agent_details.get("description", bridge_info.get("description", ""))
@@ -429,5 +429,4 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
             "type": "AGENT",
             "bridge_id": bridge_id_value,
             "requires_thread_id": bridge_info.get("thread_id", False),
-            "version_id": version_id_value,
         }

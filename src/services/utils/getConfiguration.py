@@ -61,7 +61,8 @@ async def _prepare_configuration_response(
     web_search_filters=None,
     orchestrator_flag=None,
     chatbot=False,
-    override_fields={}
+    override_fields={},
+    environment=None
 ):
     """Internal helper to build configuration response for a single bridge."""
 
@@ -70,9 +71,14 @@ async def _prepare_configuration_response(
     built_in_tools = built_in_tools or []
     web_search_filters = web_search_filters or {}
 
-    # Fetch bridge data
-    agent_data, resolved_bridge_id = await get_bridge_data(bridge_id, org_id, version_id)
+    # Fetch bridge data (environment resolution happens inside the DB pipeline)
+    agent_data, resolved_bridge_id = await get_bridge_data(bridge_id, org_id, version_id, environment)
     bridges = agent_data.get("bridges", {})
+
+    # If environment resolved a version via pipeline, update version_id
+    if not version_id and environment and bridges.get("parent_id"):
+        version_id = bridges.get("_id")
+
     chatbot = bridges.get("bridgeType") == "chatbot"
 
     # Validate bridge existence and status before any limit checks
@@ -285,7 +291,7 @@ async def _prepare_configuration_response(
     return None, base_config, agent_data, resolved_bridge_id
 
 
-async def _collect_connected_agent_configs(agent_data, org_id, visited):
+async def _collect_connected_agent_configs(agent_data, org_id, visited, environment=None):
     """Recursively collect configurations for connected agents."""
 
     if not agent_data:
@@ -309,7 +315,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
     aggregated_configs = {}
     if pending:
         async def _fetch_agent(bridge_id_value, merged_info):
-            version_id_value = merged_info.get("version_id")
+            env_val = merged_info.get("environment") or environment
             configuration_override = (
                 merged_info.get("configuration") if isinstance(merged_info.get("configuration"), dict) else None
             )
@@ -339,11 +345,12 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
                     variables_override,
                     org_id,
                     variables_path_override,
-                    version_id_value,
+                    None,
                     extra_tools_override,
                     built_in_tools_override,
                     guardrails_override,
                     web_search_filters_override,
+                    environment=env_val,
                 )
             except Exception as exc:
                 logger.error(f"Error fetching configuration for connected agent {bridge_id_value}: {exc}")
@@ -353,12 +360,12 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
                 logger.error(f"Skipping connected agent {bridge_id_value} due to error response: {error}")
                 return bridge_id_value, None, None, None
 
-            return bridge_id_value, child_config, child_agent_data, resolved_child_id
+            return bridge_id_value, child_config, child_agent_data, resolved_child_id, env_val
 
         # Fetch all sibling agents concurrently
         results = await asyncio.gather(*[_fetch_agent(bid, info) for bid, info in pending])
 
-        for bridge_id_value, child_config, child_agent_data, resolved_child_id in results:
+        for bridge_id_value, child_config, child_agent_data, resolved_child_id, resolved_env in results:
             if child_config is None:
                 continue
 
@@ -371,7 +378,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
 
             aggregated_configs[key] = child_config
 
-            nested = await _collect_connected_agent_configs(child_agent_data, org_id, visited)
+            nested = await _collect_connected_agent_configs(child_agent_data, org_id, visited, environment=resolved_env)
             aggregated_configs.update(nested)
 
     reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("reviewer_agent")
@@ -382,6 +389,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
                 None, None, reviewer_bridge_id, None,
                 None, None, org_id, None, None,
                 None, None, None, None,
+                environment=environment,
             )
         except Exception as exc:
             logger.error(f"Error fetching configuration for reviewer agent {reviewer_bridge_id}: {exc}")
@@ -396,7 +404,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited):
                 visited.add(reviewer_bridge_id)
                 aggregated_configs[reviewer_bridge_id] = reviewer_config
 
-                nested = await _collect_connected_agent_configs(reviewer_agent_data, org_id, visited)
+                nested = await _collect_connected_agent_configs(reviewer_agent_data, org_id, visited, environment=environment)
                 aggregated_configs.update(nested)
 
     return aggregated_configs
@@ -418,7 +426,8 @@ async def getConfiguration(
     web_search_filters=None,
     orchestrator_flag=None,
     chatbot=False,
-    override_fields={}
+    override_fields={},
+    environment=None
 ):
     """
     Get configuration for a bridge with all necessary tools and settings.
@@ -440,7 +449,8 @@ async def getConfiguration(
         web_search_filters,
         orchestrator_flag,
         chatbot,
-        override_fields
+        override_fields,
+        environment
     )
 
     if error:
@@ -456,7 +466,7 @@ async def getConfiguration(
         if identifier:
             visited.add(identifier)
 
-    connected_configs = await _collect_connected_agent_configs(agent_data, org_id, visited)
+    connected_configs = await _collect_connected_agent_configs(agent_data, org_id, visited, environment=environment)
 
     bridge_configurations = {}
     if config_key:
