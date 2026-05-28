@@ -656,6 +656,10 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "org_id" : parsed_data.get('org_id'),
             "pending_turns": pending_turns,
             "bridge_summary": parsed_data.get("bridge_summary"),
+            "thread_id": parsed_data.get("thread_id"),
+            "sub_thread_id": parsed_data.get("sub_thread_id"),
+            "bridge_id": parsed_data.get("bridge_id"),
+            "version_id": parsed_data.get("version_id")
         },
         "check_handle_gpt_memory": {
             "gpt_memory": gpt_memory_enabled and should_fire_gpt_memory,
