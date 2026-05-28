@@ -66,7 +66,8 @@ class BaseService:
         self.execution_time_logs = params.get("execution_time_logs", {})
         self.timer = params.get("timer")
         self.func_tool_call_data = []
-        self.variables_path = params.get("variables_path")
+        self.connected_tools = params.get("connected_tools") or {}
+        self.variables_path = self.connected_tools.get("variables_path", params.get("variables_path"))
         self.message_id = params.get("message_id")
         self.bridgeType = params.get("bridgeType")
         self.reasoning_model = params.get("reasoning_model")
@@ -86,12 +87,12 @@ class BaseService:
         self.processed_prompts = params.get("processed_prompts")
         self.name = params.get("name")
         self.org_name = params.get("org_name")
-        self.built_in_tools = params.get("built_in_tools")
+        self.built_in_tools = self.connected_tools.get("built_in_tools", params.get("built_in_tools"))
         self.function_time_logs = params.get("function_time_logs")
         self.files = params.get("files") or []
         self.file_data = params.get("file_data")
         self.youtube_url = params.get("youtube_url")
-        self.web_search_filters = params.get("web_search_filters")
+        self.web_search_filters = self.connected_tools.get("web_search_filters", params.get("web_search_filters"))
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")

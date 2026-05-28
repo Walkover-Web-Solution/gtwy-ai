@@ -351,7 +351,10 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
 
 def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag):
     """Add connected agents as tools"""
-    connected_agents = bridges.get("connected_agents", {})
+    connected_agents = (
+        bridges.get("bridges", {}).get("connected_tools", {}).get("connected_agents")
+        or bridges.get("connected_agents", {})
+    )
     connected_agent_details = bridges.get("connected_agent_details", {})
     agent_name_info = bridges.get("agent_name_info", {})
 

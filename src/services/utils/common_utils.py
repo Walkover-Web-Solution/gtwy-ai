@@ -145,10 +145,103 @@ async def handle_agent_transfer(
     return transfer_result
 
 
+def migrate_and_normalize_tools(connected_tools):
+    if not connected_tools:
+        return {"tools": {}}
+
+    tools = connected_tools.get("tools") or {}
+
+    if not tools:
+        vars_path = connected_tools.get("variables_path") or {}
+
+        # 1. function_ids
+        for fid in (connected_tools.get("function_ids") or []):
+            fid_str = str(fid)
+            tools[fid_str] = {
+                "type": "function",
+                "variable_path": vars_path.get(fid_str) or {}
+            }
+
+        # 2. connected_agents
+        for key, agent in (connected_tools.get("connected_agents") or {}).items():
+            if not agent:
+                continue
+            tools[key] = {
+                "type": "agent",
+                "bridge_id": agent.get("bridge_id") or key,
+                "version_id": agent.get("version_id"),
+                "thread_id": agent.get("thread_id") if agent.get("thread_id") is not None else True,
+                "variable_path": vars_path.get(key) or {}
+            }
+
+        # 3. built_in_tools
+        for tool_name in (connected_tools.get("built_in_tools") or []):
+            tools[tool_name] = {
+                "type": "builtin",
+                "variable_path": vars_path.get(tool_name) or {}
+            }
+
+        # 4. doc_ids
+        for doc in (connected_tools.get("doc_ids") or []):
+            doc_id = doc
+            details = {}
+            if isinstance(doc, dict):
+                doc_id = doc.get("resource_id") or doc.get("collection_id") or str(doc)
+                details = doc
+            tools[doc_id] = {
+                "type": "knowledgebase",
+                **details,
+                "variable_path": vars_path.get(doc_id) or {}
+            }
+
+    # Reconstruct the fields for compatibility
+    function_ids = []
+    connected_agents = {}
+    built_in_tools = []
+    doc_ids = []
+    variables_path = {}
+
+    for key, tool in tools.items():
+        if not tool or not isinstance(tool, dict):
+            continue
+
+        if "variable_path" in tool:
+            variables_path[key] = tool["variable_path"]
+
+        t_type = tool.get("type")
+        if t_type == "function":
+            function_ids.append(key)
+        elif t_type == "agent":
+            connected_agents[key] = {
+                "bridge_id": tool.get("bridge_id") or key,
+                "version_id": tool.get("version_id"),
+                "thread_id": tool.get("thread_id") if tool.get("thread_id") is not None else True
+            }
+        elif t_type == "builtin":
+            built_in_tools.append(key)
+        elif t_type == "knowledgebase":
+            details = {k: v for k, v in tool.items() if k not in ("type", "variable_path")}
+            if details:
+                doc_ids.append({"resource_id": key, **details})
+            else:
+                doc_ids.append(key)
+
+    return {
+        **connected_tools,
+        "tools": tools,
+        "function_ids": function_ids,
+        "connected_agents": connected_agents,
+        "built_in_tools": built_in_tools,
+        "doc_ids": doc_ids,
+        "variables_path": variables_path
+    }
+
+
 def parse_request_body(request_body):
     body = request_body.get("body", {})
     state = request_body.get("state", {})
     path_params = request_body.get("path_params", {})
+    connected_tools = migrate_and_normalize_tools(body.get("connected_tools") or {})
 
     return {
         "body": body,
@@ -185,7 +278,8 @@ def parse_request_body(request_body):
         "is_rich_text": body.get("configuration", {}).get("is_rich_text", False),
         "actions": body.get("actions", {}),
         "user_reference": body.get("user_reference", ""),
-        "variables_path": body.get("variables_path") or {},
+        "connected_tools": connected_tools,
+        "variables_path": connected_tools.get("variables_path") or body.get("variables_path") or {},
         "tool_id_and_name_mapping": body.get("tool_id_and_name_mapping"),
         "suggest": body.get("suggest", False),
         "message_id": body.get("message_id"),
@@ -215,13 +309,13 @@ def parse_request_body(request_body):
         "bridge_summary": body.get("bridge_summary"),
         "batch": body.get("batch") or [],
         "batch_webhook": body.get("webhook"),
-        "doc_ids": body.get("ddc_ids"),
+        "doc_ids": connected_tools.get("doc_ids") or body.get("ddc_ids"),
         "rag_data": body.get("rag_data"),
         "name": body.get("name"),
         "api_collection": body.get("api_collection"),
         "org_name": body.get("org_name"),
-        "variables_state": body.get("agent_info", {}).get("variables_state"),
-        "built_in_tools": body.get("built_in_tools") or [],
+        "variables_state": connected_tools.get("variables_state") or body.get("agent_info", {}).get("variables_state"),
+        "built_in_tools": connected_tools.get("built_in_tools") or body.get("built_in_tools") or [],
         "thread_flag": body.get("thread_flag") or False,
         "files": body.get("files") or [],
         "fall_back": body.get("settings", {}).get("fall_back") or {},
@@ -234,7 +328,7 @@ def parse_request_body(request_body):
         "file_data": body.get("video_data") or {},
         "youtube_url": body.get("youtube_url") or None,
         "folder_id": body.get("folder_id"),
-        "web_search_filters": body.get("web_search_filters") or None,
+        "web_search_filters": connected_tools.get("web_search_filters") or body.get("web_search_filters") or None,
         "parent_bridge_id": body.get("parent_bridge_id"),
         "transfer_request_id": body.get("transfer_request_id"),
         "orchestrator_flag": body.get("orchestrator_flag"),
@@ -772,6 +866,7 @@ def build_service_params(
         "execution_time_logs": parsed_data.get("execution_time_logs", []),
         "function_time_logs": [],
         "timer": timer,
+        "connected_tools": parsed_data.get("connected_tools", {}),
         "variables_path": parsed_data["variables_path"],
         "message_id": parsed_data["message_id"],
         "bridgeType": parsed_data["bridgeType"],
