@@ -109,6 +109,7 @@ async def run_testcases_route(request: Request):
 
     body = await request.json()
     org_id = request.state.profile["org"]["id"]
+    body.setdefault("state", {})["profile"] = request.state.profile
     bridge_id = body.get("bridge_id")
     if not bridge_id:
         raise HTTPException(
