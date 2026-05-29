@@ -71,6 +71,10 @@ redis_keys = {
     "apikeyusedcost_": "apikeyusedcost_",
     "last_transffered_agent_": "last_transffered_agent_",
     "plan_": "plan_",
+    # Usage-alert feature: per-day spend buckets + once-per-period de-dupe markers
+    "dailyusedcost_": "dailyusedcost_",
+    "usagealertsent_": "usagealertsent_",
+    "usagespikealert_": "usagespikealert_",
 }
 
 tag_keys = {
@@ -114,6 +118,28 @@ alert_types = {
     "metrix_limit_reached": "metrix_limit_reached",
     "retry_mechanism": "retry_mechanism",
     "broadcast_response": "broadcast_response",
+}
+
+# Usage-alert feature -------------------------------------------------------
+# Mail-type enum sent in the body of the mail API. The string values are the
+# enum the mail API expects — swap them for the exact values from the mail API
+# spec when it is provided.
+usage_mail_types = {
+    "threshold": "USAGE_THRESHOLD_REACHED",
+    "spike": "USAGE_DAILY_SPIKE",
+    "limit_reached": "USAGE_LIMIT_REACHED",
+}
+
+# Endpoint for the mail API that sends the usage-alert emails.
+USAGE_ALERT_MAIL_URL = "https://flow.sokt.io/func/scrikY1L98L6"
+
+# Tunable defaults for the usage-alert checks.
+usage_alert_config = {
+    "threshold_percent": 0.8,       # fire the threshold email at 80% of the limit
+    "spike_multiplier": 3.0,        # a day is a "spike" when it exceeds N x the trailing average
+    "spike_window_days": 7,         # trailing window used to compute the average daily spend
+    "spike_min_history_days": 3,    # require this many past days of data before spike can fire
+    "daily_bucket_ttl_days": 8,     # how long each per-day bucket lives (window + buffer)
 }
 
 auto_model_tradeoff = {

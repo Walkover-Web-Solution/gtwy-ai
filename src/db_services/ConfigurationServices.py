@@ -117,7 +117,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
     try:
         use_env_resolution = bool(environment and not version_id)
 
-        cache_suffix = f"{org_id}_{version_id or bridge_id}"
+        cache_suffix = f"{org_id}_{'version' if version_id else 'bridge'}_{version_id or bridge_id}"
         if use_env_resolution:
             cache_suffix += f"_env_{environment}"
         cache_key = f"{redis_keys['bridge_data_with_tools_']}{cache_suffix}"
@@ -1128,7 +1128,7 @@ async def get_bridge_by_slugname(org_id, slug_name):
 async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org_id=""):
     model = version_model if version_id else configurationModel
     id_to_use = ObjectId(version_id) if version_id else ObjectId(bridge_id)
-    cache_key = f"{org_id}_{version_id if version_id else bridge_id}"
+    cache_key = f"{org_id}_{'version' if version_id else 'bridge'}_{version_id if version_id else bridge_id}"
 
     updated_bridge = await model.find_one_and_update(
         {"_id": ObjectId(id_to_use)}, {"$set": update_fields}, return_document=True, upsert=True
