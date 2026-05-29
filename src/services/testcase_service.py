@@ -9,6 +9,7 @@ This module provides functions for handling testcase operations including:
 """
 
 import asyncio
+import copy
 import json
 import logging
 from typing import Any
@@ -243,10 +244,6 @@ async def process_single_testcase(
         Dictionary containing testcase result
     """
     try:
-        # Deep copy the configuration to avoid race conditions in parallel execution
-        if "configuration" in db_config:
-            db_config["configuration"] = db_config["configuration"].copy()
-
         # Merge testcase-stored variables (higher priority) with config/request variables
         merged_variables = {**db_config.get("variables", {}), **testcase.get("variables", {})}
         db_config["variables"] = merged_variables
@@ -420,7 +417,7 @@ async def run_testcases_parallel(
     # Process pending testcases in parallel
     results = await asyncio.gather(
         *[
-            process_single_testcase(tc, db_config.copy(), override_matching_type, rtlayer_cred, version_id)
+            process_single_testcase(tc, copy.deepcopy(db_config), override_matching_type, rtlayer_cred, version_id)
             for tc in to_run
         ]
     )
