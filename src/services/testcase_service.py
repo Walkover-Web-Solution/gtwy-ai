@@ -341,95 +341,37 @@ async def process_single_testcase(
         return outcome
 
 
-def _filter_testcases_to_run(
-    testcases: list[dict[str, Any]],
-    version_updated_at,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Split testcases into (to_run, skipped) based on lastExecutedAt vs updatedAt.
-
-    Skip when both version.updatedAt <= lastExecutedAt and
-    testcase.updatedAt <= lastExecutedAt.
-    """
-    if not version_updated_at:
-        return testcases, []
-
-    to_run: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    for tc in testcases:
-        tc_updated_at = tc.get("updatedAt") or tc.get("updated_at")
-        execution = tc.get("execution") or {}
-        last_executed_at = execution.get("lastExecutedAt")
-
-        if (
-            last_executed_at
-            and tc_updated_at
-            and version_updated_at <= last_executed_at
-            and tc_updated_at <= last_executed_at
-        ):
-            # Use same shape as executed results so the frontend can render uniformly.
-            # Coerce datetime/ObjectId to JSON-safe strings for RTLayer publish.
-            skipped.append({
-                "testcase_id": str(tc.get("_id")),
-                "bridge_id": str(tc.get("bridge_id")) if tc.get("bridge_id") else None,
-                "expected": tc.get("expected"),
-                "actual_result": None,
-                "score": None,
-                "matching_type": tc.get("matching_type", "cosine"),
-                "success": True,
-                "skipped": True,
-                "reason": "no_changes_since_last_execution",
-                "last_executed_at": last_executed_at.isoformat() if hasattr(last_executed_at, "isoformat") else str(last_executed_at),
-            })
-        else:
-            to_run.append(tc)
-    return to_run, skipped
-
-
 async def run_testcases_parallel(
     testcases: list[dict[str, Any]],
     db_config: dict[str, Any],
     override_matching_type: str | None,
-    version_updated_at=None,
     rtlayer_cred: dict[str, Any] | None = None,
     version_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Run multiple testcases in parallel
+    Run multiple testcases in parallel.
 
     Args:
         testcases: List of testcase dictionaries
         db_config: Configuration dictionary
         override_matching_type: Optional override matching type
-        version_updated_at: Optional version updatedAt timestamp (for skip logic)
         rtlayer_cred: Optional RTLayer credentials for streaming results
         version_id: Version id, included in published payloads
 
     Returns:
-        List of testcase results (executed + skipped)
+        List of testcase results
     """
-    # Filter out testcases that don't need rerun (version & testcase unchanged)
-    to_run, skipped = _filter_testcases_to_run(testcases, version_updated_at)
-
-    # Notify skipped testcases up-front so the client can render them immediately
-    if skipped:
-        await asyncio.gather(*[
-            _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": s})
-            for s in skipped
-        ])
-
-    # Process pending testcases in parallel
     results = await asyncio.gather(
         *[
             process_single_testcase(tc, db_config.copy(), override_matching_type, rtlayer_cred, version_id)
-            for tc in to_run
+            for tc in testcases
         ]
     )
 
-    # Update execution.lastExecutedAt for all executed testcases (skip direct_testcase)
     try:
         from src.db_services.testcase_services import update_testcase_last_executed
         executed_ids = [
-            tc.get("_id") for tc in to_run
+            tc.get("_id") for tc in testcases
             if tc.get("_id") and tc.get("_id") != "direct_testcase"
         ]
         if executed_ids:
@@ -437,7 +379,7 @@ async def run_testcases_parallel(
     except Exception as e:
         logger.error(f"Failed to update lastExecutedAt: {str(e)}")
 
-    return results + skipped
+    return results
 
 
 async def execute_testcases(
@@ -461,8 +403,6 @@ async def execute_testcases(
         TestcaseValidationError: If validation fails
         TestcaseNotFoundError: If testcases are not found
     """
-    from src.db_services.testcase_services import get_version_updated_at
-
     # Validate request data
     request_data = validate_testcase_request_data(body)
 
@@ -487,22 +427,18 @@ async def execute_testcases(
     )
 
     async def run_for_version(version_id):
-        db_config, version_updated_at = await asyncio.gather(
-            get_testcase_configuration(
-                org_id,
-                version_id,
-                request_data["bridge_id"],
-                request_data["testcases_flag"],
-                request_data["testcase_data"],
-                request_data["variables"],
-            ),
-            get_version_updated_at(version_id),
+        db_config = await get_testcase_configuration(
+            org_id,
+            version_id,
+            request_data["bridge_id"],
+            request_data["testcases_flag"],
+            request_data["testcase_data"],
+            request_data["variables"],
         )
         results = await run_testcases_parallel(
             testcases,
             db_config,
             request_data["matching_type"],
-            version_updated_at=version_updated_at,
             rtlayer_cred=rtlayer_cred,
             version_id=version_id,
         )
@@ -514,7 +450,7 @@ async def execute_testcases(
 
     # Run all versions concurrently (works for 1 or N)
     version_results = await asyncio.gather(*[run_for_version(vid) for vid in version_ids])
-
+    print("version_results\n\n\n", version_results, "\n\n\n")
     final_payload = {
         "success": True,
         "bridge_id": request_data["bridge_id"],

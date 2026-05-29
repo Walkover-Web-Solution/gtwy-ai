@@ -161,6 +161,7 @@ async def chat(request_body):
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
+        print("bridge_configurations\n\n\n", bridge_configurations, "\n\n\n")
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
 
@@ -602,6 +603,23 @@ async def chat(request_body):
                 parsed_data.get("testcase_data", {}), result, parsed_data
             )
             result["response"]["testcase_result"] = testcase_result
+
+            # Stamp the testcase fields onto historyParams so the log queue
+            # persists them onto the conversation_logs row in Postgres.
+            if result.get("historyParams") is not None:
+                result["historyParams"]["testcase_id"] = testcase_result.get("testcase_id")
+                result["historyParams"]["testcase_data"] = {
+                    "expected": testcase_result.get("expected"),
+                    "actual": testcase_result.get("actual"),
+                    "score": testcase_result.get("score"),
+                    "matching_type": testcase_result.get("matching_type"),
+                    "type": testcase_result.get("type"),
+                    "success": testcase_result.get("success"),
+                    "error": testcase_result.get("error"),
+                    "system_prompt": parsed_data.get("configuration", {}).get("prompt", ""),
+                    "model": parsed_data.get("configuration", {}).get("model", ""),
+                }
+
             if parsed_data.get("body", {}).get("bridge_configurations", {}).get("playground_response_format"):
                 await sendResponse(
                     parsed_data["body"]["bridge_configurations"]["playground_response_format"],

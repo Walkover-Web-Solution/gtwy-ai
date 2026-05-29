@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from src.db_services.testcase_services import (
     create_testcase,
     delete_testcase_by_id,
-    get_merged_testcases_and_history_by_bridge_id,
+    get_all_testcases_by_bridge_id,
     get_testcase_by_id,
     update_testcase_by_id,
 )
@@ -53,23 +53,10 @@ async def delete_testcase_controller(testcase_id):
 
 
 async def get_all_testcases_controller(bridge_id):
-    """Get all testcases with their history merged for a specific bridge_id"""
+    """Get all testcases for a specific bridge_id (run history lives in Postgres conversation_logs)"""
     try:
-        # Get merged data from both testcases and testcases_history collections
-        merged_testcases = await get_merged_testcases_and_history_by_bridge_id(bridge_id)
-
-        # Group history by version_id for each testcase
-        for testcase in merged_testcases:
-            testcase["version_history"] = {}
-            for history in testcase["history"]:
-                version_id = history["version_id"]
-                if not testcase["version_history"].get(version_id):
-                    testcase["version_history"][version_id] = []
-                testcase["version_history"][version_id].append(history)
-            # Remove the original history array as it's now organized by version_id
-            del testcase["history"]
-
-        return JSONResponse(content={"success": True, "data": make_json_serializable(merged_testcases)})
+        testcases = await get_all_testcases_by_bridge_id(bridge_id)
+        return JSONResponse(content={"success": True, "data": make_json_serializable(testcases)})
     except Exception as error:
         traceback.print_exc()
         return JSONResponse(status_code=400, content={"success": False, "error": str(error)})

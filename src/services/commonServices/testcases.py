@@ -1,10 +1,7 @@
-from datetime import datetime
-
 import pydash as _
 
 from globals import logger
 from src.configs.constant import bridge_ids
-from src.db_services.testcase_services import create_testcases_history
 from src.services.utils.ai_call_util import call_ai_middleware
 from src.services.utils.nlp import compute_cosine_similarity
 
@@ -29,43 +26,25 @@ async def compare_result(expected, actual, matching_type, response_type):
 
 async def process_single_testcase_result(testcase_data, model_result, parsed_data):
     """
-    Process a single testcase result: calculate score and save to history
+    Score a single testcase result. The score + metadata are returned so the
+    caller can attach them to historyParams and let the log queue persist them
+    onto the conversation_logs row in Postgres.
     """
     try:
-        # Extract the actual response from model result
         actual_result = (
             model_result.get("response", {}).get("data", {}).get("content", "")
             if isinstance(model_result, dict)
             else str(model_result)
         )
 
-        # Get expected result based on testcase type
         expected_result = testcase_data.get("expected", {}).get(
             "response" if testcase_data.get("type") == "response" else "tool_calls", ""
         )
 
-        # Calculate score using the matching type
         matching_type = testcase_data.get("matching_type", "cosine")
         testcase_type = testcase_data.get("type", "response")
 
         score = await compare_result(expected_result, actual_result, matching_type, testcase_type)
-
-        # Prepare data for saving to history
-        data_to_insert = {
-            "bridge_id": parsed_data.get("bridge_id"),
-            "version_id": parsed_data.get("version_id"),
-            "created_at": datetime.now().isoformat(),
-            "testcase_id": str(testcase_data.get("_id")),
-            "metadata": {
-                "system_prompt": parsed_data.get("configuration", {}).get("prompt", ""),
-                "model": parsed_data.get("configuration", {}).get("model", ""),
-            },
-            "model_output": actual_result,
-            "score": score,
-        }
-
-        # Save to testcase history
-        await create_testcases_history([data_to_insert])
 
         return {
             "testcase_id": str(testcase_data.get("_id")),
@@ -73,6 +52,7 @@ async def process_single_testcase_result(testcase_data, model_result, parsed_dat
             "actual": actual_result,
             "score": score,
             "matching_type": matching_type,
+            "type": testcase_type,
             "success": True,
         }
 

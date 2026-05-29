@@ -194,6 +194,8 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
         "prompt": history_params.get("prompt"),
         "is_cached": history_params.get("is_cached", False),
         "plans": history_params.get("plans"),
+        "testcase_id": history_params.get("testcase_id"),
+        "testcase_data": history_params.get("testcase_data"),
     }
 
     latency = latency_data.get("over_all_time", 0) if latency_data else 0

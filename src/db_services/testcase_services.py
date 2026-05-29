@@ -1,5 +1,4 @@
 import datetime
-import traceback
 
 from bson import ObjectId
 from fastapi import HTTPException
@@ -9,7 +8,6 @@ from models.mongo_connection import db
 
 configurationModel = db["configurations"]
 testcases_model = db["testcases"]
-testcases_history_model = db["testcases_history"]
 
 
 async def get_testcases(bridge_id):
@@ -59,22 +57,6 @@ async def update_testcase_by_id(testcase_id, update_data):
         raise e
 
 
-async def get_version_updated_at(version_id):
-    """Return updatedAt for a configuration version, or None."""
-    try:
-        version_model = db["configuration_versions"]
-        doc = await version_model.find_one(
-            {"_id": ObjectId(version_id)},
-            {"updatedAt": 1},
-        )
-        if not doc:
-            return None
-        return doc.get("updatedAt")
-    except Exception as e:
-        logger.error(f"Error fetching version updatedAt: {str(e)}")
-        return None
-
-
 async def update_testcase_last_executed(testcase_ids):
     """Update execution.lastExecutedAt for the given testcase ids"""
     try:
@@ -98,57 +80,6 @@ async def update_testcase_last_executed(testcase_ids):
     except Exception as e:
         logger.error(f"Error updating testcase lastExecutedAt: {str(e)}")
         return None
-
-
-async def create_testcases_history(data):
-    result = await testcases_history_model.insert_many(data)
-    for obj in data:
-        obj["_id"] = str(obj["_id"])
-    return result
-
-
-async def get_merged_testcases_and_history_by_bridge_id(bridge_id):
-    """Get all testcases with their history merged for a specific bridge_id"""
-    try:
-        # Use aggregation pipeline to merge testcases with their history
-        pipeline = [
-            {"$match": {"bridge_id": bridge_id}},
-            {
-                "$lookup": {
-                    "from": "testcases_history",
-                    "let": {"testcaseIdStr": {"$toString": "$_id"}},
-                    "pipeline": [{"$match": {"$expr": {"$eq": ["$testcase_id", "$$testcaseIdStr"]}}}],
-                    "as": "history",
-                }
-            },
-        ]
-
-        cursor = testcases_model.aggregate(pipeline)
-        result = await cursor.to_list(length=None)
-        return result
-    except Exception as e:
-        logger.error(f"Error fetching merged testcases and history: {str(e)}")
-        raise e
-
-
-async def delete_current_testcase_history(version_id):
-    try:
-        pipeline = [
-            {"$match": {"version_id": version_id}},
-            {"$sort": {"testcase_id": 1, "created_at": -1}},
-            {"$group": {"_id": "$testcase_id", "latest_id": {"$first": "$_id"}}},
-            {"$project": {"_id": 0, "latest_id": 1}},
-        ]
-
-        # Get IDs of latest entries
-        cursor = testcases_history_model.aggregate(pipeline)
-        latest_ids = [doc["latest_id"] async for doc in cursor]
-
-        # Delete all other entries for the given version_id
-        await testcases_history_model.delete_many({"version_id": version_id, "_id": {"$nin": latest_ids}})
-    except Exception as e:
-        logger.error(f"Error in deleting current testcase history: {str(e)}")
-        traceback.print_exc()
 
 
 async def parse_and_save_testcases(testcases_data, bridge_id: str):
