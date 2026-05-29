@@ -161,7 +161,6 @@ async def chat(request_body):
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
-        print("bridge_configurations\n\n\n", bridge_configurations, "\n\n\n")
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
 
