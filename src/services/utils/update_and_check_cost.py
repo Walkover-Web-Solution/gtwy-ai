@@ -192,7 +192,7 @@ def create_redis_keys(data, org_id=""):
         versions = data.get("versions") or []
 
         for version in versions:
-            keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_{version}")
+            keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_version_{version}")
             keys_to_delete.append(f"{redis_keys['get_bridge_data_']}{version}")
 
     except Exception as e:
@@ -218,7 +218,7 @@ async def purge_related_bridge_caches(bridge_id: str, bridge_usage: int = -1, or
                 pass
 
         # Ensure current bridge's own keys are covered
-        keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_{bridge_id}")
+        keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_bridge_{bridge_id}")
         keys_to_delete.append(f"{redis_keys['get_bridge_data_']}{bridge_id}")
 
         if keys_to_delete:
