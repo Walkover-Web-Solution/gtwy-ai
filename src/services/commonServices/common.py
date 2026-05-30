@@ -6,18 +6,15 @@ import uuid
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
-from src.configs.constant import redis_keys, alert_types
+from src.configs.constant import alert_types, redis_keys
 from src.handler.executionHandler import handle_exceptions
+from src.send_alert import send_alert
+from src.services.auto_router_service import apply_auto_model_selection
 from src.services.cache_service import find_in_cache, store_in_cache
-from src.services.utils.maximum_iterations_utils import (
-    build_tool_count_key,
-    cleanup_tool_count,
-    cleanup_tool_count_after,
-    init_tool_count,
-)
+from src.services.todo.planner_service import prepare_planner_request
+from src.services.todo.todo_handler import handle_todo_mode
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
@@ -40,23 +37,29 @@ from src.services.utils.common_utils import (
     prepare_prompt,
     process_background_tasks,
     process_background_tasks_for_error,
-    save_error_history,
-    process_variable_state,
-    restructure_json_schema,
-    validate_json_schema_configuration,
-    setup_agent_tools,
-    update_usage_metrics,
     process_batch_background_tasks,
-    update_cost_usage_and_apikey_status_in_background,
-    sse_stream_and_finalize,
+    process_variable_state,
     render_template_if_applicable,
+    restructure_json_schema,
+    save_error_history,
+    setup_agent_tools,
+    sse_stream_and_finalize,
+    update_cost_usage_and_apikey_status_in_background,
+    update_usage_metrics,
+    validate_json_schema_configuration,
+)
+from src.services.utils.maximum_iterations_utils import (
+    build_tool_count_key,
+    cleanup_tool_count,
+    cleanup_tool_count_after,
+    init_tool_count,
 )
 from src.services.utils.rich_text_support import process_chatbot_response
-from src.services.auto_router_service import apply_auto_model_selection
+from workflow import execute_advanced_workflow
+
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
 from .baseService.utils import sendResponse
-from src.send_alert import send_alert
 from .response_caching_service import handle_response_caching
 from .reviewer_service import run_review_loop
 from src.services.todo.todo_handler import handle_todo_mode
@@ -148,7 +151,7 @@ async def chat_multiple_agents(request_body):
 
 
 @handle_exceptions
-async def chat(request_body): 
+async def chat(request_body):
     result = {}
     class_obj = {}
     tool_count_key_for_cleanup = None
@@ -163,6 +166,14 @@ async def chat(request_body):
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
+
+        mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
+        if isinstance(mcp_cfg, dict) and mcp_cfg.get("enabled"):
+            from src.services.utils.mcp_utils import resolve_mcp_type
+            mcp_type = resolve_mcp_type(parsed_data.get("service"), parsed_data.get("model"))
+            if mcp_type == "client":
+                from src.services.mcp_gateway.prefetch import prefetch_mcp_tools
+                await prefetch_mcp_tools(mcp_cfg)
 
         # Reviewer agent: if this bridge has a configured reviewer, stash its
         # bridge_id on parsed_data. The review loop runs after the main agent
@@ -188,12 +199,12 @@ async def chat(request_body):
             tool_count_key_for_cleanup,
             parsed_data.get("maximum_iterations") or 3,
         )
-        
+
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
-        
+
         process_variable_state(parsed_data)
-        
+
         # Setup pre_tools and post_tool for the current agent with its own variables
         current_agent_id = parsed_data.get("bridge_id")
         pre_tools = bridge_configurations.get(current_agent_id, {}).get("pre_tools_data", [])
@@ -830,12 +841,12 @@ async def batch(request_body):
             processed_prompts=processed_prompts,
             batch_variables=batch_variables
         )
-        
+
         response_content = {
             "success": True,
             "response": result["message"]
         }
-        
+
         # Include batch_id and messages if available
         if "batch_id" in result:
             response_content["batch_id"] = result["batch_id"]
@@ -903,9 +914,9 @@ async def image(request_body):
 
         # Calculate image tokens and costs
         params['token_calculator'].calculate_image_usage(result['response'])
-        
+
         parsed_data['tokens'] = params['token_calculator'].calculate_image_cost(parsed_data['model'])
-        
+
         # Add usage data to response
         result['response']['usage'] = params['token_calculator'].get_image_usage()
         result['response']['usage']['cost'] = parsed_data['tokens'].get('total_cost', 0)

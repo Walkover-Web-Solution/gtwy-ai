@@ -5,18 +5,19 @@ import re
 
 import httpx
 from fastapi import Request
+from google.genai import types
 
+from globals import *
 from globals import logger, traceback
 from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name
 from src.controllers.rag_controller import get_text_from_vectorsQuery
+from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
+from src.services.mcp_gateway.client import call_mcp_tool
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
-from globals import *
-from src.services.cache_service import store_in_cache, find_in_cache, client, REDIS_PREFIX
-from src.configs.constant import redis_keys,inbuild_tools
-from google.genai import types
+
 
 def clean_json(data):
     """Recursively remove keys with empty string, empty list, or empty dictionary."""
@@ -198,7 +199,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
         return data_to_send
-    
+
     elif service == service_name['gemini']:
         gemini_tools = []
         function_declarations = [
@@ -222,9 +223,9 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
         ]
         if function_declarations:
             from google.genai import types
-            gemini_tools.append(types.Tool(function_declarations=function_declarations)) 
-        
-        return gemini_tools 
+            gemini_tools.append(types.Tool(function_declarations=function_declarations))
+
+        return gemini_tools
     elif service == service_name['openai']:
         data_to_send =  [
             {
@@ -318,7 +319,7 @@ def reasoning_formatter(service: str, new_config: dict) -> None:
             new_config["output_config"]["effort"] = effort
         else:
             new_config["output_config"] = {"effort": effort}
-        
+
         new_config.pop("reasoning", None)
 
     elif service == service_name["groq"]:
@@ -379,13 +380,18 @@ async def process_data_and_run_tools(codes_mapping, self):
         # Prepare tasks for async execution
         tasks = []
         for tool_call_key, tool in codes_mapping.items():
-            name = tool["name"]
+            original_name = tool["name"]
+            name = original_name
 
-            # Get corresponding function code mapping
-            tool_mapping = (
-                {} if self.tool_id_and_name_mapping[name] else {"error": True, "response": "Wrong Function name"}
-            )
-            tool_data = {**tool, **tool_mapping}
+            # Gemini might return a tool_call with prefix
+            if name not in self.tool_id_and_name_mapping and isinstance(name, str) and "." in name:
+                short_name = name.rsplit(".", 1)[-1]
+                if short_name in self.tool_id_and_name_mapping:
+                    name = short_name
+
+            tool_mapping = self.tool_id_and_name_mapping.get(name) or {"error": True, "response": "Wrong Function name"}
+            display_tool_name = tool_mapping.get("mcp_tool") if tool_mapping.get("type") == "MCP" else display_mcp_tool_name(name)
+            tool_data = {**tool, **tool_mapping, "name": name, "model_tool_name": original_name, "display_tool_name": display_tool_name}
 
             if not tool_data.get("response"):
                 # if function is present in db/NO response, create task for async processing
@@ -432,6 +438,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
                     task = call_firecrawl_scrape(tool_data.get("args"))
+                elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
+                    task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 else:
                     task = axios_work(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 tasks.append((tool_call_key, tool_data, task))
@@ -447,7 +455,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                     }
                 )
                 # Update tool_call_logs with existing response
-                tool_call_logs[tool_call_key] = {**tool, "response": tool_data["response"]}
+                tool_call_logs[tool_call_key] = {**tool, "name": tool_data.get("display_tool_name"), "response": tool_data["response"]}
 
         # Execute all tasks concurrently if any exist
         if tasks:
@@ -484,8 +492,9 @@ async def process_data_and_run_tools(codes_mapping, self):
                 # Update tool_call_logs with the response
                 tool_call_logs[tool_call_key] = {
                     **tool_data,
+                    "name": tool_data.get("display_tool_name"),
                     "data": result or response,
-                    "id": self.tool_id_and_name_mapping[tool_data["name"]].get("name"),
+                    "id": self.tool_id_and_name_mapping[tool_data["name"]].get("mcp_tool") or self.tool_id_and_name_mapping[tool_data["name"]].get("name"),
                 }
         # Create mapping by tool_call_id (now tool_call_key) for return
         mapping = {resp["tool_call_id"]: resp for resp in responses}
@@ -520,7 +529,7 @@ def make_code_mapping_by_service(responses, service):
                     error = True
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
-        
+
         case 'gemini':
             for part in responses['candidates'][0]["content"]["parts"]:
                 function_call = part.get('function_call') if isinstance(part, dict) else None
@@ -534,7 +543,7 @@ def make_code_mapping_by_service(responses, service):
                         "error": False
                     }
                     function_list.append(name)
-            
+
         case 'openai':
 
             for tool_call in [output for output in responses['output'] if output.get('type') == 'function_call']:
@@ -815,8 +824,10 @@ async def run_stream_and_collect(generator, streamer):
         if delta.get("reasoning"):
             await streamer.emit_reasoning(delta["reasoning"])
         if delta.get("tool_calls") is not None:
-            final_tool_calls = delta["tool_calls"]
-            for tc in final_tool_calls:
+            current_tool_calls = delta["tool_calls"]
+            if not delta.get("stream_event_only"):
+                final_tool_calls = current_tool_calls
+            for tc in current_tool_calls:
                 if not isinstance(tc, dict):
                     continue
                 fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
@@ -832,10 +843,24 @@ async def run_stream_and_collect(generator, streamer):
                     args = raw_args
                 else:
                     args = {}
+                is_mcp_event = delta.get("stream_event_only") or tool_name.endswith(MCP_NAME_SUFFIX)
                 await streamer.emit_tool_call(
-                    name=tool_name,
+                    name=display_mcp_tool_name(tool_name),
                     args=args,
                     call_id=tc.get("id") or tc.get("call_id", ""),
+                    type="mcp" if is_mcp_event else None,
+                )
+        if delta.get("tool_results") is not None:
+            for tool_result in delta["tool_results"]:
+                if not isinstance(tool_result, dict):
+                    continue
+                tool_result_name = tool_result.get("name", "")
+                is_mcp_event = delta.get("stream_event_only") or tool_result_name.endswith(MCP_NAME_SUFFIX)
+                await streamer.emit_tool_result(
+                    name=display_mcp_tool_name(tool_result_name),
+                    content=tool_result.get("content", ""),
+                    call_id=tool_result.get("call_id", ""),
+                    type="mcp" if is_mcp_event else None,
                 )
         if delta.get("usage"):
             final_usage = delta["usage"]

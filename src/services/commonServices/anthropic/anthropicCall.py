@@ -4,6 +4,7 @@ from src.services.utils.ai_middleware_format import Response_formatter
 
 from ....services.utils.apiservice import fetch_images_b64
 from ..baseService.baseService import BaseService
+from src.services.utils.mcp_utils import merge_server_side_mcp_into_tools
 from ..createConversations import ConversationService
 
 
@@ -84,8 +85,10 @@ class Anthropic(BaseService):
             raise ValueError(functionCallRes.get("error"))
 
         self.update_model_response(modelResponse, functionCallRes)
-        tools = functionCallRes.get("tools", {})
         final_model_response = functionCallRes.get("modelResponse") or modelResponse
+        tools = merge_server_side_mcp_into_tools(
+            service_name["anthropic"], final_model_response, functionCallRes.get("tools", {})
+        )
         response = await Response_formatter(final_model_response, service_name["anthropic"], tools, self.type, self.image_data)
         transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
         historyParams = self.prepare_history_params(response, final_model_response, tools, transfer_config)

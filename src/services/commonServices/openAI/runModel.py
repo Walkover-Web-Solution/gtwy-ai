@@ -69,6 +69,7 @@ async def openai_response_stream(configuration, apiKey):
     
     accumulated_output = []
     accumulated_tool_calls = {}
+    emitted_tool_call_ids = set()
     usage = {}
     finish_reason = None
     service_tier = None
@@ -109,17 +110,42 @@ async def openai_response_stream(configuration, apiKey):
                     accumulated_tool_calls[item_id]["name"] = done_name
             elif event_type == "response.output_item.added":
                 item = event.get("item")
-                if isinstance(item, dict) and item.get("type") == "function_call":
-                    item_id = item.get("id", "")
-                    call_id = item.get("call_id", "")
-                    name = item.get("name", "")
-                    if item_id not in accumulated_tool_calls:
-                        accumulated_tool_calls[item_id] = {"name": name, "call_id": call_id, "arguments": ""}
-                    else:
-                        if call_id:
-                            accumulated_tool_calls[item_id]["call_id"] = call_id
-                        if name:
-                            accumulated_tool_calls[item_id]["name"] = name
+                if isinstance(item, dict):
+                    if item.get("type") == "function_call":
+                        item_id = item.get("id", "")
+                        call_id = item.get("call_id", "")
+                        name = item.get("name", "")
+                        if item_id not in accumulated_tool_calls:
+                            accumulated_tool_calls[item_id] = {"name": name, "call_id": call_id, "arguments": ""}
+                        else:
+                            if call_id:
+                                accumulated_tool_calls[item_id]["call_id"] = call_id
+                            if name:
+                                accumulated_tool_calls[item_id]["name"] = name
+                    elif item.get("type") == "mcp_call":
+                        accumulated_output.append(item)
+                        item_id = item.get("id", "")
+                        tool_name = item.get("name") or item.get("server_label") or "mcp_call"
+                        arguments = item.get("arguments") or {}
+                        if not isinstance(arguments, str):
+                            arguments = json.dumps(arguments)
+                        if item_id and item_id not in emitted_tool_call_ids:
+                            emitted_tool_call_ids.add(item_id)
+                            yield {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": item_id,
+                                        "call_id": item_id,
+                                        "type": "function",
+                                        "function": {"name": tool_name, "arguments": arguments},
+                                    }
+                                ],
+                                "usage": None,
+                                "finish_reason": None,
+                                "reasoning": None,
+                                "stream_event_only": True,
+                            }
             elif event_type == "response.output_item.done":
                 item = event.get("item")
                 if isinstance(item, dict):
@@ -133,6 +159,53 @@ async def openai_response_stream(configuration, apiKey):
                         else:
                             accumulated_tool_calls[item_id]["name"] = name
                             accumulated_tool_calls[item_id]["call_id"] = call_id
+                    elif item.get("type") == "mcp_call":
+                        item_id = item.get("id")
+                        for index, existing in enumerate(accumulated_output):
+                            if isinstance(existing, dict) and existing.get("id") == item_id:
+                                accumulated_output[index] = item
+                                break
+                        else:
+                            accumulated_output.append(item)
+                        tool_name = item.get("name") or item.get("server_label") or "mcp_call"
+                        arguments = item.get("arguments") or {}
+                        if not isinstance(arguments, str):
+                            arguments = json.dumps(arguments)
+                        if item_id:
+                            if item_id not in emitted_tool_call_ids:
+                                emitted_tool_call_ids.add(item_id)
+                                yield {
+                                    "content": None,
+                                    "tool_calls": [
+                                        {
+                                            "id": item_id,
+                                            "call_id": item_id,
+                                            "type": "function",
+                                            "function": {"name": tool_name, "arguments": arguments},
+                                        }
+                                    ],
+                                    "usage": None,
+                                    "finish_reason": None,
+                                    "reasoning": None,
+                                    "stream_event_only": True,
+                                }
+                        output = item.get("output")
+                        if output is not None:
+                            yield {
+                                "content": None,
+                                "tool_calls": None,
+                                "tool_results": [
+                                    {
+                                        "name": tool_name,
+                                        "content": output if isinstance(output, str) else json.dumps(output),
+                                        "call_id": item_id or "",
+                                    }
+                                ],
+                                "usage": None,
+                                "finish_reason": None,
+                                "reasoning": None,
+                                "stream_event_only": True,
+                            }
                     else:
                         accumulated_output.append(item)
             elif event_type == "response.completed":
@@ -140,6 +213,9 @@ async def openai_response_stream(configuration, apiKey):
                 usage = resp_data.get("usage", {})
                 finish_reason = resp_data.get("status")
                 service_tier = resp_data.get("service_tier")
+                response_output = resp_data.get("output")
+                if isinstance(response_output, list):
+                    accumulated_output = response_output
 
         tool_calls_list = [
             {"id": k, "call_id": v["call_id"], "type": "function", "function": {"name": v["name"], "arguments": v["arguments"]}}

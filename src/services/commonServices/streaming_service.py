@@ -46,11 +46,17 @@ class StreamingService:
     async def emit_reasoning(self, content: str):
         await self._emit({"event": "reasoning", "content": content})
 
-    async def emit_tool_call(self, name: str, args: dict, call_id: str):
-        await self._emit({"event": "tool_call", "name": name, "args": args, "call_id": call_id})
+    async def emit_tool_call(self, name: str, args: dict, call_id: str, type: str = None):
+        payload = {"event": "tool_call", "name": name, "args": args, "call_id": call_id}
+        if type:
+            payload["type"] = type
+        await self._emit(payload)
 
-    async def emit_tool_result(self, name: str, content: str, call_id: str):
-        await self._emit({"event": "tool_result", "name": name, "content": content, "call_id": call_id})
+    async def emit_tool_result(self, name: str, content: str, call_id: str, type: str = None):
+        payload = {"event": "tool_result", "name": name, "content": content, "call_id": call_id}
+        if type:
+            payload["type"] = type
+        await self._emit(payload)
 
     async def emit_template_response(self, message_id: str, content: dict, metadata: dict | None = None):
         payload = {

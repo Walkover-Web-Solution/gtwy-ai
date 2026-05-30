@@ -37,6 +37,14 @@ from .utils import (
     reasoning_formatter,
     disable_tool_call
 )
+from src.services.utils.mcp_utils import (
+    MCP_NAME_SUFFIX,
+    client_mcp_config,
+    display_mcp_tool_name,
+    extract_server_side_mcp_calls,
+    resolve_mcp_type,
+    server_mcp_config,
+)
 from src.services.utils.maximum_iterations_utils import build_tool_count_key, decrement_tool_count, get_tool_count
 from src.exceptions import ApiCallError
 
@@ -141,7 +149,8 @@ class BaseService:
             configuration["messages"].append({"role": "user", "content": []})
 
         for index, function_response in enumerate(function_responses):
-            tools[function_response["name"]] = function_response["content"]
+            display_tool_name = display_mcp_tool_name(function_response["name"])
+            tools[display_tool_name] = function_response["content"]
 
             match service:
                 case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral':
@@ -248,10 +257,13 @@ class BaseService:
 
         if self.stream_mode and self.streamer:
             for tool_result in func_response_data:
+                tool_result_name = tool_result.get("name", "")
+                is_mcp_result = tool_result_name.endswith(MCP_NAME_SUFFIX)
                 await self.streamer.emit_tool_result(
-                    name=tool_result.get("name", ""),
+                    name=display_mcp_tool_name(tool_result_name),
                     content=tool_result.get("content", ""),
                     call_id=tool_result.get("tool_call_id", ""),
+                    type="mcp" if is_mcp_result else None,
                 )
 
         configuration, tools = self.update_configration(
@@ -353,6 +365,12 @@ class BaseService:
         if not original_message and transfer_agent_config:
             agent_name = transfer_agent_config.get("tool_name", "the agent")
             original_message = f"Query is successfully transferred to agent {agent_name}"
+
+        server_side_mcp = extract_server_side_mcp_calls(self.service, model_response)
+        tools_call_data = list(self.func_tool_call_data or [])
+        if server_side_mcp:
+            tools_call_data.append(server_side_mcp)
+
         return {
             "thread_id": self.thread_id,
             "sub_thread_id": self.sub_thread_id,
@@ -368,7 +386,7 @@ class BaseService:
             "actor": "user",
             "tools": tools,
             "chatbot_message": "",
-            "tools_call_data": self.func_tool_call_data,
+            "tools_call_data": tools_call_data,
             "message_id": self.message_id,
             "llm_urls": (
                 [
@@ -421,6 +439,12 @@ class BaseService:
             if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
 
+            mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
+            mcp_active = bool(mcp_config and mcp_config.get("enabled") and mcp_config.get("servers"))
+            mcp_type = resolve_mcp_type(service, self.model) if mcp_active else None
+            if mcp_active and mcp_type == "client":
+                client_mcp_config(service, configuration, mcp_config, self.tool_id_and_name_mapping)
+
             if configuration.get("tools", ""):
                 if service == service_name["anthropic"]:
                     new_config["tool_choice"] = configuration.get("tool_choice", {"type": "auto"})
@@ -456,6 +480,9 @@ class BaseService:
             # Handle Reasoning config 
             if new_config.get("reasoning", False):
                 reasoning_formatter(service, new_config)
+
+            if mcp_active and mcp_type == "server":
+                server_mcp_config(service, new_config, mcp_config)
 
             if service == service_name['gemini']:
                 from google.genai import types
