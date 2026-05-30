@@ -171,13 +171,17 @@ async def _sync_pending_questions_to_session(plan):
     the question) are left untouched.
     """
     tasks = _get_tasks(plan or {})
-    pending_questions = [
-        t.get("human_query")
-        for t in tasks.values()
-        if t.get("status") == "waiting_for_user"
-        and t.get("human_query")
-        and not t.get("human_response")
-    ]
+    pending_questions = []
+    for t in tasks.values():
+        if t.get("status") != "waiting_for_user" or t.get("human_response"):
+            continue
+        for q in t.get("questions") or []:
+            if isinstance(q, dict):
+                text = q.get("question")
+            else:
+                text = q
+            if text:
+                pending_questions.append(text)
     if not pending_questions:
         return
 

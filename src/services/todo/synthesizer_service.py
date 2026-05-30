@@ -3,7 +3,7 @@ import json
 import uuid
 
 from globals import logger
-from src.services.todo.executor_service import _get_tasks, get_synthesizer_prompt
+from src.services.todo.executor import _get_tasks, get_synthesizer_prompt
 
 
 async def synthesize_results(

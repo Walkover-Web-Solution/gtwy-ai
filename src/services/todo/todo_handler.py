@@ -5,60 +5,66 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from globals import logger
 from src.services.commonServices.streaming_service import StreamingService
-from src.services.todo import executor_service, plan_store
+from src.services.todo import plan_store
+from src.services.todo.executor.orchestrator import execute_plan
+from src.services.todo.executor.ports import resume_task as resume_task_handler
 from src.services.todo.plan_store import _get_tasks, _set_tasks
 from src.services.todo import synthesizer_service
 from src.db_services.metrics_service import publish_plan_history_update
 
 
-def _format_plan_response(plan, message_id, model="", finish_reason="completed", extract_final_result=False):
-    """
-    Wrap plan in the standard ai_middleware_format.py response shape.
-    
-    Args:
-        plan: The plan dict with tasks
-        message_id: Message ID
-        model: Model name
-        finish_reason: Reason for completion
-        extract_final_result: If True and plan is completed, extract only the last task's result
-    """
-    content = plan
-    
-    # If plan is completed and extract_final_result is True, get the last task's result
-    if extract_final_result and plan.get("state") == "completed":
-        tasks = _get_tasks(plan)
-        if tasks:
-            # Find the last completed task (highest task number)
-            completed_tasks = {
-                task_id: task for task_id, task in tasks.items() 
-                if task.get("status") == "completed"
-            }
-            if completed_tasks:
-                # Sort by task_id (assuming task_1, task_2, etc.) to get the last one
-                sorted_task_ids = sorted(completed_tasks.keys(), key=lambda x: int(x.split("_")[1]) if "_" in x else 0)
-                last_task_id = sorted_task_ids[-1]
-                last_task = completed_tasks[last_task_id]
-                
-                # Extract the result - handle both string and dict formats
-                result = last_task.get("result", "")
-                if isinstance(result, str):
-                    try:
-                        # Try to parse if it's a JSON string with a "data" field
-                        parsed_result = json.loads(result)
-                        if isinstance(parsed_result, dict) and "data" in parsed_result:
-                            content = parsed_result["data"]
-                        else:
-                            content = result
-                    except (json.JSONDecodeError, ValueError):
-                        # If not valid JSON, use as-is
-                        content = result
-                else:
-                    content = result
-    
-    # Convert content to JSON string if it's not already a string
-    if not isinstance(content, str):
-        content = json.dumps(content)
-    
+def _extract_last_completed_result(plan):
+    """Return the last completed task's result as a user-facing string, or "".
+
+    Tasks are ordered by their numeric suffix (task_1, task_2, …). If the
+    stored result is a JSON string with a `data` field, unwrap it; otherwise
+    pass the result through verbatim. Returns "" when no completed task
+    exists or the result is empty."""
+    if not plan:
+        return ""
+    tasks = _get_tasks(plan)
+    completed_tasks = {
+        task_id: task for task_id, task in tasks.items()
+        if task.get("status") == "completed"
+    }
+    if not completed_tasks:
+        return ""
+
+    sorted_task_ids = sorted(
+        completed_tasks.keys(),
+        key=lambda x: int(x.split("_")[1]) if "_" in x and x.split("_")[1].isdigit() else 0,
+    )
+    result = completed_tasks[sorted_task_ids[-1]].get("result", "")
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except (json.JSONDecodeError, ValueError):
+            return result
+        if isinstance(parsed, dict) and "data" in parsed:
+            data = parsed["data"]
+            return data if isinstance(data, str) else json.dumps(data)
+        return result
+    return json.dumps(result)
+
+
+def _format_plan_response(plan, message_id, model="", finish_reason="completed", synthesized=None, include_plan=False):
+    """Build the ai_middleware_format `done.accumulated_data` payload.
+
+    By default `content` is a USER-FACING STRING (synthesized answer if
+    present, else the last completed task's result, else ""). The full plan
+    body is intentionally NOT shipped here — the UI already has it from plan
+    creation and applies incremental task events streamed during execution.
+    Pass `include_plan=True` only for the explicit "status" action where the
+    caller is asking for a snapshot of the plan itself."""
+    if include_plan:
+        content = plan if isinstance(plan, str) else json.dumps(plan)
+    elif synthesized:
+        content = synthesized if isinstance(synthesized, str) else json.dumps(synthesized)
+    else:
+        content = _extract_last_completed_result(plan)
+
     return {
         "data": {
             "id": message_id,
@@ -128,13 +134,13 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             await streamer.emit_delta(json.dumps({"event": "execution_started", "state": "executing"}))
             await streamer.emit_execution()
             # Run executor — stream stays open, task events emitted per task
-            main_agent_metrics = await executor_service.execute_plan(
+            main_agent_metrics = await execute_plan(
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             final_finish_reason = _derive_done_finish_reason(final_plan)
             synthesized = ""
-            if final_plan:
+            if final_plan and (final_plan.get("state") == "completed"):
                 synthesized = await synthesizer_service.synthesize_results(
                     bridge_id, bridge_configurations, parsed_data, final_plan, streamer=streamer,
                 )
@@ -143,10 +149,8 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 message_id,
                 model,
                 finish_reason=final_finish_reason,
-                extract_final_result=not synthesized,
+                synthesized=synthesized or None,
             )
-            if synthesized:
-                formatted["data"]["content"] = synthesized
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
@@ -179,6 +183,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                     message_id,
                     model,
                     finish_reason=status_finish_reason,
+                    include_plan=True,
                 ),
             )
 
@@ -188,7 +193,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 await streamer.emit_error("task_id is required for respond action")
                 return
 
-            result = await executor_service.resume_task(
+            result = await resume_task_handler(
                 org_id, bridge_id, thread_id, sub_thread_id,
                 task_id, parsed_data.get("user", ""),
             )
@@ -222,13 +227,13 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             # Resume execution — live events are streamed through the same connection
             plan["state"] = "approved"
             await plan_store.update_plan(plan)
-            main_agent_metrics = await executor_service.execute_plan(
+            main_agent_metrics = await execute_plan(
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             final_finish_reason = _derive_done_finish_reason(final_plan)
             synthesized = ""
-            if final_plan:
+            if final_plan and (final_plan.get("state") == "completed"):
                 synthesized = await synthesizer_service.synthesize_results(
                     bridge_id, bridge_configurations, parsed_data, final_plan, streamer=streamer,
                 )
@@ -237,10 +242,8 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 message_id,
                 model,
                 finish_reason=final_finish_reason,
-                extract_final_result=not synthesized,
+                synthesized=synthesized or None,
             )
-            if synthesized:
-                formatted["data"]["content"] = synthesized
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
@@ -273,11 +276,18 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 await streamer.emit_error(f"Task {task_id} not found")
                 return
 
-            task["status"] = "pending"
-            task["retry"] = 0
-            task["result"] = None
-            task["error"] = None
-            task["is_error"] = False
+            def _reset_task(t):
+                t["status"] = "pending"
+                t["retry"] = 0
+                t["result"] = None
+                t["error"] = None
+                t["is_error"] = False
+
+            _reset_task(task)
+            # Also reset downstream tasks that failed because this task failed
+            for t in tasks.values():
+                if task_id in t.get("dependencies", []) and t.get("status") == "failed":
+                    _reset_task(t)
             _set_tasks(existing_plan, tasks)
             existing_plan["state"] = "approved"
             await plan_store.update_plan(existing_plan)
@@ -285,13 +295,13 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
             # Emit execution event and restart executor
             await streamer.emit_delta(json.dumps({"event": "execution_started", "state": "executing"}))
             await streamer.emit_execution()
-            main_agent_metrics = await executor_service.execute_plan(
+            main_agent_metrics = await execute_plan(
                 org_id, bridge_id, thread_id, sub_thread_id, bridge_configurations, parsed_data, streamer=streamer
             )
             final_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
             final_finish_reason = _derive_done_finish_reason(final_plan)
             synthesized = ""
-            if final_plan:
+            if final_plan and (final_plan.get("state") == "completed"):
                 synthesized = await synthesizer_service.synthesize_results(
                     bridge_id, bridge_configurations, parsed_data, final_plan, streamer=streamer,
                 )
@@ -300,10 +310,8 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 message_id,
                 model,
                 finish_reason=final_finish_reason,
-                extract_final_result=not synthesized,
+                synthesized=synthesized or None,
             )
-            if synthesized:
-                formatted["data"]["content"] = synthesized
             await streamer.emit_done(
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
@@ -330,7 +338,9 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                 usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                 message_id=message_id,
                 finish_reason="stop",
-                accumulated_data=_format_plan_response(existing_plan, message_id, model, finish_reason="cancelled"),
+                accumulated_data=_format_plan_response(
+                    existing_plan, message_id, model, finish_reason="cancelled",
+                ),
             )
 
     except Exception as e:

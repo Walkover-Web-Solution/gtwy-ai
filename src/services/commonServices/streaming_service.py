@@ -86,10 +86,14 @@ class StreamingService:
         await self._emit({"event": "task_reasoning", "task_id": task_id, "content": content})
 
     async def emit_task_tool_call(self, task_id: str, name: str, args: dict, call_id: str):
-        await self._emit({"event": "task_tool_call", "task_id": task_id, "name": name, "args": args, "call_id": call_id})
+        # Plan mode: ship only the tool name to the FE; args stay server-side
+        # (callers may still use them locally for metrics / telemetry).
+        await self._emit({"event": "task_tool_call", "task_id": task_id, "name": name, "call_id": call_id})
 
     async def emit_task_tool_result(self, task_id: str, name: str, content: str, call_id: str):
-        await self._emit({"event": "task_tool_result", "task_id": task_id, "name": name, "content": content, "call_id": call_id})
+        # Plan mode: ship only the tool name to the FE; tool output stays
+        # server-side and is folded into the task result the user actually sees.
+        await self._emit({"event": "task_tool_result", "task_id": task_id, "name": name, "call_id": call_id})
 
     async def emit_planning(self):
         """Emit a planning mode event."""
