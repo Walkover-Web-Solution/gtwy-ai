@@ -354,11 +354,11 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited, environm
                 )
             except Exception as exc:
                 logger.error(f"Error fetching configuration for connected agent {bridge_id_value}: {exc}")
-                return bridge_id_value, None, None, None
+                return bridge_id_value, None, None, None, None
 
             if error:
                 logger.error(f"Skipping connected agent {bridge_id_value} due to error response: {error}")
-                return bridge_id_value, None, None, None
+                return bridge_id_value, None, None, None, None
 
             return bridge_id_value, child_config, child_agent_data, resolved_child_id, env_val
 
