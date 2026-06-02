@@ -24,7 +24,7 @@ async def compare_result(expected, actual, matching_type, response_type):
             response = await call_ai_middleware(
                 str(actual), bridge_ids["compare_result"], variables=({"expected": str(expected)})
             )
-            return response["score"]
+            return response["response"]["score"]
 
 
 async def process_single_testcase_result(testcase_data, model_result, parsed_data):

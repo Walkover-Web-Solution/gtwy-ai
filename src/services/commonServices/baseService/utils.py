@@ -514,9 +514,9 @@ def make_code_mapping_by_service(responses, service):
                 name = tool_call['function']['name']
                 error = False
                 try:
-                    args = json.loads(tool_call["function"]["arguments"])
-                except json.JSONDecodeError:
-                    args = {"error": tool_call["function"]["arguments"]}
+                    args = json.loads(tool_call["function"]["arguments"]) if isinstance(tool_call["function"]["arguments"], str) else (tool_call["function"]["arguments"] or {})
+                except (json.JSONDecodeError, TypeError):
+                    args = {"error": str(tool_call["function"]["arguments"])}
                     error = True
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
@@ -541,9 +541,9 @@ def make_code_mapping_by_service(responses, service):
                 name = tool_call['name']
                 error = False
                 try:
-                    args = json.loads(tool_call["arguments"])
-                except json.JSONDecodeError:
-                    args = {"error": tool_call["arguments"]}
+                    args = json.loads(tool_call["arguments"]) if isinstance(tool_call["arguments"], str) else (tool_call["arguments"] or {})
+                except (json.JSONDecodeError, TypeError):
+                    args = {"error": str(tool_call["arguments"])}
                     error = True
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)

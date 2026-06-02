@@ -26,7 +26,7 @@ async def structured_output_optimizer(request):
             variables=variables,
             thread_id=thread_id,
         )
-        return result
+        return result.get("response")
     except Exception as err:
         logger.error("Error calling function structured_output_optimizer=>", err)
         return None
@@ -67,6 +67,6 @@ async def improve_prompt_optimizer(request):
         variables = body.get("variables")
         user = "improve the prompt"
         result = await call_ai_middleware(user, bridge_id=bridge_ids["improve_prompt_optimizer"], variables=(variables))
-        return result
+        return result.get("response")
     except Exception as err:
         logger.error("Error Calling function prompt optimise", err)

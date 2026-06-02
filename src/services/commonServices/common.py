@@ -419,7 +419,8 @@ async def chat(request_body):
 
             result["response"]["usage"] = params["token_calculator"].get_total_usage()
             execution_failed = not result["success"]
-            original_error = result.get("error", "Unknown error") if execution_failed else None
+            _raw_error = result.get("error", "Unknown error") if execution_failed else None
+            original_error = str(_raw_error) if _raw_error is not None and not isinstance(_raw_error, str) else _raw_error
         except Exception as execution_exception:
             # Handle exceptions during execution
             execution_failed = True

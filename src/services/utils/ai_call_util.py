@@ -13,29 +13,33 @@ def generate_token(payload, accesskey):
 
 
 async def call_ai_middleware(user, bridge_id, variables=None, configuration=None, response_type=None, thread_id=None):
-    request_body = {"user": user, "bridge_id": bridge_id, "variables": variables}
-    if response_type is not None:
-        request_body["response_type"] = response_type
+    try:
+        request_body = {"user": user, "bridge_id": bridge_id, "variables": variables}
+        if response_type is not None:
+            request_body["response_type"] = response_type
 
-    if configuration is not None:
-        request_body["configuration"] = configuration
+        if configuration is not None:
+            request_body["configuration"] = configuration
 
-    if thread_id is not None:
-        request_body["thread_id"] = thread_id
+        if thread_id is not None:
+            request_body["thread_id"] = thread_id
 
-    response, rs_headers = await fetch(
-        "https://api.gtwy.ai/api/v2/model/chat/completion",
-        "POST",
-        {"pauthkey": Config.AI_MIDDLEWARE_PAUTH_KEY, "Content-Type": "application/json", "Accept-Encoding": "gzip"},
-        None,
-        request_body,
-    )
-    if not response.get("success", True):
-        raise Exception(response.get("message", "Unknown error"))
-    result = response.get("response", {}).get("data", {}).get("content", "")
-    if response_type is None:
-        result = json.loads(result)
-    return result
+        response, rs_headers = await fetch(
+            "https://api.gtwy.ai/api/v2/model/chat/completion",
+            "POST",
+            {"pauthkey": Config.AI_MIDDLEWARE_PAUTH_KEY, "Content-Type": "application/json", "Accept-Encoding": "gzip"},
+            None,
+            request_body,
+        )
+        if not response.get("success", True):
+            raise Exception(response.get("message", "Unknown error"))
+        result = response.get("response", {}).get("data", {}).get("content", "")
+        if response_type is None:
+            if isinstance(result, str):
+                result = json.loads(result)
+        return {"status": 1, "response": result}
+    except Exception as e:
+        return {"status": 0, "response": str(e)}
 
 
 async def call_gtwy_agent(args):
@@ -117,9 +121,9 @@ async def call_gtwy_agent(args):
         image_urls = data_section.get("image_urls")
 
         try:
-            parsed_result = json.loads(result) if result else {}
-        except json.JSONDecodeError:
-            parsed_result = {"data": result}
+            parsed_result = json.loads(result) if isinstance(result, str) and result else (result if isinstance(result, dict) else {})
+        except (json.JSONDecodeError, TypeError):
+            parsed_result = {"data": str(result) if result is not None else ""}
 
         # Add image URLs to the result if they exist
         if image_urls:
