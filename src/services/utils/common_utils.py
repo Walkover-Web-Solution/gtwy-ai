@@ -474,16 +474,15 @@ async def handle_pre_tools(parsed_data, custom_config):
             variables = {**parsed_data.get("variables", {})}
             if prompt:
                 variables["prompt"] = prompt
-            try:
-                pre_tool_response = await call_ai_middleware(
-                    user=user_query,
-                    bridge_id=bridge_ids["query_refiner"],
-                    variables=variables,
-                    response_type="text",
-                )
-                optimised_query = pre_tool_response or user_query
-            except Exception as e:
-                pre_tool_response = None
+            pre_tool_response = await call_ai_middleware(
+                user=user_query,
+                bridge_id=bridge_ids["query_refiner"],
+                variables=variables,
+                response_type="text",
+            )
+            if pre_tool_response.get("status") == 1:
+                optimised_query = pre_tool_response.get("response") or user_query
+            else:
                 optimised_query = user_query
             entry = {
                     "id" : uuid.uuid4().hex,

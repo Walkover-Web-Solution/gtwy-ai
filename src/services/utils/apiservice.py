@@ -11,8 +11,9 @@ async def fetch(url, method="GET", headers=None, params=None, json_body=None, im
     ssl_context = ssl.create_default_context(cafile=certifi.where())
 
     async with aiohttp.ClientSession() as session:
+        body = None if method.upper() == "GET" else json_body
         async with session.request(
-            method=method, url=url, headers=headers, params=params, json=json_body, ssl=ssl_context
+            method=method, url=url, headers=headers, params=params, json=body, ssl=ssl_context
         ) as response:
             # Extract the response body and headers
             if response.status >= 300:
