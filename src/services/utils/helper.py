@@ -36,6 +36,7 @@ from ..commonServices.openAI.openai_completion_response import OpenaiCompletion
 from ..commonServices.openAI.openai_embedding_call import OpenaiEmbedding
 from ..commonServices.openAI.openai_response import OpenaiResponse
 from ..commonServices.openRouter.openRouter_call import OpenRouter
+from ..commonServices.neevCloud.neevCloud_call import NeevCloud
 from ..cache_service import make_json_serializable
 
 
@@ -273,6 +274,8 @@ class Helper:
             class_obj = Grok(params)
         elif service == service_name["open_router"]:
             class_obj = OpenRouter(params)
+        elif service == service_name["neev_cloud"]:
+            class_obj = NeevCloud(params)
         elif service == service_name["mistral"]:
             class_obj = Mistral(params)
         elif service == service_name["deepgram"]:

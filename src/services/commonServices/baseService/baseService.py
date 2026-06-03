@@ -25,6 +25,7 @@ from ..openAI.image_model import OpenAIImageModel
 from ..openAI.runModel import openai_completion, openai_response_model, openai_response_stream
 from ..openAI.openai_stream_utils import sanitize_openai_response_item
 from ..openRouter.openRouter_modelrun import openrouter_modelrun, openrouter_stream
+from ..neevCloud.neevCloud_modelrun import neevcloud_modelrun, neevcloud_stream
 from ..streaming_service import StreamingService
 from .utils import (
     build_accumulated_response,
@@ -153,7 +154,7 @@ class BaseService:
             tools[display_tool_name] = function_response["content"]
 
             match service:
-                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral':
+                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud':
                     assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
                     configuration['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]})
                     tool_calls_id = assistant_tool_calls['id']
@@ -333,6 +334,7 @@ class BaseService:
             service_name["grok"],
             service_name["anthropic"],
             service_name["open_router"],
+            service_name["neev_cloud"],
             service_name["mistral"],
             service_name["gemini"],
             service_name["openai_completion"],
@@ -348,6 +350,7 @@ class BaseService:
                     service_name["groq"],
                     service_name["grok"],
                     service_name["open_router"],
+                    service_name["neev_cloud"],
                     service_name["gemini"],
                 ]:
                     _.set_(
@@ -614,6 +617,21 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
+            elif service == service_name["neev_cloud"]:
+                response = await neevcloud_modelrun(
+                    configuration,
+                    apikey,
+                    self.execution_time_logs,
+                    self.bridge_id,
+                    self.timer,
+                    self.message_id,
+                    self.org_id,
+                    self.name,
+                    self.org_name,
+                    service,
+                    count,
+                    self.token_calculator,
+                )
             elif service == service_name["mistral"]:
                 response = await mistral_model_run(
                     configuration,
@@ -712,6 +730,8 @@ class BaseService:
                 generator = grok_stream(configuration, apikey)
             elif service == service_name["open_router"]:
                 generator = openrouter_stream(configuration, apikey)
+            elif service == service_name["neev_cloud"]:
+                generator = neevcloud_stream(configuration, apikey)
             elif service == service_name["mistral"]:
                 generator = mistral_stream(configuration, apikey)
             elif service == service_name["gemini"]:

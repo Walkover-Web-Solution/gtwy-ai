@@ -18,6 +18,7 @@ service_name = {
     "mistral": "mistral",
     "deepgram": "deepgram",
     "openai_completion": "openai_completion",
+    "neev_cloud": "neev_cloud",
 }
 
 bridge_ids = {
@@ -101,6 +102,7 @@ new_agent_service = {
     "gemini": "gemini-2.5-flash",
     "grok": "grok-4-fast",
     "deepgram": "nova-3",
+    "neev_cloud": "gpt-oss-120b",
 }
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
