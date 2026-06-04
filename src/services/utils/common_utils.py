@@ -1636,16 +1636,23 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
                     if result.get("response", {}).get("data") is not None:
                         result["response"]["data"]["fallback"] = True
-                        result["response"]["data"]["firstAttemptError"] = (
+                        firstAttemptError = (
                             f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
                             f"Retried with {parsed_data['service']}/{parsed_data['model']}"
                         )
+                        result["response"]["data"]["firstAttemptError"] = firstAttemptError
+                        if result.get("historyParams") is not None:
+                            result["historyParams"]["firstAttemptError"] = firstAttemptError
 
                     class_obj = fallback_class_obj
                     params = fallback_params
                 except Exception as retry_err:
                     logger.error(
                         f"SSE fallback attempt also failed ({parsed_data['service']}/{parsed_data['model']}): {retry_err}, {tb.format_exc()}"
+                    )
+                    parsed_data["firstAttemptError"] = (
+                        f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
+                        f"Retried with {parsed_data['service']}/{parsed_data['model']}"
                     )
                     if class_obj.streamer:
                         await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
