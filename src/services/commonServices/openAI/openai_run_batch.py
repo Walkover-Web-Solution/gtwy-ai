@@ -82,7 +82,6 @@ async def retrieve_batch_status(batch_id, apiKey):
         try:
             openAI = AsyncOpenAI(api_key=apiKey, http_client=http_client)
             batch = await openAI.batches.retrieve(batch_id)
-            print(batch)
             return batch
         finally:
             await http_client.aclose()

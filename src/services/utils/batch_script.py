@@ -24,7 +24,7 @@ async def repeat_function():
 async def check_batch_status():
     try:
         print("Batch Script running...")
-        batch_ids = await find_in_cache_with_prefix("batch_")
+        batch_ids = await find_in_cache_with_prefix(redis_keys["batch_"])
         if batch_ids is None:
             return
 

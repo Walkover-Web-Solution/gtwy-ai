@@ -837,6 +837,17 @@ async def batch(request_body):
         )
         if "tools" in custom_config:
             del custom_config["tools"]
+
+        # json_schema service conversion (mirrors chat function Step 10)
+        is_valid_schema, schema_error = validate_json_schema_configuration(custom_config)
+        if not is_valid_schema:
+            raise ValueError(schema_error)
+
+        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
+            custom_config["response_type"] = restructure_json_schema(
+                custom_config["response_type"], parsed_data["service"]
+            )
+
         # Step 8: Execute Service Handler
         params = build_service_params_for_batch(parsed_data, custom_config, model_output_config)
         class_obj = await Helper.create_service_handler_for_batch(params, parsed_data["service"])
