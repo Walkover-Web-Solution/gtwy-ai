@@ -90,6 +90,7 @@ async def check_space_issue(response, service=None):
         or service == service_name["open_router"]
         or service == service_name["mistral"]
         or service == service_name["neev_cloud"]
+        or service == service_name["moon_shot"]
     ):
         content = response.get("choices", [{}])[0].get("message", {}).get("content", None)
 
@@ -133,6 +134,8 @@ async def check_space_issue(response, service=None):
             or service == service_name["grok"]
             or service == service_name["open_router"]
             or service == service_name["mistral"]
+            or service == service_name["neev_cloud"]
+            or service == service_name["moon_shot"]
             or service == service_name["gemini"]
         ):
             response["choices"][0]["message"]["content"] = text

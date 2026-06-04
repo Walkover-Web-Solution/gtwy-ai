@@ -19,6 +19,7 @@ service_name = {
     "deepgram": "deepgram",
     "openai_completion": "openai_completion",
     "neev_cloud": "neev_cloud",
+    "moon_shot": "moon_shot",
 }
 
 bridge_ids = {
@@ -103,6 +104,7 @@ new_agent_service = {
     "grok": "grok-4-fast",
     "deepgram": "nova-3",
     "neev_cloud": "gpt-oss-120b",
+    "moon_shot": "kimi-k2.6",
 }
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}

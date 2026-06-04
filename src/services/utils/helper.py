@@ -37,6 +37,7 @@ from ..commonServices.openAI.openai_embedding_call import OpenaiEmbedding
 from ..commonServices.openAI.openai_response import OpenaiResponse
 from ..commonServices.openRouter.openRouter_call import OpenRouter
 from ..commonServices.neevCloud.neevCloud_call import NeevCloud
+from ..commonServices.moonShot.moonShot_call import MoonShot
 from ..cache_service import make_json_serializable
 
 
@@ -276,6 +277,8 @@ class Helper:
             class_obj = OpenRouter(params)
         elif service == service_name["neev_cloud"]:
             class_obj = NeevCloud(params)
+        elif service == service_name["moon_shot"]:
+            class_obj = MoonShot(params)
         elif service == service_name["mistral"]:
             class_obj = Mistral(params)
         elif service == service_name["deepgram"]:
@@ -295,7 +298,7 @@ class Helper:
         if modelObj is None:
             raise AttributeError(f"Model function '{model}' not found in model_configuration.")
 
-        if service in ["openai", "groq", "grok", "openai_completion"]:
+        if service in ["openai", "groq", "grok", "openai_completion", "neev_cloud", "moon_shot"]:
             token_cost["input_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("input_cost") or 0
             token_cost["output_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("output_cost") or 0
             token_cost["cache_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("cached_cost") or 0
