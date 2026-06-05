@@ -117,7 +117,7 @@ ServiceKeys = {
             "max_tokens": "max_tokens",
         },
     },
-    service_name["moon_shot"]: {
+    service_name["moonshot"]: {
         "default": {
             "creativity_level": "temperature",
             "probability_cutoff": "top_p",

@@ -304,7 +304,7 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 "total_tokens": response.get("usage", {}).get("total_tokens", None),
             },
         }
-    elif service == service_name["open_router"] or service == service_name["neev_cloud"] or service == service_name["moon_shot"]:
+    elif service == service_name["open_router"] or service == service_name["neev_cloud"] or service == service_name["moonshot"]:
         return {
             "data": {
                 "id": response.get("id", None),

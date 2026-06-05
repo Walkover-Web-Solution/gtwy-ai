@@ -277,7 +277,7 @@ class Helper:
             class_obj = OpenRouter(params)
         elif service == service_name["neev_cloud"]:
             class_obj = NeevCloud(params)
-        elif service == service_name["moon_shot"]:
+        elif service == service_name["moonshot"]:
             class_obj = MoonShot(params)
         elif service == service_name["mistral"]:
             class_obj = Mistral(params)
@@ -298,7 +298,7 @@ class Helper:
         if modelObj is None:
             raise AttributeError(f"Model function '{model}' not found in model_configuration.")
 
-        if service in ["openai", "groq", "grok", "openai_completion", "neev_cloud", "moon_shot"]:
+        if service in ["openai", "groq", "grok", "openai_completion", "neev_cloud", "moonshot"]:
             token_cost["input_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("input_cost") or 0
             token_cost["output_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("output_cost") or 0
             token_cost["cache_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("cached_cost") or 0

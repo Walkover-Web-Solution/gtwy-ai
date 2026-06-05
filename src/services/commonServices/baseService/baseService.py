@@ -155,9 +155,14 @@ class BaseService:
             tools[display_tool_name] = function_response["content"]
 
             match service:
-                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud' | 'moon_shot':
+                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
                     assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
-                    configuration['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]})
+                    assistant_msg = {'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]}
+                    # Moonshot requires reasoning_content in assistant messages when thinking mode is enabled
+                    reasoning_content = response['choices'][0]['message'].get('reasoning_content')
+                    if reasoning_content is not None:
+                        assistant_msg['reasoning_content'] = reasoning_content
+                    configuration['messages'].append(assistant_msg)
                     tool_calls_id = assistant_tool_calls['id']
                     configuration['messages'].append(mapping_response_data[tool_calls_id])
                 case 'openai':
@@ -336,7 +341,7 @@ class BaseService:
             service_name["anthropic"],
             service_name["open_router"],
             service_name["neev_cloud"],
-            service_name["moon_shot"],
+            service_name["moonshot"],
             service_name["mistral"],
             service_name["gemini"],
             service_name["openai_completion"],
@@ -353,7 +358,7 @@ class BaseService:
                     service_name["grok"],
                     service_name["open_router"],
                     service_name["neev_cloud"],
-                    service_name["moon_shot"],
+                    service_name["moonshot"],
                     service_name["gemini"],
                 ]:
                     _.set_(
@@ -635,7 +640,7 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
-            elif service == service_name["moon_shot"]:
+            elif service == service_name["moonshot"]:
                 response = await moonshot_modelrun(
                     configuration,
                     apikey,
@@ -750,7 +755,7 @@ class BaseService:
                 generator = openrouter_stream(configuration, apikey)
             elif service == service_name["neev_cloud"]:
                 generator = neevcloud_stream(configuration, apikey)
-            elif service == service_name["moon_shot"]:
+            elif service == service_name["moonshot"]:
                 generator = moonshot_stream(configuration, apikey)
             elif service == service_name["mistral"]:
                 generator = mistral_stream(configuration, apikey)
@@ -777,6 +782,7 @@ class BaseService:
             if _stream_exc is not None:
                 raise _stream_exc
             accumulated_content = stream_state["accumulated_content"]
+            accumulated_reasoning = stream_state.get("accumulated_reasoning", [])
             final_tool_calls = stream_state["final_tool_calls"]
             final_usage = stream_state["final_usage"]
             final_finish_reason = stream_state["final_finish_reason"]
@@ -798,6 +804,7 @@ class BaseService:
                 final_finish_reason=final_finish_reason,
                 last_delta=last_delta,
                 service_tier=stream_service_tier,
+                accumulated_reasoning=accumulated_reasoning,
             )
 
             if self.token_calculator:

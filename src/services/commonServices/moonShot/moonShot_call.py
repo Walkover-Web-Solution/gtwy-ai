@@ -34,20 +34,20 @@ class MoonShot(BaseService):
                         for image_url in self.image_data:
                             user_content.append({"type": "image_url", "image_url": {"url": image_url}})
                     self.customConfig["messages"].append({"role": "user", "content": user_content})
-            self.customConfig = self.service_formatter(self.customConfig, service_name["moon_shot"])
+            self.customConfig = self.service_formatter(self.customConfig, service_name["moonshot"])
             if "tools" not in self.customConfig and "parallel_tool_calls" in self.customConfig:
                 del self.customConfig["parallel_tool_calls"]
         if self.stream_mode:
-            moonShotResponse = await self.stream(self.customConfig, self.apikey, service_name["moon_shot"])
+            moonShotResponse = await self.stream(self.customConfig, self.apikey, service_name["moonshot"])
         else:
-            moonShotResponse = await self.chats(self.customConfig, self.apikey, service_name["moon_shot"])
+            moonShotResponse = await self.chats(self.customConfig, self.apikey, service_name["moonshot"])
         modelResponse = moonShotResponse.get("modelResponse", {})
         if not moonShotResponse.get("success"):
             await self.handle_failure(moonShotResponse)
             raise ValueError(moonShotResponse.get("error"))
         if len(modelResponse.get("choices", [])[0].get("message", {}).get("tool_calls", [])) > 0:
             functionCallRes = await self.function_call(
-                self.customConfig, service_name["moon_shot"], moonShotResponse, 0, {}
+                self.customConfig, service_name["moonshot"], moonShotResponse, 0, {}
             )
             if not functionCallRes.get("success"):
                 await self.handle_failure(functionCallRes)
@@ -55,7 +55,7 @@ class MoonShot(BaseService):
             self.update_model_response(modelResponse, functionCallRes)
             tools = functionCallRes.get("tools", {})
         response = await Response_formatter(
-            modelResponse, service_name["moon_shot"], tools, self.type, self.image_data
+            modelResponse, service_name["moonshot"], tools, self.type, self.image_data
         )
         transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
         historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
