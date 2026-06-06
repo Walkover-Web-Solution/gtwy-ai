@@ -27,6 +27,7 @@ from ..commonServices.deepgram.deepgramCall import Deepgram
 from ..commonServices.Google.geminiCall import GeminiHandler
 from ..commonServices.Google.gemini_batch import GeminiBatch
 from ..commonServices.grok.grokCall import Grok
+from ..commonServices.deepseek.deepseekCall import Deepseek
 from ..commonServices.groq.groqCall import Groq
 from ..commonServices.groq.groq_batch import GroqBatch
 from ..commonServices.Mistral.mistral_call import Mistral
@@ -273,6 +274,8 @@ class Helper:
             class_obj = Groq(params)
         elif service == service_name["grok"]:
             class_obj = Grok(params)
+        elif service == service_name["deepseek"]:
+            class_obj = Deepseek(params)
         elif service == service_name["open_router"]:
             class_obj = OpenRouter(params)
         elif service == service_name["neev_cloud"]:
@@ -298,7 +301,7 @@ class Helper:
         if modelObj is None:
             raise AttributeError(f"Model function '{model}' not found in model_configuration.")
 
-        if service in ["openai", "groq", "grok", "openai_completion", "neev_cloud", "moonshot"]:
+        if service in ["openai", "groq", "grok", "deepseek", "openai_completion", "neev_cloud", "moonshot"]:
             token_cost["input_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("input_cost") or 0
             token_cost["output_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("output_cost") or 0
             token_cost["cache_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("cached_cost") or 0

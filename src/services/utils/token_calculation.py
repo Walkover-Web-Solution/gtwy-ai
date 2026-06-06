@@ -52,6 +52,18 @@ class TokenCalculator:
                 usage["cachedTokens"] = 0
                 usage["reasoningTokens"] = (model_response["usage"].get("completion_tokens_details") or {}).get("reasoning_tokens", 0)
 
+            case "deepseek":
+                # DeepSeek token calculation (similar to OpenAI format)
+                usage["inputTokens"] = (model_response.get("usage") or {}).get("prompt_tokens", 0)
+                usage["outputTokens"] = (model_response.get("usage") or {}).get("completion_tokens", 0)
+                usage["totalTokens"] = (model_response.get("usage") or {}).get("total_tokens", 0)
+                # DeepSeek uses prompt_cache_hit_tokens for cached tokens
+                usage["cachedTokens"] = (model_response.get("usage") or {}).get("prompt_cache_hit_tokens", 0)
+                # Extract reasoning_tokens from completion_tokens_details
+                usage["reasoningTokens"] = ((model_response.get("usage") or {}).get("completion_tokens_details") or {}).get(
+                    "reasoning_tokens", 0
+                )
+
             case "grok":
                 # Support both dicts (HTTP response) and SDK objects
                 usage_obj = model_response.get("usage") or {}

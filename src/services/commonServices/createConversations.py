@@ -205,6 +205,39 @@ class ConversationService:
             raise ValueError(e.args[0]) from e
 
     @staticmethod
+    def createDeepseekConversation(conversation, memory, files=None, image_urls=None):
+        try:
+            threads = []
+
+            if memory is not None:
+                threads.append(
+                    {
+                        "role": "user",
+                        "content": "provide the summary of the previous conversation stored in the memory?",
+                    }
+                )
+                threads.append({"role": "assistant", "content": f"Summary of previous conversations :  {_format_memory(memory)}"})
+
+            for message in conversation or []:
+                if message["role"] in ["tools_call", "tool"]:
+                    continue
+
+                content = [{"type": "text", "text": message["content"]}]
+
+                if "urls" in message and isinstance(message["urls"], list):
+                    for url in message["urls"]:
+                        if not url.lower().endswith(".pdf"):
+                            content.append({"type": "image_url", "image_url": {"url": url}})
+
+                threads.append({"role": message["role"], "content": content})
+
+            return {"success": True, "messages": threads}
+        except Exception as e:
+            traceback.print_exc()
+            logger.error(f"create conversation error=>, {str(e)}")
+            raise ValueError(e.args[0]) from e
+
+    @staticmethod
     def createOpenRouterConversation(conversation, memory):
         try:
             threads = []

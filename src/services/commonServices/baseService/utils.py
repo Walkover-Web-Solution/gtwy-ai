@@ -108,7 +108,7 @@ def apply_variable_path_filters(
 
 def validate_tool_call(service, response):
     match service: # TODO: Fix validation process.
-        case  'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
+        case  'openai_completion' | 'groq' | 'grok' | 'deepseek' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
             tool_calls = response.get('choices', [])[0].get('message', {}).get("tool_calls", [])
             return len(tool_calls) > 0 if tool_calls is not None else False
         case "openai":
@@ -148,9 +148,10 @@ def disable_tool_call(configuration: dict, service: str):
         service_name["mistral"],
         service_name["groq"],
         service_name["grok"],
+        service_name["deepseek"],
         service_name["open_router"],
         service_name["neev_cloud"],
-        service_name["moonshot"]
+        service_name["moonshot"],
     ):
         configuration["tool_choice"] = "none"
 
@@ -176,6 +177,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
         or service == service_name["mistral"]
         or service == service_name["neev_cloud"]
         or service == service_name["moonshot"]
+        or service == service_name["deepseek"]
     ):
         data_to_send = [
             {
@@ -278,7 +280,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             }
             for transformed_tool in configuration.get("tools", [])
         ]
-    elif service == service_name["groq"] or service == service_name["grok"]:
+    elif service == service_name["groq"] or service == service_name["grok"] or service == service_name["deepseek"]:
         return [
             {
                 "type": "function",
@@ -329,6 +331,12 @@ def reasoning_formatter(service: str, new_config: dict) -> None:
     elif service == service_name["groq"]:
         effort = new_config["reasoning"].get("effort", "medium")
         new_config["reasoning_effort"] = effort
+        new_config.pop("reasoning", None)
+
+    elif service == service_name["deepseek"]:
+        effort = new_config["reasoning"].get("effort", "medium")
+        new_config["reasoning_effort"] = effort
+        new_config["extra_body"] = {"thinking": {"type": "enabled"}}
         new_config.pop("reasoning", None)
 
     # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
@@ -521,7 +529,7 @@ def make_code_mapping_by_service(responses, service):
     codes_mapping = {}
     function_list = []
     match service:
-        case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
+        case 'openai_completion' | 'groq' | 'grok' | 'deepseek' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
 
             for tool_call in responses['choices'][0]['message']['tool_calls']:
                 name = tool_call['function']['name']
@@ -756,7 +764,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
                                 service_tier=None, accumulated_reasoning=None):
     """Build a complete response dict from streamed data, matching the shape of each service's non-stream response."""
     full_text = "".join(accumulated_content)
-    if service in [service_name["groq"], service_name["grok"],
+    if service in [service_name["groq"], service_name["grok"], service_name["deepseek"], 
                    service_name["open_router"], service_name["mistral"],
                    service_name["neev_cloud"], service_name["moonshot"]]:
         message = {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls or []}
