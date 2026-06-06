@@ -242,7 +242,7 @@ async def chat(request_body):
         await handle_fine_tune_model(parsed_data, custom_config)
 
         # Step 4: Handle Pre-Tools Execution
-        await handle_pre_tools(parsed_data,custom_config)
+        await handle_pre_tools(parsed_data, custom_config, timer)
 
         # Step 5: Manage Threads
         thread_info = await manage_threads(parsed_data)

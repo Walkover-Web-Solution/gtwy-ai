@@ -1,3 +1,4 @@
+from src.db_services import ConfigurationServices
 import asyncio
 import json
 import uuid
@@ -182,6 +183,7 @@ def parse_request_body(request_body):
         "pre_tools": body.get("pre_tools"),
         "version": state.get("version"),
         "fine_tune_model": body.get("configuration", {}).get("fine_tune_model", {}).get("current_model", {}),
+        "execution_time_logs": [],
         "is_rich_text": body.get("configuration", {}).get("is_rich_text", False),
         "actions": body.get("actions", {}),
         "user_reference": body.get("user_reference", ""),
@@ -328,7 +330,7 @@ async def apply_prompt_wrapper(parsed_data):
     if not wrapper_id:
         return
 
-    wrapper_doc = await ConfigurationService.get_prompt_wrapper_by_id(str(wrapper_id), parsed_data.get("org_id"))
+    wrapper_doc = await ConfigurationServices.get_prompt_wrapper_by_id(str(wrapper_id), parsed_data.get("org_id"))
     if not wrapper_doc:
         return
 
@@ -432,15 +434,17 @@ async def handle_fine_tune_model(parsed_data, custom_config):
         custom_config["model"] = parsed_data["fine_tune_model"]
 
 
-async def handle_pre_tools(parsed_data, custom_config):
+async def handle_pre_tools(parsed_data, custom_config, timer):
     pre_tools = parsed_data.get("pre_tools") or []
     if not pre_tools:
         return
 
     pre_tool_response = None
     entry = {}
-
+    execution_time_logs = []
     for tool in pre_tools:
+        timer.start()
+
         tool_type = tool.get("type")
         args = dict(tool.get("args", {}))
         args["user"] = parsed_data["user"]
@@ -544,6 +548,14 @@ async def handle_pre_tools(parsed_data, custom_config):
                     "args":args,
                     "error":pre_tool_response.get("status") != 1,
                 }
+        
+        execution_time_logs.append(
+            {
+                "step": f"PRETOOL: {tool_type}",
+                "time_taken": timer.stop("API chat completion"),
+            }
+        )
+    parsed_data['execution_time_logs'].extend(execution_time_logs)
     parsed_data.setdefault('pre_tool_response_to_save', {})
     parsed_data['pre_tool_response_to_save'].update({entry['id']: entry})
 
@@ -707,7 +719,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
 
         if bridge_type and model_config.get("response_type") and suggest:
-            template_content = (await ConfigurationService.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
+            template_content = (await ConfigurationServices.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
                 "template", ""
             )
             configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
