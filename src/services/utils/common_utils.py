@@ -1,3 +1,4 @@
+from src.db_services import ConfigurationServices
 import asyncio
 import json
 import uuid
@@ -328,7 +329,7 @@ async def apply_prompt_wrapper(parsed_data):
     if not wrapper_id:
         return
 
-    wrapper_doc = await ConfigurationService.get_prompt_wrapper_by_id(str(wrapper_id), parsed_data.get("org_id"))
+    wrapper_doc = await ConfigurationServices.get_prompt_wrapper_by_id(str(wrapper_id), parsed_data.get("org_id"))
     if not wrapper_doc:
         return
 
@@ -707,7 +708,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
 
         if bridge_type and model_config.get("response_type") and suggest:
-            template_content = (await ConfigurationService.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
+            template_content = (await ConfigurationServices.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
                 "template", ""
             )
             configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
