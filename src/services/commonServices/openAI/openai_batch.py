@@ -17,6 +17,7 @@ class OpenaiBatch(BaseService):
     async def batch_execute(self):
         results = []
         message_mappings = []
+        config_mappings = {}
 
         # Validate batch_variables if provided
         batch_variables = self.batch_variables if hasattr(self, "batch_variables") and self.batch_variables else None
@@ -103,6 +104,8 @@ class OpenaiBatch(BaseService):
                 "message": message,
                 "message_id": message_id
             }
+
+            config_mappings[message_id] = body_data
             
             # Add batch_variables to mapping if provided
             if batch_variables is not None:
@@ -152,4 +155,5 @@ class OpenaiBatch(BaseService):
             "message": "Response will be successfully sent to the webhook wihtin 24 hrs.",
             "batch_id": batch_id,
             "messages": message_mappings,
+            "ai_config_mapping": config_mappings,
         }

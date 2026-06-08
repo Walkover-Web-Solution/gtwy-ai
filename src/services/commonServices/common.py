@@ -857,7 +857,7 @@ async def batch(request_body):
             raise ValueError(result)
 
         # Store custom_config as AiConfig for batch conversation logs
-        parsed_data["AiConfig"] = custom_config
+        parsed_data["ai_config_mapping"] = result["ai_config_mapping"]
 
         if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
                 result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
