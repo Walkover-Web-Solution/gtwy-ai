@@ -168,7 +168,7 @@ async def chat(request_body):
         parsed_data = parse_request_body(request_body)
 
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
-        if isinstance(mcp_cfg, dict) and mcp_cfg.get("enabled"):
+        if isinstance(mcp_cfg, dict):
             from src.services.utils.mcp_utils import resolve_mcp_type
             mcp_type = resolve_mcp_type(parsed_data.get("service"), parsed_data.get("model"))
             if mcp_type == "client":

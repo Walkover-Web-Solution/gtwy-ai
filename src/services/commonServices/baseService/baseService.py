@@ -454,7 +454,7 @@ class BaseService:
                 new_config.pop("stream")
 
             mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
-            mcp_active = bool(mcp_config and mcp_config.get("enabled") and mcp_config.get("servers"))
+            mcp_active = bool(mcp_config and mcp_config.get("servers"))
             mcp_type = resolve_mcp_type(service, self.model) if mcp_active else None
             if mcp_active and mcp_type == "client":
                 client_mcp_config(service, configuration, mcp_config, self.tool_id_and_name_mapping)

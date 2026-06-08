@@ -73,8 +73,6 @@ async def prefetch_mcp_tools(mcp_config: dict) -> None:
     """
     if not isinstance(mcp_config, dict):
         return
-    if not mcp_config.get("enabled"):
-        return
     servers = mcp_config.get("servers") or []
     if not servers:
         return
