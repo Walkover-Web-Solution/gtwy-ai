@@ -46,11 +46,12 @@ class TokenCalculator:
                 )
 
             case "groq":
-                usage["inputTokens"] = model_response["usage"]["prompt_tokens"]
-                usage["outputTokens"] = model_response["usage"]["completion_tokens"]
-                usage["totalTokens"] = model_response["usage"]["total_tokens"]
+                _usage = model_response.get("usage") or {}
+                usage["inputTokens"] = _usage.get("prompt_tokens", 0)
+                usage["outputTokens"] = _usage.get("completion_tokens", 0)
+                usage["totalTokens"] = _usage.get("total_tokens", 0)
                 usage["cachedTokens"] = 0
-                usage["reasoningTokens"] = (model_response["usage"].get("completion_tokens_details") or {}).get("reasoning_tokens", 0)
+                usage["reasoningTokens"] = (_usage.get("completion_tokens_details") or {}).get("reasoning_tokens", 0)
 
             case "deepseek":
                 # DeepSeek token calculation (similar to OpenAI format)
@@ -92,24 +93,26 @@ class TokenCalculator:
                 usage["reasoningTokens"] = usage_metadata.get('thoughts_token_count') or usage_metadata.get('thoughtsTokenCount') or 0
 
             case "openai":
-                usage["inputTokens"] = model_response["usage"]["input_tokens"]
-                usage["outputTokens"] = model_response["usage"]["output_tokens"]
-                usage["totalTokens"] = model_response["usage"]["total_tokens"]
-                usage["cachedTokens"] = (model_response["usage"].get("input_tokens_details") or {}).get(
+                _usage = model_response.get("usage") or {}
+                usage["inputTokens"] = _usage.get("input_tokens", 0)
+                usage["outputTokens"] = _usage.get("output_tokens", 0)
+                usage["totalTokens"] = _usage.get("total_tokens", 0)
+                usage["cachedTokens"] = (_usage.get("input_tokens_details") or {}).get(
                     "cached_tokens", 0
                 )
-                usage["reasoningTokens"] = (model_response["usage"].get("output_tokens_details") or {}).get(
+                usage["reasoningTokens"] = (_usage.get("output_tokens_details") or {}).get(
                     "reasoning_tokens", 0
                 )
                 if model_response.get("service_tier"):
                     self.service_tier = model_response["service_tier"]
 
             case "anthropic":
-                usage["inputTokens"] = model_response["usage"]["input_tokens"]
-                usage["outputTokens"] = model_response["usage"].get("output_tokens", 0)
+                _usage = model_response.get("usage") or {}
+                usage["inputTokens"] = _usage.get("input_tokens", 0)
+                usage["outputTokens"] = _usage.get("output_tokens", 0)
                 usage["totalTokens"] = usage["inputTokens"] + usage["outputTokens"]
-                usage["cachingReadTokens"] = model_response["usage"].get("cache_read_input_tokens", 0)
-                usage["cachingCreationInputTokens"] = model_response["usage"].get("cache_creation_input_tokens", 0)
+                usage["cachingReadTokens"] = _usage.get("cache_read_input_tokens", 0)
+                usage["cachingCreationInputTokens"] = _usage.get("cache_creation_input_tokens", 0)
 
             case "deepgram":
                 metadata = model_response.get("metadata", {}) or {}

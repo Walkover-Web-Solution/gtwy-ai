@@ -1,6 +1,10 @@
+from src.configs.service_registry import has_openai_choices_shape
+
+
 def tool_choice_function_name_formatter(service, configuration, toolchoice, found_choice):  # changes
     match service:
-        case "groq" | "grok" | "deepseek" | "open_router" | "gemini" | "openai_completion" | "mistral" | "neev_cloud" | "moonshot":
+        # openai_chat services + gemini: all pass tool_choice through unchanged
+        case s if has_openai_choices_shape(s) or s == "gemini":
             configuration["tool_choice"] = found_choice if found_choice is not None else toolchoice
             return configuration["tool_choice"]
         case "openai":

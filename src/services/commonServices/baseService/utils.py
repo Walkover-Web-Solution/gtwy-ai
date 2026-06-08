@@ -10,6 +10,7 @@ from google.genai import types
 from globals import *
 from globals import logger, traceback
 from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name
+from src.configs.service_registry import has_openai_choices_shape, uses_string_tool_choice
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
@@ -108,7 +109,7 @@ def apply_variable_path_filters(
 
 def validate_tool_call(service, response):
     match service: # TODO: Fix validation process.
-        case  'openai_completion' | 'groq' | 'grok' | 'deepseek' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
+        case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
             tool_calls = response.get('choices', [])[0].get('message', {}).get("tool_calls", [])
             return len(tool_calls) > 0 if tool_calls is not None else False
         case "openai":
@@ -142,17 +143,7 @@ async def axios_work(data, function_payload):
 
 
 def disable_tool_call(configuration: dict, service: str):
-    if service in (
-        service_name["openai"],
-        service_name["openai_completion"],
-        service_name["mistral"],
-        service_name["groq"],
-        service_name["grok"],
-        service_name["deepseek"],
-        service_name["open_router"],
-        service_name["neev_cloud"],
-        service_name["moonshot"],
-    ):
+    if uses_string_tool_choice(service):
         configuration["tool_choice"] = "none"
 
     elif service == service_name["gemini"]:
@@ -171,14 +162,10 @@ def disable_tool_call(configuration: dict, service: str):
         configuration["tool_choice"] = {"type": "none"}
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
-    if (
-        service == service_name["openai_completion"]
-        or service == service_name["open_router"]
-        or service == service_name["mistral"]
-        or service == service_name["neev_cloud"]
-        or service == service_name["moonshot"]
-        or service == service_name["deepseek"]
-    ):
+    if has_openai_choices_shape(service):
+        # All openai_chat services share the function-nested tool schema
+        # (openai_completion, open_router, mistral, neev_cloud, moonshot,
+        # deepseek, groq, grok). openai (flat) / gemini / anthropic differ below.
         data_to_send = [
             {
                 "type": "function",
@@ -276,30 +263,6 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
                         )
                     ),
                     "required": transformed_tool.get("required"),
-                },
-            }
-            for transformed_tool in configuration.get("tools", [])
-        ]
-    elif service == service_name["groq"] or service == service_name["grok"] or service == service_name["deepseek"]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": transformed_tool["name"],
-                    "description": transformed_tool["description"],
-                    "parameters": {
-                        "type": "object",
-                        "properties": clean_json(
-                            apply_variable_path_filters(
-                                transformed_tool.get("properties", {}),
-                                variables=variables,
-                                variables_path=variables_path,
-                                function_name=transformed_tool["name"],
-                                parentValue={"required": transformed_tool.get("required", [])},
-                            )
-                        ),
-                        "required": transformed_tool.get("required"),
-                    },
                 },
             }
             for transformed_tool in configuration.get("tools", [])
@@ -529,7 +492,7 @@ def make_code_mapping_by_service(responses, service):
     codes_mapping = {}
     function_list = []
     match service:
-        case 'openai_completion' | 'groq' | 'grok' | 'deepseek' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
+        case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
 
             for tool_call in responses['choices'][0]['message']['tool_calls']:
                 name = tool_call['function']['name']

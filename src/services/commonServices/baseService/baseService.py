@@ -8,6 +8,7 @@ import pydash as _
 from config import Config
 from globals import logger
 from src.configs.serviceKeys import ServiceKeys
+from src.configs.service_registry import has_openai_choices_shape, supports_tool_calls, uses_openai_sdk
 
 from ....configs.constant import service_name
 from ....db_services import metrics_service
@@ -19,15 +20,12 @@ from ..Google.gemini_image_model import gemini_image_model
 from ..Google.gemini_modelrun import gemini_modelrun, gemini_modelrun_stream
 from ..Google.gemini_video_model import gemini_video_model
 from ..grok.grokModelRun import grok_runmodel, grok_stream
-from ..deepseek.deepseekModelRun import deepseek_runmodel, deepseek_stream
 from ..groq.groqModelRun import groq_runmodel, groq_stream
 from ..Mistral.mistral_model_run import mistral_model_run, mistral_stream
 from ..openAI.image_model import OpenAIImageModel
 from ..openAI.runModel import openai_completion, openai_response_model, openai_response_stream
 from ..openAI.openai_stream_utils import sanitize_openai_response_item
-from ..openRouter.openRouter_modelrun import openrouter_modelrun, openrouter_stream
-from ..neevCloud.neevCloud_modelrun import neevcloud_modelrun, neevcloud_stream
-from ..moonShot.moonShot_modelrun import moonshot_modelrun, moonshot_stream
+from ..openaiCompatible.openai_compatible_modelrun import openai_compatible_modelrun, openai_compatible_stream
 from ..streaming_service import StreamingService
 from .utils import (
     build_accumulated_response,
@@ -156,7 +154,7 @@ class BaseService:
             tools[display_tool_name] = function_response["content"]
 
             match service:
-                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot' | 'deepseek':
+                case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
                     assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
                     assistant_msg = {'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]}
                     # Moonshot requires reasoning_content in assistant messages when thinking mode is enabled
@@ -335,19 +333,7 @@ class BaseService:
         if functionCallRes is None:
             functionCallRes = {}
         funcModelResponse = functionCallRes.get("modelResponse", {})
-        if self.service in [
-            service_name["openai"],
-            service_name["groq"],
-            service_name["grok"],
-            service_name["deepseek"],
-            service_name["anthropic"],
-            service_name["open_router"],
-            service_name["neev_cloud"],
-            service_name["moonshot"],
-            service_name["mistral"],
-            service_name["gemini"],
-            service_name["openai_completion"],
-        ]:
+        if supports_tool_calls(self.service):
             if funcModelResponse and self.service != service_name["openai"]:
                 _.set_(
                     model_response,
@@ -614,53 +600,10 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
-            elif service == service_name["deepseek"]:
-                response = await deepseek_runmodel(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
-                )
-            elif service == service_name["open_router"]:
-                response = await openrouter_modelrun(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
-                )
-            elif service == service_name["neev_cloud"]:
-                response = await neevcloud_modelrun(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
-                )
-            elif service == service_name["moonshot"]:
-                response = await moonshot_modelrun(
+            elif uses_openai_sdk(service):
+                # open_router / neev_cloud / moonshot (+ any future openai_sdk service)
+                # share one AsyncOpenAI runner; base_url + flags come from the registry.
+                response = await openai_compatible_modelrun(
                     configuration,
                     apikey,
                     self.execution_time_logs,
@@ -770,14 +713,9 @@ class BaseService:
                 generator = groq_stream(configuration, apikey)
             elif service == service_name["grok"]:
                 generator = grok_stream(configuration, apikey)
-            elif service == service_name["deepseek"]:
-                generator = deepseek_stream(configuration, apikey)
-            elif service == service_name["open_router"]:
-                generator = openrouter_stream(configuration, apikey)
-            elif service == service_name["neev_cloud"]:
-                generator = neevcloud_stream(configuration, apikey)
-            elif service == service_name["moonshot"]:
-                generator = moonshot_stream(configuration, apikey)
+            elif uses_openai_sdk(service):
+                # open_router / neev_cloud / moonshot (+ any future openai_sdk service)
+                generator = openai_compatible_stream(configuration, apikey, service)
             elif service == service_name["mistral"]:
                 generator = mistral_stream(configuration, apikey)
             elif service == service_name["gemini"]:
@@ -812,6 +750,26 @@ class BaseService:
 
             if error_in_stream:
                 raise ApiCallError(error_in_stream, service=service)
+
+            # An incomplete stream (e.g. the provider closed the connection before
+            # sending its completion/usage event) yields nothing at all. Treat it as
+            # a failure instead of returning an empty "success" response.
+            if (
+                not accumulated_content
+                and not accumulated_reasoning
+                and not final_tool_calls
+                and not final_finish_reason
+                and not final_usage
+            ):
+                logger.error(
+                    f"{service} stream returned no data — incomplete stream. last_delta keys="
+                    f"{list(last_delta.keys()) if isinstance(last_delta, dict) else type(last_delta).__name__}, "
+                    f"last_delta={str(last_delta)[:500]}"
+                )
+                raise ApiCallError(
+                    f"{service} stream returned no data (incomplete stream — no completion event received)",
+                    service=service,
+                )
 
             stream_service_tier = stream_state.get("service_tier")
 

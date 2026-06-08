@@ -1,16 +1,26 @@
-from src.configs.constant import service_name
+from src.configs.service_registry import prompt_role
 from src.services.utils.ai_middleware_format import Response_formatter
 
 from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService
 
 
-class OpenRouter(BaseService):
+class OpenAICompatibleHandler(BaseService):
+    """Single handler for OpenAI-Chat-Completions-compatible services that use the
+    generic AsyncOpenAI runner (open_router, neev_cloud, moonshot, + future ones).
+
+    Behavior-identical to the former per-service call classes; the only
+    per-service variation is the system-prompt role (``prompt_role`` from the
+    registry: "system" by default, "developer" for open_router).
+    """
+
     async def execute(self):
         historyParams = {}
         tools = {}
         functionCallRes = {}
-        conversation = ConversationService.createOpenRouterConversation(
+        service = self.service
+        role = prompt_role(service)
+        conversation = ConversationService.createOpenAICompatibleConversation(
             self.configuration.get("conversation"), self.memory
         ).get("messages", [])
         if self.reasoning_model:
@@ -20,13 +30,13 @@ class OpenRouter(BaseService):
         else:
             if not self.image_data:
                 self.customConfig["messages"] = (
-                    [{"role": "developer", "content": self.configuration["prompt"]}]
+                    [{"role": role, "content": self.configuration["prompt"]}]
                     + conversation
                     + ([{"role": "user", "content": self.user}] if self.user else [])
                 )
             else:
                 self.customConfig["messages"] = [
-                    {"role": "developer", "content": self.configuration["prompt"]}
+                    {"role": role, "content": self.configuration["prompt"]}
                 ] + conversation
                 if self.user:
                     user_content = [{"type": "text", "text": self.user}]
@@ -34,20 +44,20 @@ class OpenRouter(BaseService):
                         for image_url in self.image_data:
                             user_content.append({"type": "image_url", "image_url": {"url": image_url}})
                     self.customConfig["messages"].append({"role": "user", "content": user_content})
-            self.customConfig = self.service_formatter(self.customConfig, service_name["open_router"])
+            self.customConfig = self.service_formatter(self.customConfig, service)
             if "tools" not in self.customConfig and "parallel_tool_calls" in self.customConfig:
                 del self.customConfig["parallel_tool_calls"]
         if self.stream_mode:
-            openRouterResponse = await self.stream(self.customConfig, self.apikey, service_name["open_router"])
+            providerResponse = await self.stream(self.customConfig, self.apikey, service)
         else:
-            openRouterResponse = await self.chats(self.customConfig, self.apikey, service_name["open_router"])
-        modelResponse = openRouterResponse.get("modelResponse", {})
-        if not openRouterResponse.get("success"):
-            await self.handle_failure(openRouterResponse)
-            raise ValueError(openRouterResponse.get("error"))
+            providerResponse = await self.chats(self.customConfig, self.apikey, service)
+        modelResponse = providerResponse.get("modelResponse", {})
+        if not providerResponse.get("success"):
+            await self.handle_failure(providerResponse)
+            raise ValueError(providerResponse.get("error"))
         if len(modelResponse.get("choices", [])[0].get("message", {}).get("tool_calls", [])) > 0:
             functionCallRes = await self.function_call(
-                self.customConfig, service_name["open_router"], openRouterResponse, 0, {}
+                self.customConfig, service, providerResponse, 0, {}
             )
             if not functionCallRes.get("success"):
                 await self.handle_failure(functionCallRes)
@@ -55,11 +65,10 @@ class OpenRouter(BaseService):
             self.update_model_response(modelResponse, functionCallRes)
             tools = functionCallRes.get("tools", {})
         response = await Response_formatter(
-            modelResponse, service_name["open_router"], tools, self.type, self.image_data
+            modelResponse, service, tools, self.type, self.image_data
         )
         transfer_config = functionCallRes.get("transfer_agent_config") if functionCallRes else None
         historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
-        # Add transfer_agent_config to return if transfer was detected
         result = {"success": True, "modelResponse": modelResponse, "historyParams": historyParams, "response": response}
         if functionCallRes.get("transfer_agent_config"):
             result["transfer_agent_config"] = functionCallRes["transfer_agent_config"]

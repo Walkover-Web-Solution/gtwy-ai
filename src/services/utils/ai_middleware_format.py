@@ -1,26 +1,46 @@
 import json
 import uuid
 
-from config import Config
 from src.configs.constant import service_name
-from src.services.utils.apiservice import fetch
+from src.configs.service_registry import has_openai_choices_shape
 from src.services.utils.batch_script_utils import get_batch_result_data
+
+# Per-service response formatters. Each service owns all of its response variants
+# (chat / batch / image / video / embedding) in its own file; the plain
+# OpenAI-chat services share one formatter.
+from src.services.utils.formatters.anthropic_formatter import format_anthropic
+from src.services.utils.formatters.finish_reason import finish_reason_mapping  # re-exported for backward compat
+from src.services.utils.formatters.deepgram_formatter import format_deepgram
+from src.services.utils.formatters.deepseek_formatter import format_deepseek
+from src.services.utils.formatters.gemini_formatter import format_gemini
+from src.services.utils.formatters.grok_formatter import format_grok
+from src.services.utils.formatters.groq_formatter import format_groq
+from src.services.utils.formatters.openai_compatible_formatter import format_openai_compatible
+from src.services.utils.formatters.openai_formatter import format_openai
+
+__all__ = ["Response_formatter", "Batch_Response_formatter", "process_batch_results", "finish_reason_mapping"]
 
 
 async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False, isCache=False):
+    """Normalize a provider response into the AI-middleware format.
+
+    Thin dispatcher: routes by service to the per-service formatter, each of
+    which handles that service's own variants (chat / batch / image / video /
+    embedding). See src/services/utils/formatters/.
+    """
     if isCache:
-        return  {
+        return {
             "data": {
-            "id": f"cache_{uuid.uuid4().hex}",
-            "content": response,
-            "model": None,
-            "role": "assistant",
-            "tools_data": {},
-            "images": None,
+                "id": f"cache_{uuid.uuid4().hex}",
+                "content": response,
+                "model": None,
+                "role": "assistant",
+                "tools_data": {},
+                "images": None,
                 "annotations": None,
                 "fallback": False,
                 "firstAttemptError": "",
-                },
+            },
             "usage": {
                 "input_tokens": 0,
                 "output_tokens": 0,
@@ -38,415 +58,24 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                     tools_data[key] = json.loads(value)
                 except json.JSONDecodeError:
                     pass
-    if service == "gemini" and isBatch:
-        # Gemini batch responses have a different structure
-        candidates = response.get("candidates", [{}])
-        content_parts = candidates[0].get("content", {}).get("parts", [{}]) if candidates else [{}]
 
-        return {
-            "data": {
-                "id": response.get("responseId", None),  # Use the key from batch response as ID
-                "content": content_parts[0].get("text", None) if content_parts else None,
-                "model": response.get("modelVersion", None),
-                "role": candidates[0].get("content", {}).get("role", "model") if candidates else "model",
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": None,
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(candidates[0].get("finishReason", "").lower() if candidates else ""),
-            },
-            "usage": {
-                "input_tokens": response.get("usageMetadata", {}).get("promptTokenCount", 0),
-                "output_tokens": response.get("usageMetadata", {}).get("candidatesTokenCount", 0),
-                "total_tokens": response.get("usageMetadata", {}).get("totalTokenCount", 0),
-                "cached_tokens": response.get("usageMetadata", {}).get("cachedContentTokenCount", 0),
-                "reasoning_tokens": response.get("usageMetadata", {}).get("thoughtsTokenCount", 0)
-            },
-        }
-    elif service == "anthropic" and isBatch:
-        # Anthropic batch responses follow standard Anthropic message format
-        content_blocks = response.get("content", [])
-        text_content = next((block.get("text") for block in content_blocks if block.get("type") == "text"), None)
-
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": text_content,
-                "model": response.get("model", None),
-                "role": response.get("role", "assistant"),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": None,
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("stop_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("input_tokens", 0),
-                "output_tokens": response.get("usage", {}).get("output_tokens", 0),
-                "total_tokens": (
-                    response.get("usage", {}).get("input_tokens", 0) + response.get("usage", {}).get("output_tokens", 0)
-                ),
-                "cache_read_input_tokens": response.get("usage", {}).get("cache_read_input_tokens", 0),
-                "cache_creation_input_tokens": response.get("usage", {}).get("cache_creation_input_tokens", 0),
-            },
-        }
-    elif service == service_name["openai"] and (type != "image" and type != "embedding"):
-        generated_image_urls = [
-            {
-                "revised_prompt": item.get("revised_prompt"),
-                "image_url": item.get("image_url") or item.get("permanent_url") or item.get("url"),
-                "permanent_url": item.get("permanent_url") or item.get("image_url") or item.get("url"),
-            }
-            for item in response.get("output", [])
-            if isinstance(item, dict)
-            and item.get("type") == "image_generation_call"
-            and (item.get("image_url") or item.get("permanent_url") or item.get("url"))
-        ]
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "image_urls": generated_image_urls,
-                "content": (
-                    # Check if any item in output is a function call
-                    next(
-                        (
-                            f"Function call: {item.get('name', 'unknown')} with arguments: {item.get('arguments', '')}"
-                            for item in response.get("output", [])
-                            if item.get("type") == "function_call"
-                        ),
-                        None,
-                    )
-                    if any(item.get("type") == "function_call" for item in response.get("output", []))
-                    # Try to get content from multiple types with fallback
-                    else (
-                        next(
-                            (
-                                (item.get("content") or [{}])[0].get("text", None)
-                                for item in response.get("output", [])
-                                if item.get("type") == "message"
-                                and (item.get("content") or [{}])[0].get("text", None) is not None
-                            ),
-                            None,
-                        )
-                        or next(
-                            (
-                                (item.get("content") or [{}])[0].get("text", None)
-                                for item in response.get("output", [])
-                                if item.get("type") == "output_text"
-                                and (item.get("content") or [{}])[0].get("text", None) is not None
-                            ),
-                            None,
-                        )
-                    )
-                ),
-                "reasoning": next(
-                    (
-                        " ".join(s.get("text", "") for s in (item.get("summary") or []) if s.get("type") == "summary_text").strip() or None
-                        for item in response.get("output", [])
-                        if item.get("type") == "reasoning"
-                    ),
-                    None,
-                ),
-                "model": response.get("model", None),
-                "role": "assistant",
-                "finish_reason": finish_reason_mapping(response.get("status", ""))
-                if response.get("status", None) == "in_progress" or response.get("status", None) == "completed"
-                else finish_reason_mapping(response.get("incomplete_details", {}).get("reason", None)),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": ((response.get("output") or [{}])[0].get("content") or [{}])[0].get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("input_tokens", None),
-                "output_tokens": response.get("usage", {}).get("output_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": response.get("usage", {}).get("input_tokens_details", {}).get('cached_tokens', None)
-            }
-        }                    
-    elif service == service_name['gemini'] and (type !='image' and type != 'embedding' and type != 'video'):
-        candidates = response.get('candidates', [{}])
-        content = candidates[0].get('content', {}) if candidates else {}
-        parts = content.get('parts', [])
-        return {
-            "data" : {
-                "id" : response.get("response_id", None),
-                "content" : next((p.get("text") for p in parts if not p.get("thought")), None),
-                "reasoning": next((p.get("text") for p in parts if p.get("thought")), None),
-                "model" : response.get("model_version", None),
-                "role" : "assistant",
-                "tools_data": tools_data or {},
-                "images" : images,
-                "annotations" : None,
-                "fallback" : response.get('fallback') or False,
-                "firstAttemptError" : response.get('firstAttemptError') or '',
-                "finish_reason": finish_reason_mapping(candidates[0].get("finish_reason").value.lower() if candidates and candidates[0].get("finish_reason") else "")
-            },
-            "usage" : {
-                "input_tokens" : response.get("usage_metadata", {}).get("prompt_token_count", None),
-                "output_tokens" : response.get("usage_metadata", {}).get("candidates_token_count", None),
-                "total_tokens" : response.get("usage_metadata", {}).get("total_token_count", None),
-                "thoughts_token": response.get("usage_metadata", {}).get("thoughts_token_count", None),
-                "input_token_details": response.get("usage_metadata", {}).get("prompt_tokens_details", None),
-                "cached_tokens": response.get("usage_metadata", {}).get("cached_content_token_count", None),
-                "cache_tokens_details": response.get("usage_metadata", {}).get("cache_tokens_details", None)
-            }
-        }
-    elif service == service_name["openai"] and type == "embedding":
-        return {"data": {"embedding": response.get("data")[0].get("embedding")}}
-    elif service == service_name["gemini"] and type == "image":
-        data_items = response.get("data", [])
-        image_urls = []
-        for item in data_items:
-            image_urls.append({
-                "image_url": item.get("url"),
-                "permanent_url": item.get("url")
-            })
-        
-        return {
-            "data": {
-                "revised_prompt": response.get("text_content", []),
-                "image_urls": image_urls,
-            },
-            "usage": response.get("usage_metadata", {})
-        }
-    elif service == service_name["gemini"] and type == "video":
-        return {
-            "data": {
-                "content": response.get("data")[0].get("text_content"),
-                "file_data": response.get("data")[0].get("file_reference"),
-            }
-        }
+    if service == service_name["gemini"]:
+        return format_gemini(response, tools_data, images, type, isBatch)
+    elif service == service_name["anthropic"]:
+        return format_anthropic(response, tools_data, images, isBatch)
     elif service == service_name["openai"]:
-        image_urls = []
-        for image_data in response.get("data", []):
-            # image_url and permanent_url are set by image_model (GCP URL); fallback to url for both
-            gcp_url = image_data.get("image_url") or image_data.get("permanent_url") or image_data.get("url")
-            image_urls.append(
-                {
-                    "revised_prompt": image_data.get("revised_prompt"),
-                    "image_url": gcp_url,
-                    "permanent_url": gcp_url,
-                }
-            )
-        return {
-            "data": {"image_urls": image_urls},
-            "usage": response.get("usage", {})
-        }
-    
-    elif service == service_name['anthropic']:
-        content_blocks = response.get("content", [])
-        text_content = next((b.get("text") for b in content_blocks if b.get("type") == "text"), None)
-        thinking_content = next((b.get("thinking") for b in content_blocks if b.get("type") == "thinking"), None)
-        return {
-            "data" : {
-                "id" : response.get("id", None),
-                "content" : text_content,
-                "reasoning": thinking_content,
-                "model" : response.get("model", None),
-                "role" : response.get("role", None),
-                "tools_data": tools_data or {},
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("stop_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("input_tokens", None),
-                "output_tokens": response.get("usage", {}).get("output_tokens", None),
-                "cache_read_input_tokens": response.get("usage", {}).get("cache_read_input_tokens", None),
-                "cache_creation_input_tokens": response.get("usage", {}).get("cache_creation_input_tokens", None),
-                "total_tokens": (
-                    response.get("usage", {}).get("input_tokens", 0) + response.get("usage", {}).get("output_tokens", 0)
-                ),
-            },
-        }
+        return format_openai(response, tools_data, images, type)
     elif service == service_name["groq"]:
-        message = response.get("choices", [{}])[0].get("message", {})
-        usage = response.get("usage", {})
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": message.get("content", None),
-                "reasoning": message.get("reasoning", None),
-                "model": response.get("model", None),
-                "role": message.get("role", None),
-                "tools_data": tools_data or {},
-                "fallback": response.get("fallback") or False,
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": usage.get("prompt_tokens", None),
-                "output_tokens": usage.get("completion_tokens", None),
-                "total_tokens": usage.get("total_tokens", None),
-                "reasoning_tokens": usage.get("completion_tokens_details", {}).get("reasoning_tokens", None),
-            },
-        }
+        return format_groq(response, tools_data, images)
     elif service == service_name["deepseek"]:
-        message = response.get("choices", [{}])[0].get("message", {})
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": message.get("content", None),
-                "reasoning": message.get("reasoning_content", None),
-                "model": response.get("model", None),
-                "role": message.get("role", None),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": message.get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "reasoning_tokens": (response.get("usage", {}).get("completion_tokens_details") or {}).get(
-                    "reasoning_tokens", None
-                ),
-            },
-        }
-
+        return format_deepseek(response, tools_data, images)
     elif service == service_name["grok"]:
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
-                "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-            },
-        }
-    elif service == service_name["open_router"] or service == service_name["neev_cloud"] or service == service_name["moonshot"]:
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
-                "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": (response.get("usage", {}).get("prompt_tokens_details", {}) or {}).get(
-                    "cached_tokens"
-                ),
-            },
-        }
-    elif service == service_name["openai_completion"]:
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
-                "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": (response.get("usage", {}).get("prompt_tokens_details", {}) or {}).get(
-                    "cached_tokens"
-                ),
-            },
-        }
+        return format_grok(response, tools_data, images)
+    elif has_openai_choices_shape(service):
+        # open_router / neev_cloud / moonshot / openai_completion / mistral (+ future)
+        return format_openai_compatible(response, tools_data, images)
     elif service == service_name["deepgram"]:
-        metadata = response.get("metadata", {}) or {}
-        results = response.get("results", {}) or {}
-        channels = results.get("channels", [])
-        alternatives = channels[0].get("alternatives", []) if channels else []
-        transcript = (alternatives[0].get("transcript") if alternatives else None) or ""
-
-        model_id = (metadata.get("models") or [None])[0]
-        model_info = (metadata.get("model_info") or {}).get(model_id, {}) if model_id else {}
-        model_label = model_info.get("name") or model_id
-
-        return {
-            "data": {
-                "id": metadata.get("request_id", None),
-                "content": transcript,
-                "model": model_label,
-                "role": "assistant",
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": None,
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping("stop"),
-            },
-            "usage": {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "cached_tokens": 0,
-                "audio_duration": metadata.get("duration", 0),
-            },
-        }
-    elif service == service_name["mistral"]:
-        return {
-            "data": {
-                "id": response.get("id", None),
-                "content": response.get("choices", [{}])[0].get("message", {}).get("content", None),
-                "model": response.get("model", None),
-                "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
-                "tools_data": tools_data or {},
-                "images": images,
-                "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
-                "fallback": response.get("fallback") or False,
-                "firstAttemptError": response.get("firstAttemptError") or "",
-                "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
-            },
-            "usage": {
-                "input_tokens": response.get("usage", {}).get("prompt_tokens", None),
-                "output_tokens": response.get("usage", {}).get("completion_tokens", None),
-                "total_tokens": response.get("usage", {}).get("total_tokens", None),
-                "cached_tokens": (response.get("usage", {}).get("prompt_tokens_details", {}) or {}).get(
-                    "cached_tokens"
-                ),
-            },
-        }
-
-def finish_reason_mapping(finish_reason):
-    finish_reason_mapping = {
-        # Completed / natural stop
-        "stop": "completed",  # openai #open_router #gemini
-        "end_turn": "completed",  # anthropic
-        "completed": "completed",  # openai_response
-        # Truncation due to token limits
-        "length": "truncated",  # openai #open_router #gemini
-        "max_tokens": "truncated",  # anthropic
-        "max_output_tokens": "truncated",  # openai_response
-        # Tool / function invocation
-        "tool_calls": "tool_call",  # openai #gemini
-        "tool_use": "tool_call",  # anthropic
-    }
-    return finish_reason_mapping.get(finish_reason, "other")
+        return format_deepgram(response, tools_data, images)
 
 
 async def Batch_Response_formatter(

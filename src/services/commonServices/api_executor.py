@@ -2,6 +2,7 @@ import asyncio
 import copy
 import traceback
 from src.configs.constant import service_name
+from src.configs.service_registry import has_openai_choices_shape
 from src.services.commonServices.baseService.utils import serialize_config
 from src.exceptions import ApiCallError
 
@@ -83,16 +84,7 @@ async def execute_api_call(
 
 async def check_space_issue(response, service=None):
     content = None
-    if (
-        service == service_name["openai_completion"]
-        or service == service_name["groq"]
-        or service == service_name["grok"]
-        or service == service_name["deepseek"]
-        or service == service_name["open_router"]
-        or service == service_name["mistral"]
-        or service == service_name["neev_cloud"]
-        or service == service_name["moonshot"]
-    ):
+    if has_openai_choices_shape(service):
         content = response.get("choices", [{}])[0].get("message", {}).get("content", None)
 
     elif service == service_name["gemini"]:
@@ -129,17 +121,7 @@ async def check_space_issue(response, service=None):
     if parsed_data == "" and content:
         response["alert_flag"] = True
         text = "AI is Hallucinating and sending '\n' please check your prompt and configurations once"
-        if (
-            service == service_name["openai_completion"]
-            or service == service_name["groq"]
-            or service == service_name["grok"]
-            or service == service_name["deepseek"]
-            or service == service_name["open_router"]
-            or service == service_name["mistral"]
-            or service == service_name["neev_cloud"]
-            or service == service_name["moonshot"]
-            or service == service_name["gemini"]
-        ):
+        if has_openai_choices_shape(service):
             response["choices"][0]["message"]["content"] = text
         elif service == service_name["gemini"]:
             response["candidates"][0]["content"]["parts"][0]["text"] = text

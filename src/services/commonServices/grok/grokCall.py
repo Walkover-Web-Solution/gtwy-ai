@@ -11,8 +11,8 @@ class Grok(BaseService):
         tools = {}
         function_call_response = {}
 
-        conversation = ConversationService.createGrokConversation(
-            self.configuration.get("conversation"), self.memory, self.files, self.image_data
+        conversation = ConversationService.createOpenAICompatibleConversation(
+            self.configuration.get("conversation"), self.memory, self.files, self.image_data, plain_text_fallback=False
         ).get("messages", [])
 
         messages = [{"role": "system", "content": self.configuration["prompt"]}] + conversation

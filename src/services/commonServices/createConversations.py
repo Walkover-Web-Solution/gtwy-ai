@@ -172,73 +172,17 @@ class ConversationService:
             raise ValueError(f"Error while creating conversation: {str(e)}") from e
 
     @staticmethod
-    def createGrokConversation(conversation, memory, files=None, image_urls=None):
-        try:
-            threads = []
+    def createOpenAICompatibleConversation(conversation, memory, files=None, image_urls=None, plain_text_fallback=True):
+        """Shared conversation builder for OpenAI-Chat-compatible services
+        (open_router, neev_cloud, moonshot, mistral, openai_completion, grok, deepseek).
 
-            if memory is not None:
-                threads.append(
-                    {
-                        "role": "user",
-                        "content": "provide the summary of the previous conversation stored in the memory?",
-                    }
-                )
-                threads.append({"role": "assistant", "content": f"Summary of previous conversations :  {_format_memory(memory)}"})
+        plain_text_fallback=True  -> a message with no URLs uses the raw string as
+            content (open_router / mistral / openai_completion behavior).
+        plain_text_fallback=False -> content always stays a [{type:text}] list
+            (grok / deepseek behavior).
 
-            for message in conversation or []:
-                if message["role"] in ["tools_call", "tool"]:
-                    continue
-
-                content = [{"type": "text", "text": message["content"]}]
-
-                if "urls" in message and isinstance(message["urls"], list):
-                    for url in message["urls"]:
-                        if not url.lower().endswith(".pdf"):
-                            content.append({"type": "image_url", "image_url": {"url": url}})
-
-                threads.append({"role": message["role"], "content": content})
-
-            return {"success": True, "messages": threads}
-        except Exception as e:
-            traceback.print_exc()
-            logger.error(f"create conversation error=>, {str(e)}")
-            raise ValueError(e.args[0]) from e
-
-    @staticmethod
-    def createDeepseekConversation(conversation, memory, files=None, image_urls=None):
-        try:
-            threads = []
-
-            if memory is not None:
-                threads.append(
-                    {
-                        "role": "user",
-                        "content": "provide the summary of the previous conversation stored in the memory?",
-                    }
-                )
-                threads.append({"role": "assistant", "content": f"Summary of previous conversations :  {_format_memory(memory)}"})
-
-            for message in conversation or []:
-                if message["role"] in ["tools_call", "tool"]:
-                    continue
-
-                content = [{"type": "text", "text": message["content"]}]
-
-                if "urls" in message and isinstance(message["urls"], list):
-                    for url in message["urls"]:
-                        if not url.lower().endswith(".pdf"):
-                            content.append({"type": "image_url", "image_url": {"url": url}})
-
-                threads.append({"role": message["role"], "content": content})
-
-            return {"success": True, "messages": threads}
-        except Exception as e:
-            traceback.print_exc()
-            logger.error(f"create conversation error=>, {str(e)}")
-            raise ValueError(e.args[0]) from e
-
-    @staticmethod
-    def createOpenRouterConversation(conversation, memory):
+        ``files`` / ``image_urls`` are accepted for caller compatibility (unused).
+        """
         try:
             threads = []
             if memory is not None:
@@ -256,37 +200,7 @@ class ConversationService:
                         for url in message["urls"]:
                             if not url.lower().endswith(".pdf"):
                                 content.append({"type": "image_url", "image_url": {"url": url}})
-                    else:
-                        # Default behavior for messages without URLs
-                        content = message["content"]
-                    threads.append({"role": message["role"], "content": content})
-
-            return {"success": True, "messages": threads}
-        except Exception as e:
-            traceback.print_exc()
-            logger.error(f"create conversation error=>, {str(e)}")
-            raise ValueError(e.args[0]) from e
-
-    @staticmethod
-    def create_mistral_ai_conversation(conversation, memory):
-        try:
-            threads = []
-            if memory is not None:
-                threads.append(
-                    {
-                        "role": "user",
-                        "content": "provide the summary of the previous conversation stored in the memory?",
-                    }
-                )
-                threads.append({"role": "assistant", "content": f"Summary of previous conversations :  {_format_memory(memory)}"})
-            for message in conversation or []:
-                if message["role"] != "tools_call" and message["role"] != "tool":
-                    content = [{"type": "text", "text": message["content"]}]
-                    if "urls" in message and isinstance(message["urls"], list):
-                        for url in message["urls"]:
-                            if not url.lower().endswith(".pdf"):
-                                content.append({"type": "image_url", "image_url": {"url": url}})
-                    else:
+                    elif plain_text_fallback:
                         # Default behavior for messages without URLs
                         content = message["content"]
                     threads.append({"role": message["role"], "content": content})
@@ -339,33 +253,4 @@ class ConversationService:
             traceback.print_exc()
             logger.error(f"create conversation error=>, {str(e)}")
             raise ValueError(e.args[0])
-    @staticmethod
-    def createOpenaiCompletionConversation(conversation, memory):
-        try:
-            threads = []
-            if memory is not None:
-                threads.append(
-                    {
-                        "role": "user",
-                        "content": "provide the summary of the previous conversation stored in the memory?",
-                    }
-                )
-                threads.append({"role": "assistant", "content": f"Summary of previous conversations :  {_format_memory(memory)}"})
-            for message in conversation or []:
-                if message["role"] != "tools_call" and message["role"] != "tool":
-                    content = [{"type": "text", "text": message["content"]}]
-                    if "urls" in message and isinstance(message["urls"], list):
-                        for url in message["urls"]:
-                            if not url.lower().endswith(".pdf"):
-                                content.append({"type": "image_url", "image_url": {"url": url}})
-                    else:
-                        # Default behavior for messages without URLs
-                        content = message["content"]
-                    threads.append({"role": message["role"], "content": content})
-
-            return {"success": True, "messages": threads}
-        except Exception as e:
-            traceback.print_exc()
-            logger.error(f"create conversation error=>, {str(e)}")
-            raise ValueError(e.args[0]) from e
 
