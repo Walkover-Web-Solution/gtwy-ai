@@ -212,6 +212,17 @@ async def _sync_pending_questions_to_session(plan):
         await _persist_session(session)
 
 
+async def save_planner_goal(org_id, bridge_id, thread_id, sub_thread_id, goal: str):
+    """Persist the user's original goal to the session on the very first call.
+
+    Never overwrites once set — subsequent planner re-invocations must not
+    replace the original intent with a follow-up message."""
+    session = await get_planner_session(org_id, bridge_id, thread_id, sub_thread_id)
+    if not session.get("goal"):
+        session["goal"] = goal
+        await _persist_session(session)
+
+
 async def clear_planner_session(org_id, bridge_id, thread_id, sub_thread_id):
     """Clear planner session memory for the given (thread, sub_thread) scope."""
     redis_key = _build_session_key(org_id, bridge_id, thread_id, sub_thread_id)

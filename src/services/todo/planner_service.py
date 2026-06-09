@@ -17,6 +17,21 @@ def _has_question_ids_in_message(user_message):
     return bool(re.compile(r'question_id\s*:\s*q\d+', re.IGNORECASE).search(user_message))
 
 
+def _extract_question_answer_pairs(user_message):
+    """Extract question_id→answer mapping from a structured human-loop reply.
+
+    Expected format: 'question_id:q1, answer:Gmail\\nquestion_id:q2, answer:Every email'
+    Falls back to {} when the message is free-form (no structured pairs found).
+    """
+    if not user_message:
+        return {}
+    pattern = re.compile(
+        r'question_id\s*:\s*(q\d+)\s*,\s*answer\s*:\s*([^\n]+?)(?=\s*question_id\s*:|$)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    return {q_id.strip(): ans.strip() for q_id, ans in pattern.findall(user_message)}
+
+
 _AGENT_TOOL_SYNTHETIC_KEYS = {"_query", "action_type"}
 
 
@@ -225,11 +240,33 @@ def _build_planner_message(
     user_feedback=None,
     is_human_loop=False,
     is_question_loop=False,
+    qa_history=None,
+    original_goal=None,
 ):
     """Build the user message for the planner agent."""
     parts = []
 
     if existing_plan:
+        # Surface the original goal so the planner never loses context of what
+        # the user actually wanted — critical when plan is null (info-gathering).
+        if original_goal:
+            parts.append(f"\nOriginal user goal: {original_goal}")
+
+        # Inject answered Q&A so the planner knows what has already been resolved.
+        # This prevents the AI from re-asking questions the user already answered
+        # across multiple human-loop turns.
+        answered_qa = [
+            e for e in (qa_history or [])
+            if e.get("answer") not in (None, "")
+        ]
+        if answered_qa:
+            parts.append(
+                "\nPreviously answered questions — these are RESOLVED, do NOT ask them again:"
+            )
+            for entry in answered_qa:
+                parts.append(f"  Q: {entry['question']}")
+                parts.append(f"  A: {entry['answer']}")
+
         if existing_plan.get("questions"):
             parts.append("\nQuestions:")
             parts.append(json.dumps(existing_plan["questions"], indent=2, default=str))
@@ -279,12 +316,12 @@ def _parse_plan_json(content):
 
 
 async def prepare_planner_request(parsed_data, bridge_configurations, custom_config):
-    existing_plan = await plan_store.get_plan(
-        parsed_data["org_id"],
-        parsed_data["bridge_id"],
-        parsed_data["thread_id"],
-        parsed_data.get("sub_thread_id") or parsed_data["thread_id"],
-    )
+    org_id = parsed_data["org_id"]
+    bridge_id = parsed_data["bridge_id"]
+    thread_id = parsed_data["thread_id"]
+    sub_thread_id = parsed_data.get("sub_thread_id") or thread_id
+
+    existing_plan = await plan_store.get_plan(org_id, bridge_id, thread_id, sub_thread_id)
 
     user_input = parsed_data.get("user", "")
     has_task_ids = _has_task_ids_in_message(user_input)
@@ -302,6 +339,43 @@ async def prepare_planner_request(parsed_data, bridge_configurations, custom_con
         custom_config["tools"] = search_tools
     else:
         custom_config.pop("tools", None)
+
+    # First call — no existing plan — save the user's goal so it survives
+    # info-gathering rounds where plan is still null.
+    if not existing_plan and user_input:
+        await plan_store.save_planner_goal(org_id, bridge_id, thread_id, sub_thread_id, user_input)
+
+    # When the user is answering planner-level questions, persist those Q&A pairs
+    # to the session so subsequent planner calls can see what was already resolved.
+    if existing_plan and (has_task_ids or has_question_ids) and user_input:
+        # Try to extract precise per-question answers first (question_id:q1, answer:...)
+        qid_to_answer = _extract_question_answer_pairs(user_input)
+        for q in (existing_plan.get("questions") or []):
+            if not isinstance(q, dict):
+                continue
+            q_text = q.get("question", "")
+            if not q_text:
+                continue
+            # Use the mapped answer when available, fall back to the full user message
+            answer = qid_to_answer.get(q.get("id", "")) or user_input
+            await plan_store.add_to_planner_session(
+                org_id, bridge_id, thread_id, sub_thread_id, q_text, answer,
+            )
+
+    # Load full Q&A history and original goal so the planner message can surface
+    # already-answered questions and the original intent on every re-invocation.
+    session = await plan_store.get_planner_session(org_id, bridge_id, thread_id, sub_thread_id)
+    qa_history = session.get("qa_history") or []
+    # Goal resolution order:
+    #   1. top-level goal the planner emits in its JSON (now part of schema)
+    #   2. goal inside plan.goal (set when plan is not null)
+    #   3. session-stored goal (saved on first call, fallback for old sessions)
+    original_goal = (
+        (existing_plan or {}).get("goal")
+        or ((existing_plan or {}).get("plan") or {}).get("goal")
+        or session.get("goal")
+        or ""
+    )
 
     conversation = []
     if existing_plan and existing_plan.get("history_summary"):
@@ -322,11 +396,13 @@ async def prepare_planner_request(parsed_data, bridge_configurations, custom_con
 
     if existing_plan:
         parsed_data["user"] = _build_planner_message(
-            user_goal=existing_plan.get("goal"),
+            user_goal=original_goal,
             existing_plan=existing_plan,
             user_feedback=user_input,
             is_human_loop=has_task_ids,
             is_question_loop=has_question_ids,
+            qa_history=qa_history,
+            original_goal=original_goal,
         )
     else:
         parsed_data["user"] = _build_planner_message(user_goal=user_input)
