@@ -120,19 +120,23 @@ def _normalize_questions(raw) -> list:
 
 
 def build_worker_result(parsed: dict) -> dict:
-    """Normalise a parsed worker response into the shape the executor expects."""
+    """Normalise a parsed worker response into the shape the executor expects.
+
+    Status is constrained to the executor's known state machine
+    ({completed, waiting_for_user, failed}). `questions` is passed through
+    AS-IS — whatever shape the AI emitted (list of strings, list of dicts,
+    a single string, …) — so the frontend can render the original payload."""
     status = parsed.get("status") or "completed"
     if status == "needs_replan":
         status = "waiting_for_user"
     if status not in {"completed", "waiting_for_user", "failed"}:
         status = "waiting_for_user"
-    questions = _normalize_questions(parsed.get("questions"))
     history = parsed.get("history") if isinstance(parsed.get("history"), dict) else None
     return {
         "success": status != "failed",
         "status": status,
         "result": parsed.get("result"),
-        "questions": questions,
+        "questions": parsed.get("questions"),
         "error": parsed.get("error"),
         "history": history,
     }

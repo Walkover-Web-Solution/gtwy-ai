@@ -137,22 +137,23 @@ async def execute_plan(
                 await _emit("task_completed", {
                     "task_id": task_id,
                     "title": task.get("title", ""),
+                    "status": "completed",
                     "result": task["result"],
+                    "questions": result.get("questions"),
                 })
 
             elif status == "waiting_for_user":
-                questions = result.get("questions") or [{
-                    "id": "q1",
-                    "question": "The task needs additional information to proceed. Please provide guidance.",
-                    "options": [],
-                }]
+                questions = result.get("questions")
                 task["status"] = "waiting_for_user"
                 task["is_error"] = False
                 task["questions"] = questions
+                task["result"] = result.get("result")
                 task["human_response"] = None
                 await _emit("task_waiting_for_user", {
                     "task_id": task_id,
                     "title": task.get("title", ""),
+                    "status": "waiting_for_user",
+                    "result": task["result"],
                     "questions": questions,
                 })
 
@@ -167,6 +168,9 @@ async def execute_plan(
                     await _emit("task_error", {
                         "task_id": task_id,
                         "title": task.get("title", ""),
+                        "status": "failed",
+                        "result": result.get("result"),
+                        "questions": result.get("questions"),
                         "is_error": True,
                         "error": task["error"],
                         "retry": task["retry"],
@@ -179,6 +183,9 @@ async def execute_plan(
                     await _emit("task_error", {
                         "task_id": task_id,
                         "title": task.get("title", ""),
+                        "status": "failed",
+                        "result": result.get("result"),
+                        "questions": result.get("questions"),
                         "is_error": True,
                         "error": task["error"] or "task execution failed",
                         "retry": task["retry"],

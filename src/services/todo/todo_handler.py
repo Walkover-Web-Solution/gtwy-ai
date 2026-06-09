@@ -49,26 +49,75 @@ def _extract_last_completed_result(plan):
     return json.dumps(result)
 
 
+_FE_TASK_FIELDS = (
+    "id", "title", "task_description", "dependencies",
+    "status", "result", "questions", "error", "is_error",
+    "human_response",
+)
+
+
+def _build_fe_plan_snapshot(plan):
+    """Reduce the full plan dict to the lean shape the FE actually renders.
+
+    Drops server-internal noise: `history`, `history_summary`,
+    `message_to_user`, agent routing config, execution_details, timing,
+    retry counters, org/bridge/thread identifiers, top-level wrapper
+    questions, timestamps. Returns:
+
+      { "state": ..., "goal": ..., "tasks": [ { id, title, task_description,
+        dependencies, status, result, questions, error, is_error,
+        human_response } ] }
+    """
+    if not isinstance(plan, dict):
+        return plan
+
+    inner = plan.get("plan") if isinstance(plan.get("plan"), dict) else {}
+    raw_tasks = inner.get("tasks") if isinstance(inner, dict) else None
+
+    def _scrub_task(task):
+        if not isinstance(task, dict):
+            return task
+        return {k: task.get(k) for k in _FE_TASK_FIELDS if k in task}
+
+    if isinstance(raw_tasks, list):
+        tasks = [_scrub_task(t) for t in raw_tasks]
+    elif isinstance(raw_tasks, dict):
+        tasks = [_scrub_task(v) for v in raw_tasks.values()]
+    else:
+        tasks = []
+
+    return {
+        "state": plan.get("state"),
+        "goal": plan.get("goal") or (inner.get("goal") if isinstance(inner, dict) else None),
+        "tasks": tasks,
+    }
+
+
 def _format_plan_response(plan, message_id, model="", finish_reason="completed", synthesized=None, include_plan=False):
     """Build the ai_middleware_format `done.accumulated_data` payload.
 
-    By default `content` is a USER-FACING STRING (synthesized answer if
-    present, else the last completed task's result, else ""). The full plan
-    body is intentionally NOT shipped here — the UI already has it from plan
-    creation and applies incremental task events streamed during execution.
-    Pass `include_plan=True` only for the explicit "status" action where the
-    caller is asking for a snapshot of the plan itself."""
-    if include_plan:
-        content = plan if isinstance(plan, str) else json.dumps(plan)
-    elif synthesized:
-        content = synthesized if isinstance(synthesized, str) else json.dumps(synthesized)
-    else:
-        content = _extract_last_completed_result(plan)
+    `content` always ships a lean FE-shaped plan snapshot ({state, goal,
+    tasks: [{id, title, task_description, dependencies, status, result,
+    questions, error, is_error, human_response}]}) — same convention as
+    the planner's done event but with all server-internal noise (history,
+    history_summary, message_to_user, assigned_agent routing, execution
+    details, timestamps, identifiers) stripped. When a synthesized answer
+    is available it rides alongside in `data.synthesized` so the FE can
+    surface it without re-walking the plan tree. `include_plan` is kept
+    for backwards-compatibility but no longer changes behavior: the plan
+    is always included."""
+    sanitized = _build_fe_plan_snapshot(plan) if isinstance(plan, dict) else plan
+    content = sanitized if isinstance(sanitized, str) else json.dumps(sanitized)
+
+    synthesized_str = None
+    if synthesized:
+        synthesized_str = synthesized if isinstance(synthesized, str) else json.dumps(synthesized)
 
     return {
         "data": {
             "id": message_id,
             "content": content,
+            "synthesized": synthesized_str,
             "model": model,
             "role": "assistant",
             "tools_data": {},
@@ -165,7 +214,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                     final_plan=final_plan,
                     main_agent_metrics=main_agent_metrics,
                     history_params_extra={
-                        "message": formatted["data"]["content"],
+                        "message": synthesized or _extract_last_completed_result(final_plan),
                         "finish_reason": final_finish_reason,
                         "status": (final_plan or {}).get("state") == "completed",
                     },
@@ -256,7 +305,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                     final_plan=final_plan,
                     main_agent_metrics=main_agent_metrics,
                     history_params_extra={
-                        "message": formatted["data"]["content"],
+                        "message": synthesized or _extract_last_completed_result(final_plan),
                         "finish_reason": final_finish_reason,
                         "status": (final_plan or {}).get("state") == "completed",
                     },
@@ -324,7 +373,7 @@ async def _stream_plan_action(streamer, action, parsed_data, bridge_configuratio
                     final_plan=final_plan,
                     main_agent_metrics=main_agent_metrics,
                     history_params_extra={
-                        "message": formatted["data"]["content"],
+                        "message": synthesized or _extract_last_completed_result(final_plan),
                         "finish_reason": final_finish_reason,
                         "status": (final_plan or {}).get("state") == "completed",
                     },

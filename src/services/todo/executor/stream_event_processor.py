@@ -13,11 +13,19 @@ async def process_worker_stream(
     variables_path: dict,
     assigned_agent: str,
     bridge_configurations: dict,
+    forward_deltas: bool = True,
+    forward_reasoning: bool = True,
 ) -> tuple[str, dict | None, list, list]:
     """Consume SSE events from a streaming worker response.
 
     Forwards delta/reasoning/tool events to the streamer in real-time and
     accumulates telemetry into aggregate_metrics when provided.
+
+    `forward_deltas` / `forward_reasoning` let callers suppress per-token
+    forwarding (e.g. A2A, where the deltas are the internal JSON envelope
+    and shouldn't be shown to the user). Content is still accumulated and
+    returned so the caller can parse the envelope server-side. Tool events
+    are always forwarded so the FE can show which tools the agent ran.
 
     Returns:
         (content, done_event, reasoning_parts, tool_calls_order)
@@ -49,14 +57,14 @@ async def process_worker_stream(
             if evt_type == "delta":
                 piece = event.get("content", "")
                 accumulated_content.append(piece)
-                if streamer:
+                if streamer and forward_deltas:
                     await streamer.emit_task_delta(task_id, piece)
 
             elif evt_type == "reasoning":
                 piece = event.get("content", "")
                 if aggregate_metrics is not None and piece:
                     reasoning_parts.append(piece)
-                if streamer:
+                if streamer and forward_reasoning:
                     await streamer.emit_task_reasoning(task_id, piece)
 
             elif evt_type == "tool_call":
