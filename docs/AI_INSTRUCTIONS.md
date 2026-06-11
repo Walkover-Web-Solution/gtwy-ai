@@ -50,7 +50,6 @@ AI-middleware-python/
 ├── models/                     # Database models and connections
 │   ├── mongo_connection.py
 │   ├── postgres/               # PostgreSQL models (ConversationLog, etc.)
-│   └── Timescale/              # TimescaleDB time-series models
 ├── validations/                # Input validation schemas
 ├── workflow/                   # Workflow definitions
 ├── src/
@@ -94,7 +93,7 @@ AI-middleware-python/
 │       │   ├── Mistral/
 │       │   ├── grok/
 │       │   ├── openRouter/
-│       │   ├── neevCloud/     # Replaces AiMl
+│       │   ├── neevCloud/
 │       │   ├── moonShot/
 │       │   ├── deepgram/
 │       │   ├── baseService/   # Base class and utilities
