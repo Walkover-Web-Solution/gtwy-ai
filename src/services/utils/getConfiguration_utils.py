@@ -160,7 +160,16 @@ def process_extra_tool(tool):
         "required": required,
     }
 
-    tool_mapping = {"url": tool.get("url"), "headers": tool.get("headers", {}), "name": tool_name, "method": tool.get("method", "POST").upper()}
+    query_params = tool.get("query_params", []) or []
+    if not isinstance(query_params, list):
+        query_params = []
+    tool_mapping = {
+        "url": tool.get("url"),
+        "headers": tool.get("headers", {}),
+        "name": tool_name,
+        "method": tool.get("method", "POST").upper(),
+        "query_params": query_params,
+    }
     variable_path = tool.get("tool_and_variable_path", {}) or {}
     # Remove properties that are filled by gateway
     for key in variable_path:

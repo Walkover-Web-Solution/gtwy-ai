@@ -126,10 +126,45 @@ def validate_tool_call(service, response):
             return False
 
 
+def resolve_url_params(url, method, data, query_param_keys=None):
+    """
+    Replace :param or {param} route params in URL with values from data dict.
+    For GET requests all remaining args become query params.
+    For non-GET, keys listed in query_param_keys are sent as query params; the rest go as JSON body.
+    Returns (resolved_url, query_params_dict_or_None, body_or_None).
+    """
+    if not data:
+        return url, None, None
+
+    data = dict(data)
+    query_param_keys = query_param_keys or []
+
+    def _replace(match):
+        key = match.group(1) or match.group(2)
+        if key in data:
+            return str(data.pop(key))
+        return match.group(0)
+
+    resolved_url = re.sub(r":([A-Za-z_][A-Za-z0-9_]*)|{([A-Za-z_][A-Za-z0-9_]*)}", _replace, url)
+
+    if method.upper() == "GET":
+        return resolved_url, data or None, None
+
+    query_params = {k: data.pop(k) for k in list(query_param_keys) if k in data}
+    return resolved_url, query_params or None, data or None
+
+
 async def axios_work(data, function_payload):
     try:
+        method = function_payload.get("method", "POST")
+        resolved_url, query_params, body = resolve_url_params(
+            function_payload.get("url"),
+            method,
+            data,
+            function_payload.get("query_params", []),
+        )
         response, rs_headers = await fetch(
-            function_payload.get("url"), function_payload.get("method", "POST"), function_payload.get("headers", {}), None, data
+            resolved_url, method, function_payload.get("headers", {}), query_params, body
         )  # required is not send then it will still hit the curl
         return {
             "response": response,
