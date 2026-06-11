@@ -168,7 +168,7 @@ async def chat(request_body):
         parsed_data = parse_request_body(request_body)
 
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
-        if isinstance(mcp_cfg, dict) and mcp_cfg.get("enabled"):
+        if isinstance(mcp_cfg, dict):
             from src.services.utils.mcp_utils import resolve_mcp_type
             mcp_type = resolve_mcp_type(parsed_data.get("service"), parsed_data.get("model"))
             if mcp_type == "client":
@@ -857,7 +857,7 @@ async def batch(request_body):
             raise ValueError(result)
 
         # Store custom_config as AiConfig for batch conversation logs
-        parsed_data["AiConfig"] = custom_config
+        parsed_data["ai_config_mapping"] = result["ai_config_mapping"]
 
         if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
                 result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])

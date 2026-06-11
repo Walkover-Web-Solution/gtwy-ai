@@ -3,20 +3,27 @@
 ## Overview
 This document provides a comprehensive flow of the Completion API from request initiation to service execution. The flow demonstrates how a chat completion request is processed through various layers of middleware, configuration, and service handlers.
 
-## API Entry Point
+## API Entry Points
 
-### Route Definition
-- **Endpoint**: `/api/v2/model/chat/completion`
-- **Method**: POST
-- **File**: `index.py`
-- **Router**: `v2_router` with prefix `/api/v2/model`
-
-### Route Handler
+### Primary Route
+- **Endpoint**: `POST /api/v2/model/chat/completion`
 - **File**: `src/routes/v2/modelRouter.py`
 - **Function**: `chat_completion`
+- **Router**: `v2_router` with prefix `/api/v2/model`
 - **Dependencies**:
   - `auth_and_rate_limit` (JWT middleware + rate limiting)
   - `add_configuration_data_to_body` (configuration middleware)
+
+### Additional v2 Endpoints
+- `POST /api/v2/model/openai/responses` — OpenAI SDK compatibility via `openai_sdk_middleware`
+- `POST /api/v2/model/batch/chat/completion` — Batch processing
+- `POST /api/v2/model/testcases` — Testcase execution with RTLayer streaming
+- `POST /api/v2/model/rerun` — Rerun previous messages by `message_ids` or `thread_id/sub_thread_id`
+
+### Other Routers (registered in `index.py`)
+- `/chatbot` — Chatbot routes (`chatBot_routes.py`)
+- `/image/processing` and `/files` — Image processing routes (`image_process_routes.py`)
+- `/rag` — RAG query routes (`rag_routes.py`)
 
 ## Flow Breakdown
 
@@ -66,6 +73,9 @@ This document provides a comprehensive flow of the Completion API from request i
 - `guardrails`: Content guardrails configuration
 - `web_search_filters`: Allowed domains for built-in web search
 - `orchestrator_flag`: Whether to store multi-agent transfers as a single orchestrator entry. Also used to give the power of transfer query to agent if required by adding the `action_type` parameter to the tool properties (with options: "transfer" to directly return child agent response, or "conversation" to get child response and continue processing)
+- `chatbot`: Boolean flag for chatbot mode
+- `override_fields`: Dictionary of fields to override in configuration
+- `environment`: Environment identifier for version resolution
 
 #### Bridge/Agent Data Retrieval
 - **File**: `src/services/utils/getConfiguration_utils.py`
@@ -115,6 +125,7 @@ This document provides a comprehensive flow of the Completion API from request i
 - `guardrails`: Guardrails config for content filtering
 - `fall_back`: Fallback service/model config
 - `pre_tools_data`: Pre-tool metadata used later to populate args per agent
+- `post_tool_data`: Post-tool metadata for post-response execution
 
 **Output Structure:**
 ```json
@@ -128,6 +139,7 @@ This document provides a comprehensive flow of the Completion API from request i
       "apikey": "sk-...",
       "pre_tools": { "name": "tool_name", "args": {} },
       "pre_tools_data": { /* pre-tool metadata */ },
+      "post_tool_data": { /* post-tool metadata */ },
       "variables": { /* processed variables */ },
       "rag_data": [ /* document data */ ],
       "tool_id_and_name_mapping": { /* tool mappings */ },
@@ -216,22 +228,47 @@ This document provides a comprehensive flow of the Completion API from request i
    - Includes token calculator for cost tracking
    - Prepares execution context
 
+12. **Post-Tool Execution** (after service response)
+    - If `post_tool_data` is configured, executes after main response
+    - Can override response content
+
+13. **Reviewer Agent Loop** (if configured)
+    - If `settings.reviewer_agent` is set on the bridge, runs review loop
+    - Reviewer agent receives main response and returns `{"passed": bool, "reason": string}`
+    - If `passed=false`, feeds reason back to main agent as correction
+    - Maximum 3 review rounds (`MAX_REVIEW_ROUNDS`)
+    - Each round saved as separate conversation_log row
+    - File: `src/services/commonServices/reviewer_service.py`
+
+14. **Testcase Scoring** (if applicable)
+    - If `testcase_data.run_testcase=true`, scores result against expected output
+    - Publishes to RTLayer playground channel if configured
+
 ### 5. Service Handler Creation and Execution
 
 #### Service Handler Factory
 - **File**: `src/services/utils/helper.py`
 - **Function**: `Helper.create_service_handler`
 
-**Service Mapping:**
+**Service Mapping (11 services):**
 - `openai` → `OpenaiResponse`
-- `openai_completion` → `OpenaiCompletion`
 - `gemini` → `GeminiHandler`
 - `anthropic` → `Anthropic`
 - `groq` → `Groq`
 - `grok` → `Grok`
 - `open_router` → `OpenRouter`
+- `neev_cloud` → `NeevCloud`
+- `moonshot` → `MoonShot`
 - `mistral` → `Mistral`
-- `ai_ml` → `Ai_Ml`
+- `deepgram` → `Deepgram`
+- `openai_completion` → `OpenaiCompletion`
+
+**Batch Service Mapping (5 services):**
+- `openai` → `OpenaiBatch`
+- `anthropic` → `AnthropicBatch`
+- `groq` → `GroqBatch`
+- `mistral` → `MistralBatch`
+- `gemini` → `GeminiBatch`
 
 #### Service Execution
 - **Method**: `class_obj.execute()`
@@ -350,24 +387,31 @@ This document provides a comprehensive flow of the Completion API from request i
 - `createOpenAiConversation`: OpenAI chat/response input format
 - `createAnthropicConversation`: Anthropic Claude format
 - `createGroqConversation`: Groq API format
-- `createGeminiConversation`: Google Gemini format
+- `createGrokConversation`: Grok API format
+- `createOpenRouterConversation`: OpenRouter format
 - `create_mistral_ai_conversation`: Mistral AI format
+- `createGeminiConversation`: Google Gemini format
+- `createOpenaiCompletionConversation`: OpenAI Completion format
+
+> **Note:** NeevCloud, MoonShot, and Deepgram reuse existing conversation creators.
 
 #### Model API Call
 - **Function**: `self.chats()`
 - **File**: `src/services/commonServices/baseService/baseService.py`
 - **Purpose**: Routes to appropriate service model runner
 
-**Service Routing:**
+**Service Routing (11 services):**
 - `openai` → `openai_response_model` (OpenAI Response API)
-- `openai_completion` → `runModel` (OpenAI Chat Completion API)
 - `anthropic` → `anthropic_runmodel`
 - `groq` → `groq_runmodel`
 - `grok` → `grok_runmodel`
-- `gemini` → `gemini_modelrun`
-- `mistral` → `mistral_model_run`
 - `open_router` → `openrouter_modelrun`
-- `ai_ml` → `ai_ml_modelrun`
+- `neev_cloud` → `neevcloud_modelrun`
+- `moonshot` → `moonshot_modelrun`
+- `mistral` → `mistral_model_run`
+- `gemini` → `gemini_modelrun`
+- `deepgram` → `deepgram_runmodel`
+- `openai_completion` → `openai_completion` (OpenAI Chat Completion API)
 
 #### OpenAI Model Execution
 - **File**: `src/services/commonServices/openAI/runModel.py`
@@ -410,7 +454,7 @@ This document provides a comprehensive flow of the Completion API from request i
 
 #### Service-Specific Tool Call Extraction
 - **OpenAI (Response API)**: `output` array with `function_call` type
-- **OpenAI Completion/Groq/Grok/Mistral/OpenRouter/Gemini/AI-ML**: `tool_calls` array with `function` objects
+- **OpenAI Completion/Groq/Grok/Mistral/OpenRouter/Gemini/NeevCloud/MoonShot/Deepgram**: `tool_calls` array with `function` objects
 - **Anthropic**: `content` array with `tool_use` type
 
 #### Tool Types and Execution
@@ -463,9 +507,14 @@ This document provides a comprehensive flow of the Completion API from request i
 #### Service-Specific Formatting
 - **OpenAI**: Standard chat completion format
 - **OpenAI Response**: Special handling for reasoning and function calls
+- **OpenAI Completion**: Legacy completion format
 - **Anthropic**: Content array processing
-- **Gemini**: Google-specific response structure
+- **Gemini**: Google-specific response structure (including image and video)
 - **Groq**: Similar to OpenAI with service-specific fields
+- **Grok**: Similar to OpenAI format
+- **OpenRouter / NeevCloud / MoonShot**: OpenAI-compatible format
+- **Deepgram**: Speech-to-text response format
+- **Mistral**: Mistral-specific format
 
 ### History Preparation
 - **Function**: `prepare_history_params()`
@@ -488,11 +537,15 @@ This document provides a comprehensive flow of the Completion API from request i
 
 #### Success Flow:
 1. **Error Checking**: Validates service execution success
-2. **Retry Alerts**: Handles fallback model notifications
-3. **Chatbot Processing**: Special handling for chatbot responses
-4. **Usage Calculation**: Token and cost calculations
-5. **Response Formatting**: Final response structure
-6. **Background Tasks**: Async database operations and queue publishing
+2. **Fallback Retry**: On failure, swaps to fallback model/service and retries if `fall_back.is_enable`
+3. **Post-Tool Execution**: Runs post_tool if configured, can override response
+4. **Reviewer Agent Loop**: If `reviewer_agent` configured, runs review cycle (max 3 rounds)
+5. **Testcase Scoring**: Scores result if `testcase_data.run_testcase=true`
+6. **Chatbot Processing**: Special handling for chatbot responses
+7. **Usage Calculation**: Token and cost calculations
+8. **Response Formatting**: Final response structure
+9. **Agent Transfer Caching**: Saves current agent to Redis for thread continuity (TTL: 3 days)
+10. **Background Tasks**: Async database operations and queue publishing
 
 #### Response Delivery
 - **Playground Mode**: Direct JSON response
@@ -548,9 +601,11 @@ This document provides a comprehensive flow of the Completion API from request i
 5. **Service Handler** → AI Model Execution
 6. **Tool Processing** → Function Call Execution (if needed)
 7. **Transfer Handling** → Agent handoff if tool requests transfer
-8. **Response Formatting** → Standardized Output
-9. **Background Tasks** → Database Storage & Queue Processing
-10. **Response Delivery** → Client Response
+8. **Post-Tool Execution** → Post-response tool processing (if configured)
+9. **Reviewer Loop** → Review and correction cycle (if configured)
+10. **Response Formatting** → Standardized Output
+11. **Background Tasks** → Database Storage & Queue Processing
+12. **Response Delivery** → Client Response
 
 ### Key Performance Features:
 - **Concurrent Tool Execution**: Parallel function calling

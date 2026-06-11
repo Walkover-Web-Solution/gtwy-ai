@@ -94,6 +94,8 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
     testcase_data = body.get("testcase_data")
     variables = body.get("variables", {})
     matching_type = body.get("matching_type", None)
+    model_override = body.get("model")
+    service_override = body.get("service")
 
     return {
         "bridge_id": bridge_id,
@@ -103,6 +105,8 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
         "testcase_data": testcase_data,
         "variables": variables,
         "matching_type": matching_type,
+        "model_override": model_override,
+        "service_override": service_override,
     }
 
 
@@ -301,6 +305,12 @@ async def process_single_testcase(
         testcase_result = (
             result_data.get("response", {}).get("testcase_result", {}) if isinstance(result_data, dict) else {}
         )
+        
+        # Extract tools_call_data from testcase_result (sourced from historyParams)
+        tools_call_data = testcase_result.get("tools_call_data", []) if isinstance(testcase_result, dict) else []
+        usage_data = result_data.get("response", {}).get("usage", {}) if isinstance(result_data, dict) else {}
+        total_tokens = usage_data.get("total_tokens", 0)
+        cost = usage_data.get("cost", 0)
 
         outcome = {
             "testcase_id": str(testcase.get("_id")) if testcase.get("_id") != "direct_testcase" else "direct_testcase",
@@ -312,6 +322,9 @@ async def process_single_testcase(
             "score": testcase_result.get("score"),
             "matching_type": testcase_result.get("matching_type") or testcase.get("matching_type", ""),
             "success": True,
+            "tools_call_data": tools_call_data,
+            "total_tokens": total_tokens,
+            "cost": cost,
         }
         await _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": outcome})
         return outcome
@@ -432,6 +445,13 @@ async def execute_testcases(
             request_data["testcase_data"],
             request_data["variables"],
         )
+        model_override = request_data.get("model_override")
+        service_override = request_data.get("service_override")
+        if service_override:
+            db_config["service"] = service_override.lower()
+        if model_override:
+            db_config.setdefault("configuration", {})["model"] = model_override
+
         results = await run_testcases_parallel(
             testcases,
             db_config,
@@ -439,10 +459,27 @@ async def execute_testcases(
             rtlayer_cred=rtlayer_cred,
             version_id=version_id,
         )
+        model = db_config.get("configuration", {}).get("model")
+        service_name = db_config.get("service") 
+        tools_call_data = []
+        if results and isinstance(results[0], dict):
+            tools_call_data = results[0].get("tools_call_data", [])
+        total_tokens = 0
+        total_cost = 0
+        for result in results:
+            if isinstance(result, dict):
+                total_tokens += result.get("total_tokens", 0)
+                total_cost += result.get("cost", 0)
+                        
         return {
             "version_id": version_id,
             "total_testcases": len(testcases),
             "results": results,
+            "model": model,
+            "service_name": service_name,
+            "tools_call_data": tools_call_data,
+            "total_tokens": total_tokens,
+            "cost": total_cost,
         }
 
     # Run all versions concurrently (works for 1 or N)

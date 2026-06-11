@@ -6,7 +6,7 @@ from src.services.utils.ai_call_util import call_ai_middleware
 from src.services.utils.nlp import compute_cosine_similarity
 
 
-async def compare_result(expected, actual, matching_type, response_type):
+async def compare_result(expected, actual, matching_type, response_type, ai_matching_custom_prompt=None):
     if response_type == "function":
         expected = {case["name"]: case.get("arguments", {}) for case in expected}
         actual = {case["name"]: case["args"] for case in actual or []}
@@ -18,8 +18,11 @@ async def compare_result(expected, actual, matching_type, response_type):
         case "exact":
             return 1 if _.is_equal(expected, actual) else 0
         case "ai":
+            variables = {"expected": str(expected)}
+            if ai_matching_custom_prompt:
+                variables["ai_matching_custom_prompt"] = ai_matching_custom_prompt
             response = await call_ai_middleware(
-                str(actual), bridge_ids["compare_result"], variables=({"expected": str(expected)})
+                str(actual), bridge_ids["compare_result"], variables=variables
             )
             return response["response"]["score"]
 
@@ -44,7 +47,12 @@ async def process_single_testcase_result(testcase_data, model_result, parsed_dat
         matching_type = testcase_data.get("matching_type", "cosine")
         testcase_type = testcase_data.get("type", "response")
 
-        score = await compare_result(expected_result, actual_result, matching_type, testcase_type)
+        ai_matching_custom_prompt = parsed_data.get("ai_matching_custom_prompt") if isinstance(parsed_data, dict) else None
+        score = await compare_result(expected_result, actual_result, matching_type, testcase_type, ai_matching_custom_prompt)
+        tools_call_data = (
+            (model_result or {}).get("historyParams", {}).get("tools_call_data", [])
+            if isinstance(model_result, dict) else []
+        )
 
         return {
             "testcase_id": str(testcase_data.get("_id")),
@@ -54,6 +62,7 @@ async def process_single_testcase_result(testcase_data, model_result, parsed_dat
             "matching_type": matching_type,
             "type": testcase_type,
             "success": True,
+            "tools_call_data": tools_call_data,
         }
 
     except Exception as e:

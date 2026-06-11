@@ -97,7 +97,7 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
             user_message = message_info.get("message", "")
             message_id = message_info.get("message_id", "")
             variables = message_info.get("variables", {}) if batch_variables else {}
-
+            ai_config_mapping = parsed_data.get("ai_config_mapping", {})
             webhook_info = parsed_data.get('batch_webhook') or {}
             masked_headers = Helper.mask_headers(webhook_info.get('headers'))
 
@@ -110,7 +110,7 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
                 "thread_id": parsed_data.get('thread_id'),
                 "sub_thread_id": parsed_data.get('sub_thread_id'),
                 "version_id": parsed_data.get('version_id', ''),
-                "AiConfig": parsed_data.get('AiConfig') or {},
+                "AiConfig": ai_config_mapping.get(message_id, {}),
                 "service": parsed_data.get('service'),
                 "model": parsed_data.get('model'),
                 "status": False,

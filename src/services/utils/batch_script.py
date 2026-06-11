@@ -1,5 +1,6 @@
 import asyncio
 
+import globals as _globals
 from globals import logger
 from src.configs.constant import redis_keys
 
@@ -16,9 +17,10 @@ from .token_calculation import TokenCalculator
 
 
 async def repeat_function():
-    while True:
+    while _globals.is_ready:
         await check_batch_status()
         await asyncio.sleep(900)
+    logger.info("Batch cron stopped — server is shutting down")
 
 
 async def check_batch_status():

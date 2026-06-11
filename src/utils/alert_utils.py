@@ -16,8 +16,9 @@ DEFAULT_ALERT_TYPES = [alert_types["error"], alert_types["variable"], alert_type
 
 
 def build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api_name, error_log, service):
+    error_log_dict = error_log if isinstance(error_log, dict) else {"error": error_log}
     payload = {
-        **error_log,
+        **error_log_dict,
         "agent_id": bridge_id,
         "org_id": org_id,
         "bridge_name": bridge_name,

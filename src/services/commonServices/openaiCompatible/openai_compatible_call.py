@@ -1,5 +1,6 @@
 from src.configs.service_registry import prompt_role
 from src.services.utils.ai_middleware_format import Response_formatter
+from src.services.utils.apiservice import fetch_images_b64
 
 from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService
@@ -44,11 +45,14 @@ class OpenAICompatibleHandler(BaseService):
                 # image-only turn still reaches the model.
                 user_content = []
                 if self.user:
-                    user_content.append({"type": "text", "text": self.user})
-                if isinstance(self.image_data, list):
-                    for image_url in self.image_data:
-                        user_content.append({"type": "image_url", "image_url": {"url": image_url}})
-                if user_content:
+                    user_content = [{"type": "text", "text": self.user}]
+                    if isinstance(self.image_data, list):
+                        # Moonshot requires base64 encoded images, not URLs
+                        # Use existing fetch_images_b64 function to download and convert images
+                        images_with_mime = await fetch_images_b64(self.image_data)
+                        for base64_image, mime_type in images_with_mime:
+                            base64_url = f"data:{mime_type};base64,{base64_image}"
+                            user_content.append({"type": "image_url", "image_url": {"url": base64_url}})
                     self.customConfig["messages"].append({"role": "user", "content": user_content})
             self.customConfig = self.service_formatter(self.customConfig, service)
             if "tools" not in self.customConfig and "parallel_tool_calls" in self.customConfig:

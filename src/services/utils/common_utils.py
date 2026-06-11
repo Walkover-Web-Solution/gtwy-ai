@@ -150,6 +150,15 @@ def parse_request_body(request_body):
     state = request_body.get("state", {})
     path_params = request_body.get("path_params", {})
 
+    # Extract ai_matching_custom_prompt from bridge_configurations
+    bridge_id = path_params.get("bridge_id") or body.get("bridge_id")
+    bridge_configurations = body.get("bridge_configurations", {})
+    ai_matching_custom_prompt = None
+    if bridge_id and isinstance(bridge_configurations, dict) and bridge_id in bridge_configurations:
+        cfg_for_bridge = bridge_configurations[bridge_id]
+        if isinstance(cfg_for_bridge, dict):
+            ai_matching_custom_prompt = cfg_for_bridge.get("ai_matching_custom_prompt")
+
     return {
         "body": body,
         "state": state,
@@ -175,6 +184,7 @@ def parse_request_body(request_body):
         "mode": body.get("mode"),
         "action": body.get("action"),
         "task_id": body.get("task_id"),
+        "ai_matching_custom_prompt": ai_matching_custom_prompt or body.get("ai_matching_custom_prompt"),
         "plans": body.get("plans"),
         "model": body.get("configuration", {}).get("model"),
         "auto_model_select": body.get("auto_model_select", False),

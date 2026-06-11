@@ -1,4 +1,5 @@
 import asyncio
+import signal
 from contextlib import asynccontextmanager
 import src.services.grafana
 import uvicorn
@@ -9,7 +10,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import Config
+import globals as _globals
 from globals import logger
+
+
+def _handle_sigterm(*_):
+    logger.info("SIGTERM received — marking server as not ready, stopping batch cron")
+    _globals.is_ready = False
+
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
 from models.Timescale.connections import init_async_dbservice
 from src.configs.model_configuration import background_listen_for_changes, init_model_configuration
 from src.configs.service_registry import background_listen_for_service_changes, init_service_registry
@@ -112,9 +122,17 @@ async def healthcheck():
     return JSONResponse(
         status_code=200,
         content={
-            "status": "OK running good... v1.2",
+            "status": "OK running good... v1.3",
         },
     )
+
+
+# Readiness probe — returns 503 after SIGTERM so LB drains this pod
+@app.get("/ready")
+async def ready():
+    if _globals.is_ready:
+        return JSONResponse(status_code=200, content={"status": "ready"})
+    return JSONResponse(status_code=503, content={"status": "shutting down"})
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):

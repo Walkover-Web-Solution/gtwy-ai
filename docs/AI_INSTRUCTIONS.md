@@ -46,35 +46,109 @@ AI-middleware-python/
 ├── config.py                   # Configuration management
 ├── globals.py                  # Global variables and logger
 ├── exceptions/                 # Custom exception classes
+│   └── bad_request.py
 ├── models/                     # Database models and connections
 │   ├── mongo_connection.py
-│   ├── postgres/
-│   └── Timescale/
+│   ├── postgres/               # PostgreSQL models (ConversationLog, etc.)
+├── validations/                # Input validation schemas
+├── workflow/                   # Workflow definitions
 ├── src/
 │   ├── configs/               # Configuration constants and model configs
+│   │   ├── constant.py        # Service names, Redis keys, bridge IDs
+│   │   ├── serviceKeys.py     # Service-specific API parameter mappings
+│   │   └── model_configuration.py
 │   ├── controllers/           # Request handlers (business logic)
+│   │   ├── conversationController.py
+│   │   ├── image_process_controller.py
+│   │   ├── rag_controller.py
+│   │   └── testcase_controller.py
 │   ├── db_services/           # Database service layer
+│   │   ├── ConfigurationServices.py
+│   │   ├── conversationDbService.py
+│   │   ├── metrics_service.py
+│   │   ├── testcase_services.py
+│   │   ├── api_key_status_service.py
+│   │   ├── webhook_alert_Dbservice.py
+│   │   └── orchestrator_history_service.py
 │   ├── handler/               # Execution handlers
 │   ├── middlewares/           # Request middleware (auth, rate limiting)
+│   │   ├── middleware.py              # JWT authentication
+│   │   ├── ratelimitMiddleware.py     # Redis-based rate limiting
+│   │   ├── agentsMiddlewares.py       # Public agent access
+│   │   ├── interfaceMiddlewares.py    # Chatbot auth
+│   │   ├── getDataUsingBridgeId.py    # Configuration middleware
+│   │   └── openai_sdk_middleware.py   # OpenAI SDK compatibility
 │   ├── routes/                # API route definitions
+│   │   ├── chatBot_routes.py
+│   │   ├── image_process_routes.py
+│   │   ├── rag_routes.py
 │   │   └── v2/               # Version 2 API routes
+│   │       └── modelRouter.py
 │   └── services/              # Core business services
 │       ├── commonServices/    # AI provider services
 │       │   ├── openAI/
 │       │   ├── anthropic/
-│       │   ├── Google/
+│       │   ├── Google/        # Gemini
 │       │   ├── groq/
 │       │   ├── Mistral/
 │       │   ├── grok/
 │       │   ├── openRouter/
-│       │   ├── AiMl/
-│       │   ├── baseService/
-│       │   └── queueService/
+│       │   ├── neevCloud/
+│       │   ├── moonShot/
+│       │   ├── deepgram/
+│       │   ├── baseService/   # Base class and utilities
+│       │   ├── queueService/  # RabbitMQ queue processing
+│       │   ├── common.py      # Core chat/image/embedding/batch flow
+│       │   ├── createConversations.py
+│       │   ├── reviewer_service.py         # Post-response review loop
+│       │   ├── reviewer_service_helpers.py
+│       │   ├── streaming_service.py        # Unified streaming
+│       │   ├── api_executor.py             # Generic API execution
+│       │   └── testcases.py                # Testcase execution
 │       ├── rag_services/      # RAG-specific services
 │       ├── proxy/             # Proxy services
 │       └── utils/             # Utility functions
+│           ├── common_utils.py
+│           ├── helper.py
+│           ├── getConfiguration.py
+│           ├── getConfiguration_utils.py
+│           ├── ai_middleware_format.py    # Response formatting
+│           ├── token_calculation.py
+│           ├── mcp_utils.py              # MCP tool resolution
+│           ├── openai_sdk_utils.py       # OpenAI SDK compatibility
+│           ├── testcase_utils.py
+│           ├── guardrails_validator.py
+│           ├── transfer_handler.py
+│           └── ...
 └── docs/                      # Documentation
 ```
+
+### Supported AI Services (11 total)
+
+| Service Key | Handler Class | Directory | Batch Support |
+|---|---|---|---|
+| `openai` | `OpenaiResponse` | `openAI/` | Yes |
+| `openai_completion` | `OpenaiCompletion` | `openAI/` | No |
+| `anthropic` | `Anthropic` | `anthropic/` | Yes |
+| `gemini` | `GeminiHandler` | `Google/` | Yes |
+| `groq` | `Groq` | `groq/` | Yes |
+| `grok` | `Grok` | `grok/` | No |
+| `open_router` | `OpenRouter` | `openRouter/` | No |
+| `mistral` | `Mistral` | `Mistral/` | Yes |
+| `neev_cloud` | `NeevCloud` | `neevCloud/` | No |
+| `moonshot` | `MoonShot` | `moonShot/` | No |
+| `deepgram` | `Deepgram` | `deepgram/` | No |
+
+> **Note:** `AiMl/` is deprecated — its functionality was refactored into `neev_cloud`.
+
+### API Routes
+
+| Prefix | Router File | Key Endpoints |
+|---|---|---|
+| `/api/v2/model` | `v2/modelRouter.py` | `POST /chat/completion`, `POST /openai/responses`, `POST /batch/chat/completion`, `POST /testcases`, `POST /rerun` |
+| `/chatbot` | `chatBot_routes.py` | `POST /{botId}/sendMessage` |
+| `/image/processing`, `/files` | `image_process_routes.py` | Image processing |
+| `/rag` | `rag_routes.py` | `POST /query` |
 
 ---
 
@@ -130,6 +204,16 @@ AI-middleware-python/
 - **Examples**:
   - `anthropicCall.py`, `anthropicModelRun.py`
   - `gemini_batch.py`, `gemini_run_batch.py`
+  - `neevCloud_call.py`, `neevCloud_modelrun.py`
+  - `moonShot_call.py`, `moonShot_modelrun.py`
+  - `deepgramCall.py`, `deepgramModelRun.py`
+
+#### Common Service Files
+- **Location**: `src/services/commonServices/`
+- **Patterns**:
+  - `{feature}_service.py` - Feature-specific service (e.g., `reviewer_service.py`, `streaming_service.py`)
+  - `{feature}_service_helpers.py` - Helpers for complex services (e.g., `reviewer_service_helpers.py`)
+  - `{feature}.py` - Standalone feature modules (e.g., `testcases.py`, `api_executor.py`)
 
 ---
 
@@ -255,11 +339,18 @@ AI-middleware-python/
 ### Adding AI Provider Service
 1. Create provider directory: `src/services/commonServices/{provider}/`
 2. Create required files:
-   - `{provider}Call.py` - Main handler
-   - `{provider}ModelRun.py` - Model execution
-   - `{provider}_batch.py` - Batch processing (if needed)
-3. Inherit from `BaseService` class
-4. Add provider to service mapping in `helper.py`
+   - `{provider}Call.py` - Main handler (inherits from `BaseService`)
+   - `{provider}ModelRun.py` or `{provider}_model_run.py` - Model execution
+   - `{provider}_batch.py` - Batch processing (if supported)
+3. Inherit from `BaseService` class in `baseService/baseService.py`
+4. Add provider key to `service_name` dict in `src/configs/constant.py`
+5. Add service-specific parameter mappings in `src/configs/serviceKeys.py`
+6. Add provider to `create_service_handler()` in `src/services/utils/helper.py`
+7. Add service routing in `chats()` method of `src/services/commonServices/baseService/baseService.py`
+8. Add or reuse a conversation creator in `src/services/commonServices/createConversations.py`
+9. Add response formatting case in `Response_formatter()` in `src/services/utils/ai_middleware_format.py`
+10. If batch is supported, add to `create_service_handler_for_batch()` in `helper.py`
+11. Add model configuration entries for the provider's models
 
 ### Adding Database Service
 1. Create service file in `src/db_services/`
@@ -316,4 +407,4 @@ If you have questions about these guidelines or encounter issues:
 
 ---
 
-**Last Updated**: January 2026
+**Last Updated**: June 2026
