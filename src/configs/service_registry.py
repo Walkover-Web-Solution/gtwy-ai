@@ -47,7 +47,7 @@ service_registry_document = {}
 # ---------------------------------------------------------------------------
 # wire_format: openai_chat | openai_responses | anthropic | gemini | deepgram
 # client:      openai_sdk | groq_sdk | grok_http | mistral_sdk |
-#              openai_completion_sdk | anthropic_sdk | gemini_sdk | deepgram_sdk
+#              anthropic_sdk | gemini_sdk | deepgram_sdk
 _FALLBACK_REGISTRY = {
     "openai": {
         "service_name": "openai",
@@ -63,14 +63,15 @@ _FALLBACK_REGISTRY = {
     },
     "openai_completion": {
         "service_name": "openai_completion",
-        "base_url": None,
+        "base_url": None,  # AsyncOpenAI default -> https://api.openai.com/v1
         "wire_format": "openai_chat",
-        "client": "openai_completion_sdk",
+        "client": "openai_sdk",
         "supports_streaming": True,
         "supports_tool_calls": True,
         "supports_stream_usage": True,
         "supports_reasoning": False,
         "default_model": None,
+        "prompt_role": "developer",  # openai_completion sends the system prompt as role "developer"
         "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
     },
     "gemini": {

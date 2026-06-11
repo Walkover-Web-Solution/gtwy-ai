@@ -23,7 +23,7 @@ from ..grok.grokModelRun import grok_runmodel, grok_stream
 from ..groq.groqModelRun import groq_runmodel, groq_stream
 from ..Mistral.mistral_model_run import mistral_model_run, mistral_stream
 from ..openAI.image_model import OpenAIImageModel
-from ..openAI.runModel import openai_completion, openai_response_model, openai_response_stream
+from ..openAI.runModel import openai_response_model, openai_response_stream
 from ..openAI.openai_stream_utils import sanitize_openai_response_item
 from ..openaiCompatible.openai_compatible_modelrun import openai_compatible_modelrun, openai_compatible_stream
 from ..streaming_service import StreamingService
@@ -601,8 +601,9 @@ class BaseService:
                     self.token_calculator,
                 )
             elif uses_openai_sdk(service):
-                # open_router / neev_cloud / moonshot (+ any future openai_sdk service)
-                # share one AsyncOpenAI runner; base_url + flags come from the registry.
+                # open_router / neev_cloud / moonshot / openai_completion (+ any future
+                # openai_sdk service) share one AsyncOpenAI runner; base_url + flags
+                # come from the registry.
                 response = await openai_compatible_modelrun(
                     configuration,
                     apikey,
@@ -616,6 +617,10 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.is_embed,
+                    self.user_id,
+                    self.thread_id,
+                    self.api_collection,
                 )
             elif service == service_name["mistral"]:
                 response = await mistral_model_run(
@@ -661,25 +666,6 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
-                )
-            elif service == service_name["openai_completion"]:
-                response = await openai_completion(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
-                    self.is_embed,
-                    self.user_id,
-                    self.thread_id,
-                    self.api_collection,
                 )
             if not response["success"]:
                 raise ApiCallError(response["error"], status_code=response.get("status_code"), service=service)

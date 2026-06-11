@@ -7,11 +7,13 @@ from ..createConversations import ConversationService
 
 class OpenAICompatibleHandler(BaseService):
     """Single handler for OpenAI-Chat-Completions-compatible services that use the
-    generic AsyncOpenAI runner (open_router, neev_cloud, moonshot, + future ones).
+    generic AsyncOpenAI runner (open_router, neev_cloud, moonshot,
+    openai_completion, + future ones).
 
     Behavior-identical to the former per-service call classes; the only
     per-service variation is the system-prompt role (``prompt_role`` from the
-    registry: "system" by default, "developer" for open_router).
+    registry: "system" by default, "developer" for open_router and
+    openai_completion).
     """
 
     async def execute(self):
@@ -38,11 +40,15 @@ class OpenAICompatibleHandler(BaseService):
                 self.customConfig["messages"] = [
                     {"role": role, "content": self.configuration["prompt"]}
                 ] + conversation
+                # Send the user message whenever there is text or images, so an
+                # image-only turn still reaches the model.
+                user_content = []
                 if self.user:
-                    user_content = [{"type": "text", "text": self.user}]
-                    if isinstance(self.image_data, list):
-                        for image_url in self.image_data:
-                            user_content.append({"type": "image_url", "image_url": {"url": image_url}})
+                    user_content.append({"type": "text", "text": self.user})
+                if isinstance(self.image_data, list):
+                    for image_url in self.image_data:
+                        user_content.append({"type": "image_url", "image_url": {"url": image_url}})
+                if user_content:
                     self.customConfig["messages"].append({"role": "user", "content": user_content})
             self.customConfig = self.service_formatter(self.customConfig, service)
             if "tools" not in self.customConfig and "parallel_tool_calls" in self.customConfig:

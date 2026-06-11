@@ -7,7 +7,7 @@ copy-pasted ``*_modelrun.py``. The base URL and per-service capability flags
 a new such service is a single DB insert — no new code.
 
 This is a behavior-preserving consolidation of the previous moonshot / neevcloud
-/ openrouter runners:
+/ openrouter / openai_completion runners:
 - base_url           -> service_registry.base_url(service)
 - stream_options     -> emitted only when supports_stream_usage(service)
 - reasoning deltas   -> accumulated only when supports_reasoning(service)
@@ -76,6 +76,10 @@ async def openai_compatible_modelrun(
     service="",
     count=0,
     token_calculator=None,
+    is_embed=None,
+    user_id=None,
+    thread_id=None,
+    api_collection=None,
 ):
     try:
         client = AsyncOpenAI(base_url=base_url(service), api_key=apiKey)
@@ -101,6 +105,10 @@ async def openai_compatible_modelrun(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            is_embed=is_embed,
+            user_id=user_id,
+            thread_id=thread_id,
+            api_collection=api_collection,
         )
 
     except Exception as error:

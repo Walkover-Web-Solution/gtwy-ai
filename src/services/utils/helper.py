@@ -33,7 +33,6 @@ from ..commonServices.groq.groq_batch import GroqBatch
 from ..commonServices.Mistral.mistral_call import Mistral
 from ..commonServices.Mistral.mistral_batch import MistralBatch
 from ..commonServices.openAI.openai_batch import OpenaiBatch
-from ..commonServices.openAI.openai_completion_response import OpenaiCompletion
 from ..commonServices.openAI.openai_embedding_call import OpenaiEmbedding
 from ..commonServices.openAI.openai_response import OpenaiResponse
 from ..commonServices.openaiCompatible.openai_compatible_call import OpenAICompatibleHandler
@@ -278,14 +277,13 @@ class Helper:
             # (different conversation builder); must precede the uses_openai_sdk branch.
             class_obj = Deepseek(params)
         elif uses_openai_sdk(service):
-            # open_router / neev_cloud / moonshot (+ future openai_sdk services)
+            # open_router / neev_cloud / moonshot / openai_completion
+            # (+ future openai_sdk services)
             class_obj = OpenAICompatibleHandler(params)
         elif service == service_name["mistral"]:
             class_obj = Mistral(params)
         elif service == service_name["deepgram"]:
             class_obj = Deepgram(params)
-        elif service == service_name["openai_completion"]:
-            class_obj = OpenaiCompletion(params)
         else:
             raise ValueError(f"Unsupported service: {service}")
 
