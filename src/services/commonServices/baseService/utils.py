@@ -147,10 +147,18 @@ def resolve_url_params(url, method, data, query_param_keys=None):
 
     resolved_url = re.sub(r":([A-Za-z_][A-Za-z0-9_]*)|{([A-Za-z_][A-Za-z0-9_]*)}", _replace, url)
 
-    if method.upper() == "GET":
-        return resolved_url, data or None, None
+    def _coerce(v):
+        if isinstance(v, bool):
+            return str(v).lower()
+        if not isinstance(v, (str, int, float)):
+            return str(v)
+        return v
 
-    query_params = {k: data.pop(k) for k in list(query_param_keys) if k in data}
+    if method.upper() == "GET":
+        coerced = {k: _coerce(v) for k, v in data.items()}
+        return resolved_url, coerced or None, None
+
+    query_params = {k: _coerce(data.pop(k)) for k in list(query_param_keys) if k in data}
     return resolved_url, query_params or None, data or None
 
 
