@@ -673,6 +673,7 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "sub_thread_id": parsed_data.get("sub_thread_id"),
             "configuration": params.get("configuration", {}),
             "org_id": parsed_data.get("org_id"),
+            "suggestionCustomPrompt": parsed_data.get("suggestionCustomPrompt"),
         },
         "handle_gpt_memory" : {
             "id" : parsed_data.get('id'),

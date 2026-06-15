@@ -149,6 +149,15 @@ def parse_request_body(request_body):
     body = request_body.get("body", {})
     state = request_body.get("state", {})
     path_params = request_body.get("path_params", {})
+    
+    # Extract suggestionCustomPrompt from bridge_configurations
+    bridge_id = path_params.get("bridge_id") or body.get("bridge_id")
+    bridge_configurations = body.get("bridge_configurations", {})
+    suggestion_custom_prompt = None
+    if bridge_id and isinstance(bridge_configurations, dict) and bridge_id in bridge_configurations:
+        cfg_for_bridge = bridge_configurations[bridge_id]
+        if isinstance(cfg_for_bridge, dict):
+            suggestion_custom_prompt = cfg_for_bridge.get("suggestionCustomPrompt")
 
     # Extract ai_matching_custom_prompt from bridge_configurations
     bridge_id = path_params.get("bridge_id") or body.get("bridge_id")
@@ -257,6 +266,7 @@ def parse_request_body(request_body):
         "limit": body.get("limit"),
         "is_rerun": body.get("is_rerun", False),
         "is_playground": body.get("is_playground", False),
+        "suggestionCustomPrompt": suggestion_custom_prompt or body.get("suggestionCustomPrompt"),
     }
 
 

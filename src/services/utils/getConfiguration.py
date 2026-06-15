@@ -271,6 +271,7 @@ async def _prepare_configuration_response(
         "meta": bridges.get("meta"),
         "reviewer_agent": str(bridges.get("settings", {}).get("reviewer_agent") or ""),
         "api_collection": apikey_src,
+        "suggestionCustomPrompt": bridges.get("suggestionCustomPrompt"),
         "limit": {
             "bridge": {
                 "limit": bridges.get("bridge_limit"),
