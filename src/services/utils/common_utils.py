@@ -1493,7 +1493,11 @@ def update_usage_metrics(parsed_data, params, latency, result=None, error=None, 
         "variables": parsed_data.get('variables') or {},
         "outputTokens": output_tokens,
         "inputTokens": input_tokens,
-        "total_tokens": total_tokens
+        "total_tokens": total_tokens,
+        # Full breakdowns carried forward so every token type / per-type cost
+        # can be persisted into conversation_logs.tokens (JSONB) for the UI.
+        "token_usage": usage_data or {},
+        "cost_breakdown": parsed_data.get('tokens') or {},
     }
 
     # Add success-specific fields

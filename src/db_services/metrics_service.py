@@ -180,9 +180,16 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
         "model": data_object.get("model") or history_params.get("model"),
         "status": data_object.get("success", False),
         "tokens": {
-            "input_tokens": data_object.get("inputTokens", 0),
-            "output_tokens": data_object.get("outputTokens", 0),
+            # Full token counts (input/output/total, cached, reasoning,
+            # cache_read/creation, audio, image-specific) carried from the
+            # TokenCalculator. Falls back to the scalar fields if absent.
+            **(data_object.get("token_usage") or {
+                "input_tokens": data_object.get("inputTokens", 0),
+                "output_tokens": data_object.get("outputTokens", 0),
+                "total_tokens": data_object.get("total_tokens", 0),
+            }),
             "expected_cost": data_object.get("expectedCost", 0),
+            "cost": data_object.get("cost_breakdown") or {},
         },
         "variables": data_object.get("variables") or {},
         "latency": latency_data,
@@ -332,6 +339,9 @@ def build_orchestrator_log_data(transfer_chain, thread_info=None):
             "input": data_object.get("inputTokens", 0),
             "output": data_object.get("outputTokens", 0),
             "expected_cost": data_object.get("expectedCost", 0),
+            # Full breakdown for the UI; keeps input/output keys for back-compat.
+            **(data_object.get("token_usage") or {}),
+            "cost": data_object.get("cost_breakdown") or {},
         }
         aggregated_data["variables"][bridge_id] = data_object.get("variables") or {}
         aggregated_data["latency"][bridge_id] = latency_data.get("over_all_time", 0) if latency_data else 0
@@ -452,6 +462,10 @@ async def publish_plan_history_update(
             "outputTokens": metrics.get("output_tokens", 0),
             "total_tokens": metrics.get("total_tokens", 0),
             "expectedCost": metrics.get("expected_cost", 0),
+            # Full breakdowns when the executor aggregated them; build_history_and_metrics_payload
+            # falls back to the scalar token fields above when these are absent.
+            "token_usage": metrics.get("token_usage") or {},
+            "cost_breakdown": metrics.get("cost_breakdown") or {},
             "latency": metrics.get("latency") or {},
             "variables": parsed_data.get("variables") or {},
             "error": metrics.get("last_error"),
