@@ -224,7 +224,6 @@ class Helper:
                 "type",
                 "pre_tools",
                 "fine_tune_model",
-                "is_rich_text",
                 "tone",
                 "responseStyle",
             ]:
@@ -238,8 +237,6 @@ class Helper:
                     config[key] = db_config.get(key, response["configuration"].get(key, "chat"))
                 elif key == "pre_tools":
                     config[key] = db_config.get(key, response["configuration"].get(key, []))
-                elif key == "is_rich_text":
-                    config[key] = db_config.get(key, response["configuration"].get(key, True))
                 else:
                     config[key] = db_config.get(key, response["configuration"].get(key, ""))
             response["configuration"] = config

@@ -54,12 +54,11 @@ from src.services.utils.maximum_iterations_utils import (
     cleanup_tool_count_after,
     init_tool_count,
 )
-from src.services.utils.rich_text_support import process_chatbot_response
 
 
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
-from .baseService.utils import sendResponse
+from .baseService.utils import fix_json_string, sendResponse, unknown_error_handler
 from .response_caching_service import handle_response_caching
 from .reviewer_service import run_review_loop
 from src.services.todo.todo_handler import handle_todo_mode
@@ -375,6 +374,32 @@ async def chat(request_body):
         try:
             result = await handle_response_caching(parsed_data=parsed_data,class_obj=class_obj)
 
+            # If the model was configured to return JSON, validate and repair the content.
+            # Types "json_object" and "json_schema" imply the content must be parsable JSON.
+            _rt = custom_config.get("response_type") or {}
+            if isinstance(_rt, dict) and _rt.get("type") in ("json_object", "json_schema"):
+                _content = (result.get("response") or {}).get("data", {}).get("content")
+                if isinstance(_content, str):
+                    try:
+                        json.loads(_content)
+                    except (json.JSONDecodeError, ValueError):
+                        try:
+                            _repaired = fix_json_string(_content)
+                            result["response"]["data"]["content"] = _repaired
+                        except Exception as _json_err:
+                            asyncio.create_task(unknown_error_handler({
+                                "error": f"Model returned invalid JSON: {str(_json_err)}",
+                                "raw_content": _content[:500],
+                                "model": parsed_data.get("model"),
+                                "service": parsed_data.get("service"),
+                                "bridge_id": parsed_data.get("bridge_id"),
+                                "org_id": parsed_data.get("org_id"),
+                                "message_id": parsed_data.get("message_id"),
+                                "response_type": _rt.get("type"),
+                            }))
+                            result["success"] = False
+                            original_error = f"Model returned invalid JSON: {_content[:200]}"
+
             # Check if agent transfer is needed
             transfer_agent_config = result.get("transfer_agent_config")
             if transfer_agent_config and transfer_agent_config.get("action_type") == "transfer":
@@ -531,14 +556,6 @@ async def chat(request_body):
                 is_external_error=False,
             ))
 
-        if parsed_data["configuration"]["type"] == "chat":
-            if parsed_data["is_rich_text"] and parsed_data["bridgeType"] and not parsed_data["reasoning_model"]:
-                try:
-                    await process_chatbot_response(
-                        result, params, parsed_data, model_output_config, timer, params["execution_time_logs"]
-                    )
-                except Exception as e:
-                    raise RuntimeError(f"error in chatbot : {e}") from e
         parsed_data["alert_flag"] = result["modelResponse"].get("alert_flag", False)
         if parsed_data.get("type") != "image":
             parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(

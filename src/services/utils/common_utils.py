@@ -20,7 +20,7 @@ from src.db_services.metrics_service import (
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
 from src.configs.constant import bridge_ids, redis_keys, alert_types
-from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof
+from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
@@ -29,16 +29,13 @@ from src.services.utils.apiservice import fetch
 from src.services.utils.time import Timer
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
-from src.utils.formatter import apply_variables_to_template_json, fix_json_string
+from src.utils.formatter import apply_variables_to_template_json
 from src.services.utils.helper import Helper
-
 from ...controllers.conversationController import getThread
 from ..commonServices.baseService.utils import sendResponse
 
 UTC = timezone.utc
 
-from src.services.utils.rich_text_support import process_chatbot_response
-from src.db_services.orchestrator_history_service import orchestrator_collector
 from src.services.utils.api_key_status_helper import mark_apikey_status_from_response
 
 def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
@@ -192,7 +189,6 @@ def parse_request_body(request_body):
         "pre_tools": body.get("pre_tools"),
         "version": state.get("version"),
         "fine_tune_model": body.get("configuration", {}).get("fine_tune_model", {}).get("current_model", {}),
-        "is_rich_text": body.get("configuration", {}).get("is_rich_text", False),
         "actions": body.get("actions", {}),
         "user_reference": body.get("user_reference", ""),
         "variables_path": body.get("variables_path") or {},
@@ -290,8 +286,7 @@ def render_template_if_applicable(parsed_data, result):
                         ai_data = parsed
                 except Exception:
                     try:
-                        repaired = fix_json_string(ai_data)
-                        ai_data = json.loads(repaired)
+                        ai_data = json.loads(ai_data)
                         ai_data = ai_data.get("item")
                     except Exception:
                         pass
@@ -1612,6 +1607,30 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
         try:
             result = await handle_response_caching(parsed_data=parsed_data, class_obj=class_obj)
+                    # Validate JSON content when model was configured for JSON output.
+            _rt = (params.get("customConfig") or {}).get("response_type") or {}
+            if isinstance(_rt, dict) and _rt.get("type") in ("json_object", "json_schema"):
+                _content = (result.get("response") or {}).get("data", {}).get("content")
+                if isinstance(_content, str):
+                    try:
+                        json.loads(_content)
+                    except (json.JSONDecodeError, ValueError):
+                        try:
+                            _repaired = fix_json_string(_content)
+                            result["response"]["data"]["content"] = _repaired
+                        except Exception:
+                            asyncio.create_task(unknown_error_handler({
+                                "error": f"Model returned invalid JSON: {str(_json_err)}",
+                                "raw_content": _content[:500],
+                                "model": parsed_data.get("model"),
+                                "service": parsed_data.get("service"),
+                                "bridge_id": parsed_data.get("bridge_id"),
+                                "org_id": parsed_data.get("org_id"),
+                                "message_id": parsed_data.get("message_id"),
+                                "response_type": _rt.get("type"),
+                            }))
+                            raise ValueError(f"Model returned invalid JSON: {_content[:200]}")
+
         except Exception as first_err:
             original_error = str(first_err)
             logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")

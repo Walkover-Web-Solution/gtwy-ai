@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import re
+from typing import Any
 
 import httpx
 from fastapi import Request
@@ -736,7 +737,7 @@ def makeFunctionName(name):
 
 async def unknown_error_handler(data):
     return await fetch(
-            url="https://flow.sokt.io/func/scrirBtsbXm4",
+            url="https://flow.sokt.io/func/scrimCFAKPWg",
             method="POST",
             headers={},
             json_body=data
@@ -959,3 +960,150 @@ def remove_additional_properties_with_anyof(schema):
 
     process_schema(schema)
     return schema
+
+
+# ─────────────────────── JSON REPAIR UTILITY ───────────────────────
+
+def fix_json_string(bad_json: str, max_rounds: int = 30) -> str:
+    """Attempt to repair a malformed JSON string and return a compact valid JSON string."""
+    s = (bad_json or "").strip()
+    if not s:
+        raise ValueError("Input is empty.")
+
+    parsed = _try_ast_literal(s)
+    if parsed is not None:
+        return _dump_compact(parsed)
+
+    s = _strip_common_wrappers(s)
+
+    parsed = _try_ast_literal(s)
+    if parsed is not None:
+        return _dump_compact(parsed)
+
+    s = _repair_common_text_issues(s)
+    s = _balance_brackets_and_braces(s)
+
+    for _ in range(max_rounds):
+        try:
+            return _dump_compact(json.loads(s))
+        except json.JSONDecodeError as err:
+            new_s = _repair_from_decode_error(s, err)
+            if new_s == s:
+                break
+            s = _balance_brackets_and_braces(new_s)
+
+    final_s = _balance_brackets_and_braces(s)
+    try:
+        return _dump_compact(json.loads(final_s))
+    except Exception:
+        return bad_json
+
+
+def _try_ast_literal(text: str) -> Any:
+    """Parse a Python literal (dict/list repr) via ast.literal_eval."""
+    try:
+        result = ast.literal_eval(text)
+        if isinstance(result, (dict, list)):
+            return result
+        return None
+    except Exception:
+        return None
+
+
+def _dump_compact(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _strip_common_wrappers(s: str) -> str:
+    """Remove markdown code fences if present."""
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+
+def _repair_common_text_issues(s: str) -> str:
+    """Fix common JSON formatting mistakes."""
+    s = re.sub(r",\s*(\}|\])", r"\1", s)
+    s = re.sub(r'(?<!["\w])True(?!["\w])', 'true', s)
+    s = re.sub(r'(?<!["\w])False(?!["\w])', 'false', s)
+    s = re.sub(r'(?<!["\w])None(?!["\w])', 'null', s)
+    s = re.sub(r"(?<!\\)'([A-Za-z0-9_\- ]+)'\s*:", r'"\1":', s)
+    s = re.sub(r":\s*'([^'\\]*(?:\\.[^'\\]*)*)'", r':"\1"', s)
+    s = re.sub(r"(\[|,)\s*'([^'\\]*(?:\\.[^'\\]*)*)'" , r'\1"\2"', s)
+    s = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
+    return s
+
+
+def _balance_brackets_and_braces(s: str) -> str:
+    """Add missing closing brackets/braces and remove unmatched closers."""
+    out = []
+    stack = []
+    in_string = False
+    escape = False
+    open_to_close = {"{": "}", "[": "]"}
+
+    for ch in s:
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+        elif ch in open_to_close:
+            stack.append(open_to_close[ch])
+            out.append(ch)
+        elif ch in ("}", "]"):
+            if stack and ch == stack[-1]:
+                stack.pop()
+                out.append(ch)
+        else:
+            out.append(ch)
+
+    if in_string:
+        out.append('"')
+    while stack:
+        out.append(stack.pop())
+
+    repaired = "".join(out)
+    return re.sub(r",\s*(\}|\])", r"\1", repaired)
+
+
+def _repair_from_decode_error(s: str, err: json.JSONDecodeError) -> str:
+    """Apply a targeted fix based on the position reported in a JSONDecodeError."""
+    msg = err.msg
+    pos = max(0, min(len(s), err.pos))
+
+    def insert_at(text: str, idx: int, token: str) -> str:
+        return text[:idx] + token + text[idx:]
+
+    if "Expecting ',' delimiter" in msg:
+        return insert_at(s, pos, ",")
+
+    if "Expecting ':' delimiter" in msg:
+        return insert_at(s, pos, ":")
+
+    if "Unterminated string" in msg:
+        return s + '"'
+
+    if "Expecting property name enclosed in double quotes" in msg:
+        candidate = re.sub(r",\s*(\})", r"\1", s)
+        if candidate != s:
+            return candidate
+        if pos < len(s) and s[pos] == "'":
+            return s[:pos] + '"' + s[pos + 1:]
+
+    if "Extra data" in msg:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(s)
+            return _dump_compact(obj)
+        except Exception:
+            pass
+
+    return _balance_brackets_and_braces(s[:pos].rstrip())
