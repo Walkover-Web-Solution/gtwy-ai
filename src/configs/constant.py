@@ -13,11 +13,14 @@ service_name = {
     "gemini": "gemini",
     "anthropic": "anthropic",
     "grok": "grok",
+    "deepseek": "deepseek",
     "groq": "groq",
     "open_router": "open_router",
     "mistral": "mistral",
     "deepgram": "deepgram",
     "openai_completion": "openai_completion",
+    "neev_cloud": "neev_cloud",
+    "moonshot": "moonshot",
 }
 
 bridge_ids = {
@@ -51,26 +54,32 @@ prebuilt_prompt_bridge_id = [
     "generate_test_cases",
 ]
 
+# cd_ = can delete (DB-backed caches, safe to regenerate)
+# nd_ = no delete (Redis-ONLY stores or cost/metrics accumulators)
 redis_keys = {
-    "pdf_url_": "pdf_url_",
-    "get_bridge_data_": "get_bridge_data_",
-    "bridge_data_with_tools_": "bridge_data_with_tools_",
-    "metrix_bridges_": "metrix_bridges_",
-    "rate_limit_": "rate_limit_",
-    "files_": "files_",
-    "batch_": "batch_",
-    "avg_response_time_": "avg_response_time_",
-    "gpt_memory_": "gpt_memory_",
-    "gpt_memory_counter_": "gpt_memory_counter_",
-    "timezone_and_org_": "timezone_and_org_",
-    "conversation_": "conversation_",
-    "bridgelastused_": "bridgelastused_",
-    "apikeylastused_": "apikeylastused_",
-    "bridgeusedcost_": "bridgeusedcost_",
-    "folderusedcost_": "folderusedcost_",
-    "apikeyusedcost_": "apikeyusedcost_",
-    "last_transffered_agent_": "last_transffered_agent_",
-    "plan_": "plan_",
+    # Deletable — regenerable from DB
+    "get_bridge_data_": "cd_get_bridge_data_",
+    "bridge_data_with_tools_": "cd_bridge_data_with_tools_",
+    "timezone_and_org_": "cd_timezone_and_org_",
+    "conversation_": "cd_conversation_",
+    "last_transffered_agent_": "cd_last_transffered_agent_",
+    # Protected — source of truth or cost/metrics accumulators
+    "bridgeusedcost_": "nd_bridgeusedcost_",
+    "folderusedcost_": "nd_folderusedcost_",
+    "apikeyusedcost_": "nd_apikeyusedcost_",
+    "apikeylastused_": "nd_apikeylastused_",
+    "bridgelastused_": "nd_bridgelastused_",
+    "files_": "nd_files_",
+    "gpt_memory_": "nd_gpt_memory_",
+    "gpt_memory_counter_": "nd_gpt_memory_counter_",
+    "metrix_bridges_": "nd_metrix_bridges_",
+    "rate_limit_": "nd_rate_limit_",
+    "batch_": "nd_batch_",
+    "plan_": "nd_plan_",
+    # Usage-alert feature: per-day spend buckets + once-per-period de-dupe markers
+    "dailyusedcost_": "nd_dailyusedcost_",
+    "usagealertsent_": "nd_usagealertsent_",
+    "usagespikealert_": "nd_usagespikealert_",
 }
 
 tag_keys = {
@@ -94,7 +103,10 @@ new_agent_service = {
     "mistral": "mistral-medium-latest",
     "gemini": "gemini-2.5-flash",
     "grok": "grok-4-fast",
+    "deepseek": "deepseek-v4-flash",
     "deepgram": "nova-3",
+    "neev_cloud": "gpt-oss-120b",
+    "moonshot": "kimi-k2.6",
 }
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
@@ -114,6 +126,28 @@ alert_types = {
     "metrix_limit_reached": "metrix_limit_reached",
     "retry_mechanism": "retry_mechanism",
     "broadcast_response": "broadcast_response",
+}
+
+# Usage-alert feature -------------------------------------------------------
+# Mail-type enum sent in the body of the mail API. The string values are the
+# enum the mail API expects — swap them for the exact values from the mail API
+# spec when it is provided.
+usage_mail_types = {
+    "threshold": "USAGE_THRESHOLD_REACHED",
+    "spike": "USAGE_DAILY_SPIKE",
+    "limit_reached": "USAGE_LIMIT_REACHED",
+}
+
+# Endpoint for the mail API that sends the usage-alert emails.
+USAGE_ALERT_MAIL_URL = "https://flow.sokt.io/func/scrikY1L98L6"
+
+# Tunable defaults for the usage-alert checks.
+usage_alert_config = {
+    "threshold_percent": 0.8,       # fire the threshold email at 80% of the limit
+    "spike_multiplier": 3.0,        # a day is a "spike" when it exceeds N x the trailing average
+    "spike_window_days": 7,         # trailing window used to compute the average daily spend
+    "spike_min_history_days": 3,    # require this many past days of data before spike can fire
+    "daily_bucket_ttl_days": 8,     # how long each per-day bucket lives (window + buffer)
 }
 
 auto_model_tradeoff = {

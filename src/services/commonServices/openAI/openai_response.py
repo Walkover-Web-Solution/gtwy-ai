@@ -6,6 +6,7 @@ from src.services.utils.ai_middleware_format import Response_formatter
 from src.services.utils.gcp_upload_service import uploadDoc
 
 from ..baseService.baseService import BaseService
+from src.services.utils.mcp_utils import merge_server_side_mcp_into_tools
 from ..createConversations import ConversationService
 
 
@@ -122,17 +123,23 @@ class OpenaiResponse(BaseService):
                     await self.handle_failure(functionCallRes)
                     raise ValueError(functionCallRes.get("error"))
                 self.update_model_response(modelResponse, functionCallRes)
+                final_model_response = functionCallRes.get("modelResponse", {})
+                tools = merge_server_side_mcp_into_tools(
+                    service_name["openai"], final_model_response, functionCallRes.get("tools", {})
+                )
                 response = await Response_formatter(
-                    functionCallRes.get("modelResponse", {}),
+                    final_model_response,
                     service_name["openai"],
-                    functionCallRes.get("tools", {}),
+                    tools,
                     self.type,
                     self.image_data,
                 )
-                tools = functionCallRes.get("tools", {})
             else:
+                tools = merge_server_side_mcp_into_tools(
+                    service_name["openai"], modelResponse, {}
+                )
                 response = await Response_formatter(
-                    modelResponse, service_name["openai"], {}, self.type, self.image_data
+                    modelResponse, service_name["openai"], tools, self.type, self.image_data
                 )
 
             transfer_config = (

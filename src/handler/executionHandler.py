@@ -80,6 +80,6 @@ def handle_exceptions(func):
                     is_external_error=False,
                     error_location=error_location,
                 ))
-            return JSONResponse(status_code=400, content=json.loads(json.dumps(error_json)))
+            return JSONResponse(status_code=400, content=json.loads(json.dumps(error_json, default=str)))
 
     return wrapper

@@ -34,25 +34,7 @@ google-auth>=2.30.0,<3.0.0
 google-cloud-storage>=2.17.0,<3.0.0
 deepgram-sdk>=3.0.0
 notdiamond
-
-# LLM Frameworks
-langchain>=0.1.0
-langchain-core>=0.1.0
-langchain-community>=0.1.0
-langgraph>=0.1.0
-langsmith>=0.1.0
-langchainhub>=0.1.0
-
-# LangChain Provider integrations
-langchain-anthropic>=0.1.0
-langchain-openai>=0.1.0
-langchain-groq>=0.1.0
-langchain-mistralai>=0.1.0
-langchain-google-genai>=0.1.0
-
-# LangGraph checkpointing
-langgraph-checkpoint-mongodb>=0.2.0,<0.3.0
-langchain-mongodb>=0.7.0,<0.8.0
+mcp
 
 # Database
 pymongo>=4.8.0,<5.0.0
@@ -85,7 +67,6 @@ pyroscope-io==1.0.1
 opentelemetry-distro==0.37b0
 opentelemetry-sdk==1.16.0
 opentelemetry-exporter-otlp==1.16.0
-opentelemetry-instrumentation-flask==0.37b0
 opentelemetry-instrumentation-sqlalchemy==0.37b0
 opentelemetry-instrumentation-redis==0.37b0
 opentelemetry-instrumentation-celery==0.37b0

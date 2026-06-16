@@ -35,6 +35,21 @@ async def anthropic_stream(configuration, apikey):
                             "name": content_block.name,
                             "input": getattr(content_block, "input", None) or {},
                         }
+                    elif content_block.type == "mcp_tool_use":
+                        content_blocks[index] = {
+                            "type": "mcp_tool_use",
+                            "id": getattr(content_block, "id", ""),
+                            "name": getattr(content_block, "name", ""),
+                            "server_name": getattr(content_block, "server_name", ""),
+                            "input": getattr(content_block, "input", None) or {},
+                        }
+                    elif content_block.type == "mcp_tool_result":
+                        content_blocks[index] = {
+                            "type": "mcp_tool_result",
+                            "tool_use_id": getattr(content_block, "tool_use_id", ""),
+                            "content": getattr(content_block, "content", None),
+                            "is_error": getattr(content_block, "is_error", False),
+                        }
                     elif content_block.type == "thinking":
                         content_blocks[index] = {"type": "thinking", "thinking": ""}
 
@@ -52,10 +67,10 @@ async def anthropic_stream(configuration, apikey):
                         block.setdefault("thinking", "")
                         block["thinking"] += delta.thinking
                         yield {"content": None, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": delta.thinking}
-                    elif delta.type == "input_json_delta" and block.get("type") == "tool_use":
+                    elif delta.type == "input_json_delta" and block.get("type") in {"tool_use", "mcp_tool_use"}:
                         block.setdefault("partial_json", "")
                         block["partial_json"] += delta.partial_json
-                    elif delta.type == "input_text_delta" and block.get("type") == "tool_use":
+                    elif delta.type == "input_text_delta" and block.get("type") in {"tool_use", "mcp_tool_use", "mcp_tool_result"}:
                         block.setdefault("partial_text", "")
                         block["partial_text"] += delta.partial_text
 
@@ -63,7 +78,7 @@ async def anthropic_stream(configuration, apikey):
                     index = event.index
                     if index in content_blocks:
                         block = content_blocks[index]
-                        if block["type"] == "tool_use":
+                        if block["type"] in {"tool_use", "mcp_tool_use"}:
                             if "partial_json" in block:
                                 try:
                                     block["input"] = json.loads(block["partial_json"]) if block["partial_json"] else {}
@@ -75,6 +90,10 @@ async def anthropic_stream(configuration, apikey):
                                 partial_text = block.pop("partial_text")
                                 existing = block.get("input")
                                 block["input"] = (existing + partial_text) if isinstance(existing, str) else partial_text
+                        elif block["type"] == "mcp_tool_result" and "partial_text" in block:
+                            partial_text = block.pop("partial_text")
+                            existing = block.get("content")
+                            block["content"] = (existing + partial_text) if isinstance(existing, str) else partial_text
 
                 elif event.type == "message_delta":
                     delta = event.delta
@@ -84,8 +103,7 @@ async def anthropic_stream(configuration, apikey):
                         usage["output_tokens"] = event.usage.output_tokens
 
         tool_calls = [
-            {"id": b["id"], "type": "tool_use", "name": b["name"], "input": b["input"]}
-            for b in content_blocks.values() if b.get("type") == "tool_use"
+            b for b in content_blocks.values() if b.get("type") in {"tool_use", "mcp_tool_use", "mcp_tool_result"}
         ] or None
         yield {"content": None, "tool_calls": tool_calls, "usage": usage, "finish_reason": finish_reason, "reasoning": None}
     except Exception as error:
@@ -157,6 +175,24 @@ async def anthropic_runmodel(
                                     "name": content_block.name,
                                     "input": initial_input,
                                 }
+                            elif content_block.type == "mcp_tool_use":
+                                initial_input = getattr(content_block, "input", None)
+                                if initial_input is None:
+                                    initial_input = {}
+                                content_blocks[index] = {
+                                    "type": "mcp_tool_use",
+                                    "id": getattr(content_block, "id", ""),
+                                    "name": getattr(content_block, "name", ""),
+                                    "server_name": getattr(content_block, "server_name", ""),
+                                    "input": initial_input,
+                                }
+                            elif content_block.type == "mcp_tool_result":
+                                content_blocks[index] = {
+                                    "type": "mcp_tool_result",
+                                    "tool_use_id": getattr(content_block, "tool_use_id", ""),
+                                    "content": getattr(content_block, "content", None),
+                                    "is_error": getattr(content_block, "is_error", False),
+                                }
                             elif content_block.type == "thinking":
                                 content_blocks[index] = {"type": "thinking", "thinking": ""}
 
@@ -172,11 +208,11 @@ async def anthropic_runmodel(
                             if delta.type == "text_delta":
                                 block.setdefault("text", "")
                                 block["text"] += delta.text
-                            elif delta.type == "input_json_delta" and block.get("type") == "tool_use":
+                            elif delta.type == "input_json_delta" and block.get("type") in {"tool_use", "mcp_tool_use"}:
                                 # For tool use, we need to accumulate the JSON string
                                 block.setdefault("partial_json", "")
                                 block["partial_json"] += delta.partial_json
-                            elif delta.type == "input_text_delta" and block.get("type") == "tool_use":
+                            elif delta.type == "input_text_delta" and block.get("type") in {"tool_use", "mcp_tool_use", "mcp_tool_result"}:
                                 block.setdefault("partial_text", "")
                                 block["partial_text"] += delta.partial_text
                             elif delta.type == "thinking_delta":
@@ -188,7 +224,7 @@ async def anthropic_runmodel(
                             index = event.index
                             if index in content_blocks:
                                 block = content_blocks[index]
-                                if block["type"] == "tool_use":
+                                if block["type"] in {"tool_use", "mcp_tool_use"}:
                                     if "partial_json" in block:
                                         # Parse the accumulated JSON for tool input
                                         try:
@@ -210,6 +246,15 @@ async def anthropic_runmodel(
                                             block["input"] = partial_text
                                         else:
                                             block["input"] = partial_text
+                                elif block["type"] == "mcp_tool_result" and "partial_text" in block:
+                                    existing_content = block.get("content")
+                                    partial_text = block.pop("partial_text")
+                                    if isinstance(existing_content, str):
+                                        block["content"] = existing_content + partial_text
+                                    elif existing_content in (None, {}, []):
+                                        block["content"] = partial_text
+                                    else:
+                                        block["content"] = partial_text
 
                         elif event.type == "message_delta":
                             # Update message-level information

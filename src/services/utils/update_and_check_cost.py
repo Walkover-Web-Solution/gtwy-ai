@@ -8,6 +8,7 @@ from src.configs.constant import limit_types, redis_keys
 from ..cache_service import delete_in_cache, find_in_cache, store_in_cache, verify_ttl
 from .apiservice import fetch
 from .limit_ttl_utils import calculate_limit_ttl
+from .usage_alert_service import evaluate_usage_alerts
 
 _THRESHOLD_WEBHOOK_URL = "https://flow.sokt.io/func/scri87toel4G"
 
@@ -192,7 +193,7 @@ def create_redis_keys(data, org_id=""):
         versions = data.get("versions") or []
 
         for version in versions:
-            keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_{version}")
+            keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_version_{version}")
             keys_to_delete.append(f"{redis_keys['get_bridge_data_']}{version}")
 
     except Exception as e:
@@ -218,7 +219,7 @@ async def purge_related_bridge_caches(bridge_id: str, bridge_usage: int = -1, or
                 pass
 
         # Ensure current bridge's own keys are covered
-        keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_{bridge_id}")
+        keys_to_delete.append(f"{redis_keys['bridge_data_with_tools_']}{org_id}_bridge_{bridge_id}")
         keys_to_delete.append(f"{redis_keys['get_bridge_data_']}{bridge_id}")
 
         if keys_to_delete:
@@ -324,6 +325,10 @@ async def update_cost(parsed_data):
             api_data = await update_usage_cost_in_cache(f"{redis_keys['apikeyusedcost_']}{apikey_id}", expected_cost, "apikey",limit)
             if api_data is not None:
                 redis_usage["apikey"] = api_data
+
+        # Evaluate usage alerts (threshold / limit reached / daily spike) for every
+        # limited scope. Self-guarded; never breaks this background cost update.
+        await evaluate_usage_alerts(parsed_data, redis_usage)
 
         limit_data = limit or {}
         has_any_limit = any(

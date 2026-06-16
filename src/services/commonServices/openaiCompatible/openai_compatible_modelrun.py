@@ -1,23 +1,38 @@
-import traceback
+"""Generic runner for OpenAI-Chat-Completions-compatible services.
+
+Any service whose registry entry has ``client == "openai_sdk"`` and
+``wire_format == "openai_chat"`` is dispatched here instead of having its own
+copy-pasted ``*_modelrun.py``. The base URL and per-service capability flags
+(stream usage, reasoning deltas) are read from the service registry, so adding
+a new such service is a single DB insert — no new code.
+
+This is a behavior-preserving consolidation of the previous moonshot / neevcloud
+/ openrouter / openai_completion runners:
+- base_url           -> service_registry.base_url(service)
+- stream_options     -> emitted only when supports_stream_usage(service)
+- reasoning deltas   -> accumulated only when supports_reasoning(service)
+"""
 
 from openai import AsyncOpenAI
 
-# from src.services.utils.unified_token_validator import validate_openai_token_limit
-from globals import logger
+from src.configs.service_registry import base_url, supports_reasoning, supports_stream_usage
 from src.exceptions import ApiCallError
 
 from ..api_executor import execute_api_call
 
 
-async def openrouter_stream(configuration, apiKey):
-    """Async generator yielding normalised delta dicts for OpenRouter chat.completions."""
-    openAI = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=apiKey)
+async def openai_compatible_stream(configuration, apiKey, service):
+    """Async generator yielding normalised delta dicts for any openai_sdk service."""
+    client = AsyncOpenAI(base_url=base_url(service), api_key=apiKey)
     config = {**configuration}
+    if supports_stream_usage(service):
+        config["stream_options"] = {"include_usage": True}
+    emit_reasoning = supports_reasoning(service)
     accumulated_tool_calls = {}
     usage = {}
     finish_reason = None
     try:
-        stream = await openAI.chat.completions.create(**config)
+        stream = await client.chat.completions.create(**config)
         async for chunk in stream:
             choice = chunk.choices[0] if chunk.choices else None
             if chunk.usage:
@@ -26,6 +41,10 @@ async def openrouter_stream(configuration, apiKey):
                 continue
             delta = choice.delta
             finish_reason = choice.finish_reason or finish_reason
+            if emit_reasoning:
+                reasoning_delta = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning_delta:
+                    yield {"content": None, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": reasoning_delta}
             if delta.content:
                 yield {"content": delta.content, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
             if delta.tool_calls:
@@ -44,7 +63,7 @@ async def openrouter_stream(configuration, apiKey):
         yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
 
 
-async def openrouter_modelrun(
+async def openai_compatible_modelrun(
     configuration,
     apiKey,
     execution_time_logs,
@@ -57,23 +76,21 @@ async def openrouter_modelrun(
     service="",
     count=0,
     token_calculator=None,
+    is_embed=None,
+    user_id=None,
+    thread_id=None,
+    api_collection=None,
 ):
     try:
-        # Validate token count before making API call (raises exception if invalid)
-        # model_name = configuration.get('model')
-        # validate_openai_token_limit(configuration, model_name, service)
+        client = AsyncOpenAI(base_url=base_url(service), api_key=apiKey)
 
-        openAI = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=apiKey)
-
-        # Define the API call function
         async def api_call(config):
             try:
-                chat_completion = await openAI.chat.completions.create(**config)
+                chat_completion = await client.chat.completions.create(**config)
                 return {"success": True, "response": chat_completion.to_dict()}
             except Exception as error:
                 return {"success": False, "error": str(error), "status_code": getattr(error, "status_code", None)}
 
-        # Execute API call with monitoring
         return await execute_api_call(
             configuration=configuration,
             api_call=api_call,
@@ -88,6 +105,10 @@ async def openrouter_modelrun(
             service=service,
             count=count,
             token_calculator=token_calculator,
+            is_embed=is_embed,
+            user_id=user_id,
+            thread_id=thread_id,
+            api_collection=api_collection,
         )
 
     except Exception as error:

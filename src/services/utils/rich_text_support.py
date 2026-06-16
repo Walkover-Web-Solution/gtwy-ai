@@ -55,7 +55,7 @@ async def process_chatbot_response(result, params, data, modelOutputConfig, time
         execution_time_logs.append(
             {"step": "Processing time for Rich Text", "time_taken": timer.stop("API chat completion")}
         )
-        response = json.dumps(response)
+        response = json.dumps(response["response"])
         result["response"]["data"]["content"] = response
         result["historyParams"]["chatbot_message"] = response
         return

@@ -26,9 +26,12 @@ SERVICE_MAPPERS = {
     service_name["anthropic"]:         _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(429,)),
     service_name["groq"]:              _make_mapper(invalid=(400, 401),      unauthorized=(403,), limited=(422, 429, 498)),
     service_name["grok"]:              _make_mapper(invalid=(400, 401),      unauthorized=(403,), limited=(429,)),
+    service_name["deepseek"]:          _make_mapper(invalid=(400, 401),      unauthorized=(403,), limited=(429,)),
     service_name["mistral"]:           _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(429,)),
     service_name["open_router"]:       _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(402, 429)),
     service_name["deepgram"]:          _make_mapper(invalid=(400, 401, 404), unauthorized=(403,), limited=(402, 413, 422, 429)),
+    service_name["neev_cloud"]:        _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(429,)),
+    service_name["moonshot"]:         _make_mapper(invalid=(401,),          unauthorized=(403,), limited=(429,)),
 }
 
 

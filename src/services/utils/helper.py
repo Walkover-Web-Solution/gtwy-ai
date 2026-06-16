@@ -27,16 +27,17 @@ from ..commonServices.deepgram.deepgramCall import Deepgram
 from ..commonServices.Google.geminiCall import GeminiHandler
 from ..commonServices.Google.gemini_batch import GeminiBatch
 from ..commonServices.grok.grokCall import Grok
+from ..commonServices.deepseek.deepseekCall import Deepseek
 from ..commonServices.groq.groqCall import Groq
 from ..commonServices.groq.groq_batch import GroqBatch
 from ..commonServices.Mistral.mistral_call import Mistral
 from ..commonServices.Mistral.mistral_batch import MistralBatch
 from ..commonServices.openAI.openai_batch import OpenaiBatch
-from ..commonServices.openAI.openai_completion_response import OpenaiCompletion
 from ..commonServices.openAI.openai_embedding_call import OpenaiEmbedding
 from ..commonServices.openAI.openai_response import OpenaiResponse
-from ..commonServices.openRouter.openRouter_call import OpenRouter
+from ..commonServices.openaiCompatible.openai_compatible_call import OpenAICompatibleHandler
 from ..cache_service import make_json_serializable
+from src.configs.service_registry import uses_openai_sdk
 
 
 class Helper:
@@ -271,76 +272,22 @@ class Helper:
             class_obj = Groq(params)
         elif service == service_name["grok"]:
             class_obj = Grok(params)
-        elif service == service_name["open_router"]:
-            class_obj = OpenRouter(params)
+        elif service == service_name["deepseek"]:
+            # deepseek shares the generic runner but keeps its own handler
+            # (different conversation builder); must precede the uses_openai_sdk branch.
+            class_obj = Deepseek(params)
+        elif uses_openai_sdk(service):
+            # open_router / neev_cloud / moonshot / openai_completion
+            # (+ future openai_sdk services)
+            class_obj = OpenAICompatibleHandler(params)
         elif service == service_name["mistral"]:
             class_obj = Mistral(params)
         elif service == service_name["deepgram"]:
             class_obj = Deepgram(params)
-        elif service == service_name["openai_completion"]:
-            class_obj = OpenaiCompletion(params)
         else:
             raise ValueError(f"Unsupported service: {service}")
 
         return class_obj
-
-    def calculate_usage(model, model_response, service):
-        usage = {}
-        token_cost = {}
-        permillion = 1000000
-        modelObj = model_config_document[service][model]
-        if modelObj is None:
-            raise AttributeError(f"Model function '{model}' not found in model_configuration.")
-
-        if service in ["openai", "groq", "grok", "openai_completion"]:
-            token_cost["input_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("input_cost") or 0
-            token_cost["output_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("output_cost") or 0
-            token_cost["cache_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("cached_cost") or 0
-
-            usage["inputTokens"] = _.get(model_response["usage"], "input_tokens", 0)
-            usage["outputTokens"] = _.get(model_response["usage"], "output_tokens", 0)
-            usage["cachedTokens"] = _.get(model_response["usage"], "cached_token") or 0
-
-            usage["expectedCost"] = 0
-            if usage["inputTokens"]:
-                usage["expectedCost"] += usage["inputTokens"] * (token_cost["input_cost"] / permillion)
-            if usage["outputTokens"]:
-                usage["expectedCost"] += usage["outputTokens"] * (token_cost["output_cost"] / permillion)
-            if usage["cachedTokens"]:
-                usage["expectedCost"] += usage["cachedTokens"] * (token_cost["cache_cost"] / permillion)
-
-        elif service == "anthropic":
-            # model_specific_config = model_response['usage'][0].get('total_cost', {}).get(model, {})
-            usage["inputTokens"] = _.get(model_response["usage"], "input_tokens", 0)
-            usage["outputTokens"] = _.get(model_response["usage"], "output_tokens", 0)
-            usage["cachedCreationInputTokens"] = _.get(model_response["usage"], "cache_creation_input_tokens") or 0
-            usage["cachedReadInputTokens"] = _.get(model_response["usage"], "cache_read_input_tokens") or 0
-
-            token_cost["input_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"]["input_cost"]
-            token_cost["output_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"]["output_cost"]
-            token_cost["cached_cost"] = modelObj["outputConfig"]["usage"][0]["total_cost"].get("cached_cost") or 0
-            token_cost["caching_write_cost"] = (
-                modelObj["outputConfig"]["usage"][0]["total_cost"].get("caching_write_cost") or 0
-            )
-            token_cost["caching_read_cost"] = (
-                modelObj["outputConfig"]["usage"][0]["total_cost"].get("caching_read_cost") or 0
-            )
-
-            usage["expectedCost"] = 0
-            if usage["inputTokens"]:
-                usage["expectedCost"] += usage["inputTokens"] * (token_cost["input_cost"] / permillion)
-                usage["expectedCost"] += usage["inputTokens"] * (token_cost["caching_read_cost"] / permillion)
-                usage["expectedCost"] += usage["cachedCreationInputTokens"] * (
-                    token_cost["caching_read_cost"] / permillion
-                )
-
-            if usage["outputTokens"]:
-                usage["expectedCost"] += usage["outputTokens"] * (token_cost["output_cost"] / permillion)
-                usage["expectedCost"] += usage["cachedReadInputTokens"] * (
-                    token_cost["caching_write_cost"] / permillion
-                )
-
-        return usage
 
     async def create_service_handler_for_batch(params, service):
         # Supports all batch services
@@ -532,24 +479,9 @@ class Helper:
         return {"fields": fields, "required": required}
 
     @staticmethod
-    def update_agentconfig_from_pre_function(response_data, parsed_data, custom_config):
+    def update_agentconfig_from_pre_function(response_data, parsed_data):
         if not isinstance(response_data, dict):
             return
-        
-        new_response_type = response_data.get(agent_config_update_keys["_response_type"])
-        if new_response_type:
-            if not isinstance(new_response_type, dict):
-                raise BadRequestException("Invalid _response_type format. Expected dict with 'type' field")
-            response_type_value = new_response_type.get("type")
-            if not response_type_value:
-                raise BadRequestException("Invalid _response_type: Missing 'type' field")
-            if response_type_value not in VALID_RESPONSE_TYPES:
-                raise BadRequestException(f"Invalid _response_type.type: '{response_type_value}'. Supported types: {', '.join(sorted(VALID_RESPONSE_TYPES))}")
-            if response_type_value == "json_schema" and not new_response_type.get("json_schema"):
-                raise BadRequestException("Invalid _response_type: 'json_schema' type requires 'json_schema' field")
-                
-            parsed_data["configuration"]["response_type"] = new_response_type
-            custom_config["response_type"] = new_response_type
         
         if user_message := response_data.get(agent_config_update_keys["_user_message"]):
             parsed_data["user"] = user_message

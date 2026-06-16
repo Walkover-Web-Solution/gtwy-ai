@@ -11,7 +11,7 @@ from .cache_service import (
 )
 
 
-def extract_cache_tags(bridge_response: dict) -> list[str]:
+def extract_cache_tags(bridge_response: dict, environment: str | None = None) -> list[str]:
     """Return deduped reverse-index tag strings for a cached bridge response."""
     bridge = (bridge_response or {}).get("bridges") or {}
     if not isinstance(bridge, dict):
@@ -26,10 +26,15 @@ def extract_cache_tags(bridge_response: dict) -> list[str]:
         if s:
             tags.add(f"{prefix}{s}")
 
-    _add(tag_keys["agent"], bridge.get("parent_id"))
-
-    blob_id = bridge.get("_id")
     parent_id = bridge.get("parent_id")
+    blob_id = bridge.get("_id")
+    agent_id = parent_id or blob_id
+
+    _add(tag_keys["agent"], agent_id)
+
+    if environment and agent_id:
+        _add(tag_keys["agent"], f"{agent_id}_env_{environment}")
+
     if blob_id and parent_id and str(blob_id) != str(parent_id):
         _add(tag_keys["version"], blob_id)
 

@@ -21,7 +21,7 @@ class Mistral(BaseService):
             historyParams["message"] = "image generated successfully"
             historyParams["type"] = "assistant"
         else:
-            conversation = ConversationService.create_mistral_ai_conversation(
+            conversation = ConversationService.createOpenAICompatibleConversation(
                 self.configuration.get("conversation"), self.memory
             ).get("messages", [])
 

@@ -5,18 +5,20 @@ import re
 
 import httpx
 from fastapi import Request
+from google.genai import types
 
+from globals import *
 from globals import logger, traceback
 from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name
+from src.configs.service_registry import has_openai_choices_shape, uses_string_tool_choice
 from src.controllers.rag_controller import get_text_from_vectorsQuery
+from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
+from src.services.mcp_gateway.client import call_mcp_tool
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
-from globals import *
-from src.services.cache_service import store_in_cache, find_in_cache, client, REDIS_PREFIX
-from src.configs.constant import redis_keys,inbuild_tools
-from google.genai import types
+
 
 def clean_json(data):
     """Recursively remove keys with empty string, empty list, or empty dictionary."""
@@ -107,7 +109,7 @@ def apply_variable_path_filters(
 
 def validate_tool_call(service, response):
     match service: # TODO: Fix validation process.
-        case  'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral':
+        case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
             tool_calls = response.get('choices', [])[0].get('message', {}).get("tool_calls", [])
             return len(tool_calls) > 0 if tool_calls is not None else False
         case "openai":
@@ -124,10 +126,53 @@ def validate_tool_call(service, response):
             return False
 
 
+def resolve_url_params(url, method, data, query_param_keys=None):
+    """
+    Replace :param or {param} route params in URL with values from data dict.
+    For GET requests all remaining args become query params.
+    For non-GET, keys listed in query_param_keys are sent as query params; the rest go as JSON body.
+    Returns (resolved_url, query_params_dict_or_None, body_or_None).
+    """
+    if not data:
+        return url, None, None
+
+    data = dict(data)
+    query_param_keys = query_param_keys or []
+
+    def _replace(match):
+        key = match.group(1) or match.group(2)
+        if key in data:
+            return str(data.pop(key))
+        return match.group(0)
+
+    resolved_url = re.sub(r":([A-Za-z_][A-Za-z0-9_]*)|{([A-Za-z_][A-Za-z0-9_]*)}", _replace, url)
+
+    def _coerce(v):
+        if isinstance(v, bool):
+            return str(v).lower()
+        if not isinstance(v, (str, int, float)):
+            return str(v)
+        return v
+
+    if method.upper() == "GET":
+        coerced = {k: _coerce(v) for k, v in data.items()}
+        return resolved_url, coerced or None, None
+
+    query_params = {k: _coerce(data.pop(k)) for k in list(query_param_keys) if k in data}
+    return resolved_url, query_params or None, data or None
+
+
 async def axios_work(data, function_payload):
     try:
+        method = function_payload.get("method", "POST")
+        resolved_url, query_params, body = resolve_url_params(
+            function_payload.get("url"),
+            method,
+            data,
+            function_payload.get("query_params", []),
+        )
         response, rs_headers = await fetch(
-            function_payload.get("url"), function_payload.get("method", "POST"), function_payload.get("headers", {}), None, data
+            resolved_url, method, function_payload.get("headers", {}), query_params, body
         )  # required is not send then it will still hit the curl
         return {
             "response": response,
@@ -141,14 +186,7 @@ async def axios_work(data, function_payload):
 
 
 def disable_tool_call(configuration: dict, service: str):
-    if service in (
-        service_name["openai"],
-        service_name["openai_completion"],
-        service_name["mistral"],
-        service_name["groq"],
-        service_name["grok"],
-        service_name["open_router"]
-    ):
+    if uses_string_tool_choice(service):
         configuration["tool_choice"] = "none"
 
     elif service == service_name["gemini"]:
@@ -167,11 +205,10 @@ def disable_tool_call(configuration: dict, service: str):
         configuration["tool_choice"] = {"type": "none"}
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
-    if (
-        service == service_name["openai_completion"]
-        or service == service_name["open_router"]
-        or service == service_name["mistral"]
-    ):
+    if has_openai_choices_shape(service):
+        # All openai_chat services share the function-nested tool schema
+        # (openai_completion, open_router, mistral, neev_cloud, moonshot,
+        # deepseek, groq, grok). openai (flat) / gemini / anthropic differ below.
         data_to_send = [
             {
                 "type": "function",
@@ -198,7 +235,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
         return data_to_send
-    
+
     elif service == service_name['gemini']:
         gemini_tools = []
         function_declarations = [
@@ -222,9 +259,9 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
         ]
         if function_declarations:
             from google.genai import types
-            gemini_tools.append(types.Tool(function_declarations=function_declarations)) 
-        
-        return gemini_tools 
+            gemini_tools.append(types.Tool(function_declarations=function_declarations))
+
+        return gemini_tools
     elif service == service_name['openai']:
         data_to_send =  [
             {
@@ -273,30 +310,6 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             }
             for transformed_tool in configuration.get("tools", [])
         ]
-    elif service == service_name["groq"] or service == service_name["grok"]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": transformed_tool["name"],
-                    "description": transformed_tool["description"],
-                    "parameters": {
-                        "type": "object",
-                        "properties": clean_json(
-                            apply_variable_path_filters(
-                                transformed_tool.get("properties", {}),
-                                variables=variables,
-                                variables_path=variables_path,
-                                function_name=transformed_tool["name"],
-                                parentValue={"required": transformed_tool.get("required", [])},
-                            )
-                        ),
-                        "required": transformed_tool.get("required"),
-                    },
-                },
-            }
-            for transformed_tool in configuration.get("tools", [])
-        ]
 
 def reasoning_formatter(service: str, new_config: dict) -> None:
     if service == service_name["openai"]:
@@ -318,12 +331,18 @@ def reasoning_formatter(service: str, new_config: dict) -> None:
             new_config["output_config"]["effort"] = effort
         else:
             new_config["output_config"] = {"effort": effort}
-        
+
         new_config.pop("reasoning", None)
 
     elif service == service_name["groq"]:
         effort = new_config["reasoning"].get("effort", "medium")
         new_config["reasoning_effort"] = effort
+        new_config.pop("reasoning", None)
+
+    elif service == service_name["deepseek"]:
+        effort = new_config["reasoning"].get("effort", "medium")
+        new_config["reasoning_effort"] = effort
+        new_config["extra_body"] = {"thinking": {"type": "enabled"}}
         new_config.pop("reasoning", None)
 
     # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
@@ -379,13 +398,18 @@ async def process_data_and_run_tools(codes_mapping, self):
         # Prepare tasks for async execution
         tasks = []
         for tool_call_key, tool in codes_mapping.items():
-            name = tool["name"]
+            original_name = tool["name"]
+            name = original_name
 
-            # Get corresponding function code mapping
-            tool_mapping = (
-                {} if self.tool_id_and_name_mapping[name] else {"error": True, "response": "Wrong Function name"}
-            )
-            tool_data = {**tool, **tool_mapping}
+            # Gemini might return a tool_call with prefix
+            if name not in self.tool_id_and_name_mapping and isinstance(name, str) and "." in name:
+                short_name = name.rsplit(".", 1)[-1]
+                if short_name in self.tool_id_and_name_mapping:
+                    name = short_name
+
+            tool_mapping = self.tool_id_and_name_mapping.get(name) or {"error": True, "response": "Wrong Function name"}
+            display_tool_name = tool_mapping.get("mcp_tool") if tool_mapping.get("type") == "MCP" else display_mcp_tool_name(name)
+            tool_data = {**tool, **tool_mapping, "name": name, "model_tool_name": original_name, "display_tool_name": display_tool_name}
 
             if not tool_data.get("response"):
                 # if function is present in db/NO response, create task for async processing
@@ -432,6 +456,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
                     task = call_firecrawl_scrape(tool_data.get("args"))
+                elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
+                    task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 else:
                     task = axios_work(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 tasks.append((tool_call_key, tool_data, task))
@@ -447,7 +473,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                     }
                 )
                 # Update tool_call_logs with existing response
-                tool_call_logs[tool_call_key] = {**tool, "response": tool_data["response"]}
+                tool_call_logs[tool_call_key] = {**tool, "name": tool_data.get("display_tool_name"), "response": tool_data["response"]}
 
         # Execute all tasks concurrently if any exist
         if tasks:
@@ -484,8 +510,9 @@ async def process_data_and_run_tools(codes_mapping, self):
                 # Update tool_call_logs with the response
                 tool_call_logs[tool_call_key] = {
                     **tool_data,
+                    "name": tool_data.get("display_tool_name"),
                     "data": result or response,
-                    "id": self.tool_id_and_name_mapping[tool_data["name"]].get("name"),
+                    "id": self.tool_id_and_name_mapping[tool_data["name"]].get("mcp_tool") or self.tool_id_and_name_mapping[tool_data["name"]].get("name"),
                 }
         # Create mapping by tool_call_id (now tool_call_key) for return
         mapping = {resp["tool_call_id"]: resp for resp in responses}
@@ -508,19 +535,19 @@ def make_code_mapping_by_service(responses, service):
     codes_mapping = {}
     function_list = []
     match service:
-        case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral':
+        case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
 
             for tool_call in responses['choices'][0]['message']['tool_calls']:
                 name = tool_call['function']['name']
                 error = False
                 try:
-                    args = json.loads(tool_call["function"]["arguments"])
-                except json.JSONDecodeError:
-                    args = {"error": tool_call["function"]["arguments"]}
+                    args = json.loads(tool_call["function"]["arguments"]) if isinstance(tool_call["function"]["arguments"], str) else (tool_call["function"]["arguments"] or {})
+                except (json.JSONDecodeError, TypeError):
+                    args = {"error": str(tool_call["function"]["arguments"])}
                     error = True
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
-        
+
         case 'gemini':
             for part in responses['candidates'][0]["content"]["parts"]:
                 function_call = part.get('function_call') if isinstance(part, dict) else None
@@ -534,16 +561,16 @@ def make_code_mapping_by_service(responses, service):
                         "error": False
                     }
                     function_list.append(name)
-            
+
         case 'openai':
 
             for tool_call in [output for output in responses['output'] if output.get('type') == 'function_call']:
                 name = tool_call['name']
                 error = False
                 try:
-                    args = json.loads(tool_call["arguments"])
-                except json.JSONDecodeError:
-                    args = {"error": tool_call["arguments"]}
+                    args = json.loads(tool_call["arguments"]) if isinstance(tool_call["arguments"], str) else (tool_call["arguments"] or {})
+                except (json.JSONDecodeError, TypeError):
+                    args = {"error": str(tool_call["arguments"])}
                     error = True
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
@@ -656,6 +683,10 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "org_id" : parsed_data.get('org_id'),
             "pending_turns": pending_turns,
             "bridge_summary": parsed_data.get("bridge_summary"),
+            "thread_id": parsed_data.get("thread_id"),
+            "sub_thread_id": parsed_data.get("sub_thread_id"),
+            "bridge_id": parsed_data.get("bridge_id"),
+            "version_id": parsed_data.get("version_id")
         },
         "check_handle_gpt_memory": {
             "gpt_memory": gpt_memory_enabled and should_fire_gpt_memory,
@@ -735,15 +766,20 @@ def serialize_config(config) -> dict:
 
 
 def build_accumulated_response(service, configuration, message_id, accumulated_content,
-                                final_tool_calls, final_usage, final_finish_reason, last_delta, service_tier=None):
+                                final_tool_calls, final_usage, final_finish_reason, last_delta,
+                                service_tier=None, accumulated_reasoning=None):
     """Build a complete response dict from streamed data, matching the shape of each service's non-stream response."""
     full_text = "".join(accumulated_content)
-    if service in [service_name["groq"], service_name["grok"],
-                   service_name["open_router"], service_name["mistral"]]:
+    if service in [service_name["groq"], service_name["grok"], service_name["deepseek"], 
+                   service_name["open_router"], service_name["mistral"],
+                   service_name["neev_cloud"], service_name["moonshot"]]:
+        message = {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls or []}
+        if accumulated_reasoning:
+            message["reasoning_content"] = "".join(accumulated_reasoning)
         return {
             "choices": [{
                 "index": 0,
-                "message": {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls},
+                "message": message,
                 "finish_reason": final_finish_reason,
             }],
             "model": configuration.get("model", ""),
@@ -793,6 +829,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
 
 async def run_stream_and_collect(generator, streamer):
     accumulated_content = []
+    accumulated_reasoning = []
     final_tool_calls = None
     final_usage = {}
     final_finish_reason = None
@@ -809,10 +846,13 @@ async def run_stream_and_collect(generator, streamer):
             accumulated_content.append(delta["content"])
             await streamer.emit_delta(delta["content"])
         if delta.get("reasoning"):
+            accumulated_reasoning.append(delta["reasoning"])
             await streamer.emit_reasoning(delta["reasoning"])
         if delta.get("tool_calls") is not None:
-            final_tool_calls = delta["tool_calls"]
-            for tc in final_tool_calls:
+            current_tool_calls = delta["tool_calls"]
+            if not delta.get("stream_event_only"):
+                final_tool_calls = current_tool_calls
+            for tc in current_tool_calls:
                 if not isinstance(tc, dict):
                     continue
                 fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
@@ -828,10 +868,24 @@ async def run_stream_and_collect(generator, streamer):
                     args = raw_args
                 else:
                     args = {}
+                is_mcp_event = delta.get("stream_event_only") or tool_name.endswith(MCP_NAME_SUFFIX)
                 await streamer.emit_tool_call(
-                    name=tool_name,
+                    name=display_mcp_tool_name(tool_name),
                     args=args,
                     call_id=tc.get("id") or tc.get("call_id", ""),
+                    type="mcp" if is_mcp_event else None,
+                )
+        if delta.get("tool_results") is not None:
+            for tool_result in delta["tool_results"]:
+                if not isinstance(tool_result, dict):
+                    continue
+                tool_result_name = tool_result.get("name", "")
+                is_mcp_event = delta.get("stream_event_only") or tool_result_name.endswith(MCP_NAME_SUFFIX)
+                await streamer.emit_tool_result(
+                    name=display_mcp_tool_name(tool_result_name),
+                    content=tool_result.get("content", ""),
+                    call_id=tool_result.get("call_id", ""),
+                    type="mcp" if is_mcp_event else None,
                 )
         if delta.get("usage"):
             final_usage = delta["usage"]
@@ -842,6 +896,7 @@ async def run_stream_and_collect(generator, streamer):
 
     return {
         "accumulated_content": accumulated_content,
+        "accumulated_reasoning": accumulated_reasoning,
         "final_tool_calls": final_tool_calls,
         "final_usage": final_usage,
         "final_finish_reason": final_finish_reason,

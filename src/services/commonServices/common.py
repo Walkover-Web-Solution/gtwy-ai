@@ -6,18 +6,15 @@ import uuid
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from config import Config
 from globals import TRANSFER_HISTORY, BadRequestException, logger
 from models.mongo_connection import db
-from src.configs.constant import redis_keys, alert_types
+from src.configs.constant import alert_types, redis_keys
 from src.handler.executionHandler import handle_exceptions
+from src.send_alert import send_alert
+from src.services.auto_router_service import apply_auto_model_selection
 from src.services.cache_service import find_in_cache, store_in_cache
-from src.services.utils.maximum_iterations_utils import (
-    build_tool_count_key,
-    cleanup_tool_count,
-    cleanup_tool_count_after,
-    init_tool_count,
-)
+from src.services.todo.planner_service import prepare_planner_request
+from src.services.todo.todo_handler import handle_todo_mode
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
@@ -40,26 +37,31 @@ from src.services.utils.common_utils import (
     prepare_prompt,
     process_background_tasks,
     process_background_tasks_for_error,
-    save_error_history,
-    process_variable_state,
-    restructure_json_schema,
-    validate_json_schema_configuration,
-    setup_agent_tools,
-    update_usage_metrics,
     process_batch_background_tasks,
-    update_cost_usage_and_apikey_status_in_background,
-    sse_stream_and_finalize,
+    process_variable_state,
     render_template_if_applicable,
+    restructure_json_schema,
+    save_error_history,
+    setup_agent_tools,
+    sse_stream_and_finalize,
+    update_cost_usage_and_apikey_status_in_background,
+    update_usage_metrics,
+    validate_json_schema_configuration,
+)
+from src.services.utils.maximum_iterations_utils import (
+    build_tool_count_key,
+    cleanup_tool_count,
+    cleanup_tool_count_after,
+    init_tool_count,
 )
 from src.services.utils.rich_text_support import process_chatbot_response
-from src.services.auto_router_service import apply_auto_model_selection
+
+
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
 from .baseService.utils import sendResponse
-from src.send_alert import send_alert
 from .response_caching_service import handle_response_caching
 from .reviewer_service import run_review_loop
-from workflow import execute_advanced_workflow
 from src.services.todo.todo_handler import handle_todo_mode
 from src.services.todo.planner_service import prepare_planner_request
 
@@ -149,7 +151,7 @@ async def chat_multiple_agents(request_body):
 
 
 @handle_exceptions
-async def chat(request_body): 
+async def chat(request_body):
     result = {}
     class_obj = {}
     tool_count_key_for_cleanup = None
@@ -164,6 +166,14 @@ async def chat(request_body):
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
+
+        mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
+        if isinstance(mcp_cfg, dict):
+            from src.services.utils.mcp_utils import resolve_mcp_type
+            mcp_type = resolve_mcp_type(parsed_data.get("service"), parsed_data.get("model"))
+            if mcp_type == "client":
+                from src.services.mcp_gateway.prefetch import prefetch_mcp_tools
+                await prefetch_mcp_tools(mcp_cfg)
 
         # Reviewer agent: if this bridge has a configured reviewer, stash its
         # bridge_id on parsed_data. The review loop runs after the main agent
@@ -189,12 +199,12 @@ async def chat(request_body):
             tool_count_key_for_cleanup,
             parsed_data.get("maximum_iterations") or 3,
         )
-        
+
         # To maintain the API Key status for the original service, because it gets overrited when Fallback is used
         original_service = parsed_data["service"]
-        
+
         process_variable_state(parsed_data)
-        
+
         # Setup pre_tools and post_tool for the current agent with its own variables
         current_agent_id = parsed_data.get("bridge_id")
         pre_tools = bridge_configurations.get(current_agent_id, {}).get("pre_tools_data", [])
@@ -295,16 +305,6 @@ async def chat(request_body):
             custom_config["response_type"] = restructure_json_schema(
                 custom_config["response_type"], parsed_data["service"]
             )
-        if parsed_data.get("mode") == "todo":
-            return await execute_advanced_workflow(
-                parsed_data=parsed_data,
-                bridge_configurations=bridge_configurations,
-                params=params,
-                timer=timer,
-                thread_info=thread_info,
-                transfer_request_id=transfer_request_id,
-            )
-
         if parsed_data.get("mode") == "plan":
             # Executor orchestration actions keep the existing pipeline.
             # The planner LLM call (no action) falls through to chat() with
@@ -419,7 +419,8 @@ async def chat(request_body):
 
             result["response"]["usage"] = params["token_calculator"].get_total_usage()
             execution_failed = not result["success"]
-            original_error = result.get("error", "Unknown error") if execution_failed else None
+            _raw_error = result.get("error", "Unknown error") if execution_failed else None
+            original_error = str(_raw_error) if _raw_error is not None and not isinstance(_raw_error, str) else _raw_error
         except Exception as execution_exception:
             # Handle exceptions during execution
             execution_failed = True
@@ -613,6 +614,23 @@ async def chat(request_body):
                 parsed_data.get("testcase_data", {}), result, parsed_data
             )
             result["response"]["testcase_result"] = testcase_result
+
+            # Stamp the testcase fields onto historyParams so the log queue
+            # persists them onto the conversation_logs row in Postgres.
+            if result.get("historyParams") is not None:
+                result["historyParams"]["testcase_id"] = testcase_result.get("testcase_id")
+                result["historyParams"]["testcase_data"] = {
+                    "expected": testcase_result.get("expected"),
+                    "actual": testcase_result.get("actual"),
+                    "score": testcase_result.get("score"),
+                    "matching_type": testcase_result.get("matching_type"),
+                    "type": testcase_result.get("type"),
+                    "success": testcase_result.get("success"),
+                    "error": testcase_result.get("error"),
+                    "system_prompt": parsed_data.get("configuration", {}).get("prompt", ""),
+                    "model": parsed_data.get("configuration", {}).get("model", ""),
+                }
+
             if parsed_data.get("body", {}).get("bridge_configurations", {}).get("playground_response_format"):
                 await sendResponse(
                     parsed_data["body"]["bridge_configurations"]["playground_response_format"],
@@ -819,6 +837,17 @@ async def batch(request_body):
         )
         if "tools" in custom_config:
             del custom_config["tools"]
+
+        # json_schema service conversion (mirrors chat function Step 10)
+        is_valid_schema, schema_error = validate_json_schema_configuration(custom_config)
+        if not is_valid_schema:
+            raise ValueError(schema_error)
+
+        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
+            custom_config["response_type"] = restructure_json_schema(
+                custom_config["response_type"], parsed_data["service"]
+            )
+
         # Step 8: Execute Service Handler
         params = build_service_params_for_batch(parsed_data, custom_config, model_output_config)
         class_obj = await Helper.create_service_handler_for_batch(params, parsed_data["service"])
@@ -828,7 +857,7 @@ async def batch(request_body):
             raise ValueError(result)
 
         # Store custom_config as AiConfig for batch conversation logs
-        parsed_data["AiConfig"] = custom_config
+        parsed_data["ai_config_mapping"] = result["ai_config_mapping"]
 
         if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
                 result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
@@ -841,12 +870,12 @@ async def batch(request_body):
             processed_prompts=processed_prompts,
             batch_variables=batch_variables
         )
-        
+
         response_content = {
             "success": True,
             "response": result["message"]
         }
-        
+
         # Include batch_id and messages if available
         if "batch_id" in result:
             response_content["batch_id"] = result["batch_id"]
@@ -914,9 +943,9 @@ async def image(request_body):
 
         # Calculate image tokens and costs
         params['token_calculator'].calculate_image_usage(result['response'])
-        
+
         parsed_data['tokens'] = params['token_calculator'].calculate_image_cost(parsed_data['model'])
-        
+
         # Add usage data to response
         result['response']['usage'] = params['token_calculator'].get_image_usage()
         result['response']['usage']['cost'] = parsed_data['tokens'].get('total_cost', 0)

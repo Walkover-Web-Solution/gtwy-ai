@@ -150,6 +150,15 @@ def parse_request_body(request_body):
     state = request_body.get("state", {})
     path_params = request_body.get("path_params", {})
 
+    # Extract ai_matching_custom_prompt from bridge_configurations
+    bridge_id = path_params.get("bridge_id") or body.get("bridge_id")
+    bridge_configurations = body.get("bridge_configurations", {})
+    ai_matching_custom_prompt = None
+    if bridge_id and isinstance(bridge_configurations, dict) and bridge_id in bridge_configurations:
+        cfg_for_bridge = bridge_configurations[bridge_id]
+        if isinstance(cfg_for_bridge, dict):
+            ai_matching_custom_prompt = cfg_for_bridge.get("ai_matching_custom_prompt")
+
     return {
         "body": body,
         "state": state,
@@ -175,6 +184,7 @@ def parse_request_body(request_body):
         "mode": body.get("mode"),
         "action": body.get("action"),
         "task_id": body.get("task_id"),
+        "ai_matching_custom_prompt": ai_matching_custom_prompt or body.get("ai_matching_custom_prompt"),
         "plans": body.get("plans"),
         "model": body.get("configuration", {}).get("model"),
         "auto_model_select": body.get("auto_model_select", False),
@@ -458,7 +468,7 @@ async def handle_pre_tools(parsed_data, custom_config):
             else:
                 parsed_data["variables"]["pre_function"] = pre_tool_response.get("response")
                 response_data = pre_tool_response.get("response", {})
-                Helper.update_agentconfig_from_pre_function(response_data, parsed_data, custom_config)
+                Helper.update_agentconfig_from_pre_function(response_data, parsed_data)
                 entry = {
                     "id": tool.get("name", ""),
                     "args": args,
@@ -474,16 +484,15 @@ async def handle_pre_tools(parsed_data, custom_config):
             variables = {**parsed_data.get("variables", {})}
             if prompt:
                 variables["prompt"] = prompt
-            try:
-                pre_tool_response = await call_ai_middleware(
-                    user=user_query,
-                    bridge_id=bridge_ids["query_refiner"],
-                    variables=variables,
-                    response_type="text",
-                )
-                optimised_query = pre_tool_response or user_query
-            except Exception as e:
-                pre_tool_response = None
+            pre_tool_response = await call_ai_middleware(
+                user=user_query,
+                bridge_id=bridge_ids["query_refiner"],
+                variables=variables,
+                response_type="text",
+            )
+            if pre_tool_response.get("status") == 1:
+                optimised_query = pre_tool_response.get("response") or user_query
+            else:
                 optimised_query = user_query
             entry = {
                     "id" : uuid.uuid4().hex,
@@ -1484,7 +1493,11 @@ def update_usage_metrics(parsed_data, params, latency, result=None, error=None, 
         "variables": parsed_data.get('variables') or {},
         "outputTokens": output_tokens,
         "inputTokens": input_tokens,
-        "total_tokens": total_tokens
+        "total_tokens": total_tokens,
+        # Full breakdowns carried forward so every token type / per-type cost
+        # can be persisted into conversation_logs.tokens (JSONB) for the UI.
+        "token_usage": usage_data or {},
+        "cost_breakdown": parsed_data.get('tokens') or {},
     }
 
     # Add success-specific fields
@@ -1637,16 +1650,23 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
                     if result.get("response", {}).get("data") is not None:
                         result["response"]["data"]["fallback"] = True
-                        result["response"]["data"]["firstAttemptError"] = (
+                        firstAttemptError = (
                             f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
                             f"Retried with {parsed_data['service']}/{parsed_data['model']}"
                         )
+                        result["response"]["data"]["firstAttemptError"] = firstAttemptError
+                        if result.get("historyParams") is not None:
+                            result["historyParams"]["firstAttemptError"] = firstAttemptError
 
                     class_obj = fallback_class_obj
                     params = fallback_params
                 except Exception as retry_err:
                     logger.error(
                         f"SSE fallback attempt also failed ({parsed_data['service']}/{parsed_data['model']}): {retry_err}, {tb.format_exc()}"
+                    )
+                    parsed_data["firstAttemptError"] = (
+                        f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
+                        f"Retried with {parsed_data['service']}/{parsed_data['model']}"
                     )
                     if class_obj.streamer:
                         await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
@@ -1841,6 +1861,5 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             await class_obj.streamer.emit_error(str(err))
             if not is_nested_stream_call:
                 await class_obj.streamer.close()
-        if not parsed_data.get("is_playground"):
             await save_error_history(parsed_data, err, params, timer, class_obj, thread_info)
         return {"success": False, "message": str(err), "response": {}}

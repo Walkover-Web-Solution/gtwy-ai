@@ -1,7 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config import Config
 from globals import logger
@@ -66,77 +66,6 @@ async def openai_sdk_responses(request: Request, db_config: dict = Depends(add_c
     return await run_openai_chat_and_format(request, db_config, chat_completion)
 
 
-@router.websocket("/workflow/ws/{run_id}")
-async def workflow_ws(websocket: WebSocket, run_id: str):
-    from workflow.runner import HUMAN_INPUT_QUEUES, WORKFLOW_SESSIONS, WS_CONNECTIONS
-    from src.services.session_manager import (
-        publish_human_input,
-        session_exists_in_redis,
-        subscribe_to_workflow_events,
-        create_pending_session_in_redis,
-    )
-
-    await websocket.accept()
-
-    # Fast path: session is on this worker
-    session_is_local = run_id in WORKFLOW_SESSIONS
-    if not session_is_local:
-        # Cross-worker path: check Redis metadata
-        exists_globally = await session_exists_in_redis(run_id)
-        if not exists_globally:
-            # Session doesn't exist yet - create pending session to allow early connection
-            created = await create_pending_session_in_redis(run_id)
-            if not created:
-                # Another worker beat us to it, session should exist now
-                exists_globally = await session_exists_in_redis(run_id)
-                if not exists_globally:
-                    await websocket.close(code=4004, reason="failed to create session")
-                    return
-
-    WS_CONNECTIONS[run_id] = websocket
-    stop_event = asyncio.Event()
-
-    # Only start Redis event relay when session is on a different worker.
-    # If local, _emit_to_ws already writes directly to this websocket.
-    relay_task = None
-    if not session_is_local:
-        relay_task = asyncio.create_task(
-            subscribe_to_workflow_events(run_id, websocket, stop_event)
-        )
-
-    try:
-        while True:
-            data = await websocket.receive_json()
-            if data.get("action") != "answer":
-                continue
-
-            if session_is_local:
-                # Direct queue write (same-worker fast path — unchanged behaviour)
-                for _ in range(50):
-                    if run_id in HUMAN_INPUT_QUEUES:
-                        break
-                    await asyncio.sleep(0.1)
-                queue = HUMAN_INPUT_QUEUES.get(run_id)
-                if queue:
-                    await queue.put(data.get("answer"))
-                else:
-                    await websocket.send_json({"status": "error", "message": "workflow not waiting for input"})
-            else:
-                # Cross-worker: publish answer to Redis input channel
-                await publish_human_input(run_id, data.get("answer"))
-
-    except WebSocketDisconnect:
-        pass
-    finally:
-        stop_event.set()
-        if relay_task:
-            relay_task.cancel()
-            try:
-                await relay_task
-            except asyncio.CancelledError:
-                pass
-        WS_CONNECTIONS.pop(run_id, None)
-
 @router.post("/batch/chat/completion", dependencies=[Depends(auth_and_rate_limit)])
 async def batch_chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
     data_to_send = await make_request_data(request)
@@ -171,6 +100,7 @@ async def run_testcases_route(request: Request):
 
     body = await request.json()
     org_id = request.state.profile["org"]["id"]
+    body.setdefault("state", {})["profile"] = request.state.profile
     bridge_id = body.get("bridge_id")
     if not bridge_id:
         raise HTTPException(

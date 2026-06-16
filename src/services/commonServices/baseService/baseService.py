@@ -8,6 +8,7 @@ import pydash as _
 from config import Config
 from globals import logger
 from src.configs.serviceKeys import ServiceKeys
+from src.configs.service_registry import has_openai_choices_shape, supports_tool_calls, uses_openai_sdk
 
 from ....configs.constant import service_name
 from ....db_services import metrics_service
@@ -22,9 +23,9 @@ from ..grok.grokModelRun import grok_runmodel, grok_stream
 from ..groq.groqModelRun import groq_runmodel, groq_stream
 from ..Mistral.mistral_model_run import mistral_model_run, mistral_stream
 from ..openAI.image_model import OpenAIImageModel
-from ..openAI.runModel import openai_completion, openai_response_model, openai_response_stream
+from ..openAI.runModel import openai_response_model, openai_response_stream
 from ..openAI.openai_stream_utils import sanitize_openai_response_item
-from ..openRouter.openRouter_modelrun import openrouter_modelrun, openrouter_stream
+from ..openaiCompatible.openai_compatible_modelrun import openai_compatible_modelrun, openai_compatible_stream
 from ..streaming_service import StreamingService
 from .utils import (
     build_accumulated_response,
@@ -36,6 +37,14 @@ from .utils import (
     validate_tool_call,
     reasoning_formatter,
     disable_tool_call
+)
+from src.services.utils.mcp_utils import (
+    MCP_NAME_SUFFIX,
+    client_mcp_config,
+    display_mcp_tool_name,
+    extract_server_side_mcp_calls,
+    resolve_mcp_type,
+    server_mcp_config,
 )
 from src.services.utils.maximum_iterations_utils import build_tool_count_key, decrement_tool_count, get_tool_count
 from src.exceptions import ApiCallError
@@ -141,12 +150,18 @@ class BaseService:
             configuration["messages"].append({"role": "user", "content": []})
 
         for index, function_response in enumerate(function_responses):
-            tools[function_response["name"]] = function_response["content"]
+            display_tool_name = display_mcp_tool_name(function_response["name"])
+            tools[display_tool_name] = function_response["content"]
 
             match service:
-                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral':
+                case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
                     assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
-                    configuration['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]})
+                    assistant_msg = {'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]}
+                    # Moonshot requires reasoning_content in assistant messages when thinking mode is enabled
+                    reasoning_content = response['choices'][0]['message'].get('reasoning_content')
+                    if reasoning_content is not None:
+                        assistant_msg['reasoning_content'] = reasoning_content
+                    configuration['messages'].append(assistant_msg)
                     tool_calls_id = assistant_tool_calls['id']
                     configuration['messages'].append(mapping_response_data[tool_calls_id])
                 case 'openai':
@@ -248,10 +263,13 @@ class BaseService:
 
         if self.stream_mode and self.streamer:
             for tool_result in func_response_data:
+                tool_result_name = tool_result.get("name", "")
+                is_mcp_result = tool_result_name.endswith(MCP_NAME_SUFFIX)
                 await self.streamer.emit_tool_result(
-                    name=tool_result.get("name", ""),
+                    name=display_mcp_tool_name(tool_result_name),
                     content=tool_result.get("content", ""),
                     call_id=tool_result.get("tool_call_id", ""),
+                    type="mcp" if is_mcp_result else None,
                 )
 
         configuration, tools = self.update_configration(
@@ -315,16 +333,7 @@ class BaseService:
         if functionCallRes is None:
             functionCallRes = {}
         funcModelResponse = functionCallRes.get("modelResponse", {})
-        if self.service in [
-            service_name["openai"],
-            service_name["groq"],
-            service_name["grok"],
-            service_name["anthropic"],
-            service_name["open_router"],
-            service_name["mistral"],
-            service_name["gemini"],
-            service_name["openai_completion"],
-        ]:
+        if supports_tool_calls(self.service):
             if funcModelResponse and self.service != service_name["openai"]:
                 _.set_(
                     model_response,
@@ -335,7 +344,10 @@ class BaseService:
                     service_name["openai_completion"],
                     service_name["groq"],
                     service_name["grok"],
+                    service_name["deepseek"],
                     service_name["open_router"],
+                    service_name["neev_cloud"],
+                    service_name["moonshot"],
                     service_name["gemini"],
                 ]:
                     _.set_(
@@ -353,6 +365,12 @@ class BaseService:
         if not original_message and transfer_agent_config:
             agent_name = transfer_agent_config.get("tool_name", "the agent")
             original_message = f"Query is successfully transferred to agent {agent_name}"
+
+        server_side_mcp = extract_server_side_mcp_calls(self.service, model_response)
+        tools_call_data = list(self.func_tool_call_data or [])
+        if server_side_mcp:
+            tools_call_data.append(server_side_mcp)
+
         return {
             "thread_id": self.thread_id,
             "sub_thread_id": self.sub_thread_id,
@@ -368,7 +386,7 @@ class BaseService:
             "actor": "user",
             "tools": tools,
             "chatbot_message": "",
-            "tools_call_data": self.func_tool_call_data,
+            "tools_call_data": tools_call_data,
             "message_id": self.message_id,
             "llm_urls": (
                 [
@@ -421,6 +439,12 @@ class BaseService:
             if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
 
+            mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
+            mcp_active = bool(mcp_config and mcp_config.get("servers"))
+            mcp_type = resolve_mcp_type(service, self.model) if mcp_active else None
+            if mcp_active and mcp_type == "client":
+                client_mcp_config(service, configuration, mcp_config, self.tool_id_and_name_mapping)
+
             if configuration.get("tools", ""):
                 if service == service_name["anthropic"]:
                     new_config["tool_choice"] = configuration.get("tool_choice", {"type": "auto"})
@@ -428,6 +452,7 @@ class BaseService:
                     service == service_name["openai_completion"]
                     or service == service_name["groq"]
                     or service == service_name["grok"]
+                    or service == service_name["deepseek"]
                 ):
                     if configuration.get("tool_choice"):
                         if configuration["tool_choice"] not in ["auto", "none", "required", "default"]:
@@ -456,6 +481,9 @@ class BaseService:
             # Handle Reasoning config 
             if new_config.get("reasoning", False):
                 reasoning_formatter(service, new_config)
+
+            if mcp_active and mcp_type == "server":
+                server_mcp_config(service, new_config, mcp_config)
 
             if service == service_name['gemini']:
                 from google.genai import types
@@ -572,8 +600,11 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
-            elif service == service_name["open_router"]:
-                response = await openrouter_modelrun(
+            elif uses_openai_sdk(service):
+                # open_router / neev_cloud / moonshot / openai_completion (+ any future
+                # openai_sdk service) share one AsyncOpenAI runner; base_url + flags
+                # come from the registry.
+                response = await openai_compatible_modelrun(
                     configuration,
                     apikey,
                     self.execution_time_logs,
@@ -586,6 +617,10 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
+                    self.is_embed,
+                    self.user_id,
+                    self.thread_id,
+                    self.api_collection,
                 )
             elif service == service_name["mistral"]:
                 response = await mistral_model_run(
@@ -632,25 +667,6 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
-            elif service == service_name["openai_completion"]:
-                response = await openai_completion(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
-                    self.is_embed,
-                    self.user_id,
-                    self.thread_id,
-                    self.api_collection,
-                )
             if not response["success"]:
                 raise ApiCallError(response["error"], status_code=response.get("status_code"), service=service)
             return {"success": True, "modelResponse": response["response"]}
@@ -683,8 +699,9 @@ class BaseService:
                 generator = groq_stream(configuration, apikey)
             elif service == service_name["grok"]:
                 generator = grok_stream(configuration, apikey)
-            elif service == service_name["open_router"]:
-                generator = openrouter_stream(configuration, apikey)
+            elif uses_openai_sdk(service):
+                # open_router / neev_cloud / moonshot (+ any future openai_sdk service)
+                generator = openai_compatible_stream(configuration, apikey, service)
             elif service == service_name["mistral"]:
                 generator = mistral_stream(configuration, apikey)
             elif service == service_name["gemini"]:
@@ -710,6 +727,7 @@ class BaseService:
             if _stream_exc is not None:
                 raise _stream_exc
             accumulated_content = stream_state["accumulated_content"]
+            accumulated_reasoning = stream_state.get("accumulated_reasoning", [])
             final_tool_calls = stream_state["final_tool_calls"]
             final_usage = stream_state["final_usage"]
             final_finish_reason = stream_state["final_finish_reason"]
@@ -718,6 +736,26 @@ class BaseService:
 
             if error_in_stream:
                 raise ApiCallError(error_in_stream, service=service)
+
+            # An incomplete stream (e.g. the provider closed the connection before
+            # sending its completion/usage event) yields nothing at all. Treat it as
+            # a failure instead of returning an empty "success" response.
+            if (
+                not accumulated_content
+                and not accumulated_reasoning
+                and not final_tool_calls
+                and not final_finish_reason
+                and not final_usage
+            ):
+                logger.error(
+                    f"{service} stream returned no data — incomplete stream. last_delta keys="
+                    f"{list(last_delta.keys()) if isinstance(last_delta, dict) else type(last_delta).__name__}, "
+                    f"last_delta={str(last_delta)[:500]}"
+                )
+                raise ApiCallError(
+                    f"{service} stream returned no data (incomplete stream — no completion event received)",
+                    service=service,
+                )
 
             stream_service_tier = stream_state.get("service_tier")
 
@@ -731,6 +769,7 @@ class BaseService:
                 final_finish_reason=final_finish_reason,
                 last_delta=last_delta,
                 service_tier=stream_service_tier,
+                accumulated_reasoning=accumulated_reasoning,
             )
 
             if self.token_calculator:

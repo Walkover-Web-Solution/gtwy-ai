@@ -91,9 +91,14 @@ async def get_bridges_without_tools(bridge_id=None, org_id=None, version_id=None
         raise error
 
 
-async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None):
+async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None, environment=None):
     try:
-        cache_key = f"{redis_keys['bridge_data_with_tools_']}{org_id}_{version_id or bridge_id}"
+        use_env_resolution = bool(environment and not version_id)
+
+        cache_suffix = f"{org_id}_{'version' if version_id else 'bridge'}_{version_id or bridge_id}"
+        if use_env_resolution:
+            cache_suffix += f"_env_{environment}"
+        cache_key = f"{redis_keys['bridge_data_with_tools_']}{cache_suffix}"
 
         # Attempt to retrieve data from Redis cache
         cached_data = await find_in_cache(cache_key)
@@ -106,7 +111,63 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
             # Stage 0: Match the specific bridge or version with the given org_id
             {"$match": {"_id": ObjectId(id_to_use), "org_id": org_id}},
             {"$project": {"configuration.encoded_prompt": 0}},
-            # Stage 1: Lookup to join with 'apicalls' collection
+            # --- Environment-based version resolution ---
+            # Resolve version_id from settings.environment_config and swap to
+            # the version document. If environment key is missing, continue
+            # with the agent document as-is.
+            *([{
+                "$addFields": {
+                    "_env_resolved_version_oid": {
+                        "$convert": {
+                            "input": f"$settings.environment_config.{environment}",
+                            "to": "objectId",
+                            "onError": None,
+                            "onNull": None,
+                        }
+                    }
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "configuration_versions",
+                    "let": {"version_oid": "$_env_resolved_version_oid"},
+                    "pipeline": [
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        {"$ne": ["$$version_oid", None]},
+                                        {"$eq": ["$_id", "$$version_oid"]},
+                                    ]
+                                }
+                            }
+                        },
+                        {"$project": {"configuration.encoded_prompt": 0}},
+                    ],
+                    "as": "_env_version_docs",
+                }
+            },
+            # If version doc found → swap root to it (preserving parent_id).
+            # Otherwise keep original agent doc unchanged.
+            {
+                "$replaceRoot": {
+                    "newRoot": {
+                        "$cond": [
+                            {"$gt": [{"$size": "$_env_version_docs"}, 0]},
+                            {
+                                "$mergeObjects": [
+                                    {"$arrayElemAt": ["$_env_version_docs", 0]},
+                                    {
+                                        "parent_id": {"$toString": "$_id"},
+                                        "_env_resolved": True,
+                                    }
+                                ]
+                            },
+                            "$$ROOT"
+                        ]
+                    }
+                }
+            }] if use_env_resolution else []),
             {"$lookup": {"from": "apicalls", "localField": "function_ids", "foreignField": "_id", "as": "apiCalls"}},
             # Stage 2: Restructure fields for _id, function_ids and apiCalls
             {
@@ -482,9 +543,10 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     }
                 }
             },
-            # Stage A (version only): Convert parent_id string → ObjectId for $lookup.
-            # Runs whenever version_id is provided — bridge-level fields like bridgeType
-            # live on the bridge doc, not the version doc, so we must always enrich.
+            # Stage A: Convert parent_id string → ObjectId for $lookup.
+            # Runs when version_id is provided or environment resolved to a version —
+            # bridge-level fields like bridgeType live on the bridge doc, not the
+            # version doc, so we must always enrich.
             *([{
                 "$addFields": {
                     "parent_bridge_oid": {
@@ -497,7 +559,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     }
                 }
             },
-            # Stage B (version only): Lookup the parent bridge doc from configurations
+            # Stage B: Lookup the parent bridge doc from configurations
             {
                 "$lookup": {
                     "from": "configurations",
@@ -518,8 +580,6 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "as": "parent_bridge_docs",
                 }
             },
-            # Stage C (version only): Pull only bridge-level fields from parent doc into version doc.
-            # Uses $ifNull so version-level value wins if already set; parent fills only when absent.
             {
                 "$addFields": {
                     "bridge_status": {
@@ -546,8 +606,11 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "bridge_limit_reset_period": {
                         "$ifNull": ["$bridge_limit_reset_period", {"$arrayElemAt": ["$parent_bridge_docs.bridge_limit_reset_period", 0]}]
                     },
+                    "agent_info.ai_matching_custom_prompt":{
+                        "$ifNull": ["$agent_info.ai_matching_custom_prompt", {"$arrayElemAt": ["$parent_bridge_docs.agent_info.ai_matching_custom_prompt", 0]}]
+                    },
                 }
-            }] if version_id else []),
+            }] if version_id or use_env_resolution else []),
             # Stage 10: Remove temporary fields to clean up the output
             {
                 "$project": {
@@ -560,10 +623,8 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                     "template_ids_to_fetch": 0,
                     "templates_docs": 0,
                     "agent_names_docs": 0,
-                    **({
-                        "parent_bridge_oid": 0,
-                        "parent_bridge_docs": 0,
-                    } if version_id else {}),
+                    **({"parent_bridge_oid": 0, "parent_bridge_docs": 0} if version_id or use_env_resolution else {}),
+                    **({"_env_resolved_version_oid": 0, "_env_version_docs": 0, "_env_resolved": 0} if use_env_resolution else {}),
                 }
             },
         ]
@@ -873,6 +934,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                         "post_tool_id": "$config.post_tool_id",
                         "variables_path": {"$ifNull": ["$config.variables_path", {}]},
                         "folder_prompt": "$config.prompt",
+                        "folder_response_type": "$config.response_type",
                     }
                 },
             ]
@@ -956,6 +1018,13 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
                 bridge_prompt = bridge_data.get("configuration", {}).get("prompt")
                 if isinstance(bridge_prompt, dict):
                     bridge_data["configuration"]["prompt"]["customPrompt"] = folder_prompt["customPrompt"]
+            
+            # Replace bridge response_type with folder response_type if present
+            folder_response_type = folder_result[0].get("folder_response_type") if folder_result else None
+            if folder_response_type and isinstance(folder_response_type, dict) and folder_response_type.get("type") == "json_schema":
+                bridge_data["configuration"]["response_type"]["mode"] = "custom"
+                bridge_data["configuration"]["response_type"]["value"] = folder_response_type
+            
             # Extract folder metadata
             if folder_result and folder_result[0].get("type"):
                 bridge_data["folder_type"] = folder_result[0]["type"]
@@ -998,7 +1067,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None)
 
         # Structure the final response
         response = {"success": True, "bridges": bridge_data}
-        tags = extract_cache_tags(response)
+        tags = extract_cache_tags(response, environment)
         await store_in_cache_with_tags(cache_key, response, tags)
         return response
 
@@ -1048,7 +1117,7 @@ async def get_bridge_by_slugname(org_id, slug_name):
 async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org_id=""):
     model = version_model if version_id else configurationModel
     id_to_use = ObjectId(version_id) if version_id else ObjectId(bridge_id)
-    cache_key = f"{org_id}_{version_id if version_id else bridge_id}"
+    cache_key = f"{org_id}_{'version' if version_id else 'bridge'}_{version_id if version_id else bridge_id}"
 
     updated_bridge = await model.find_one_and_update(
         {"_id": ObjectId(id_to_use)}, {"$set": update_fields}, return_document=True, upsert=True
