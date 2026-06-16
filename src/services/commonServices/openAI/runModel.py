@@ -274,10 +274,14 @@ async def openai_response_model(
                         )
                         continue
                     traceback.print_exc()
+                    try:
+                        status_code = error.args[0].get("status_code")
+                    except:
+                        status_code = None
                     return {
                         "success": False,
                         "error": error_str,
-                        "status_code": getattr(error, "status_code", None),
+                        "status_code": status_code,
                     }
 
             return {"success": False, "error": "Max retries exceeded", "status_code": None}
