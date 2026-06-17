@@ -20,7 +20,7 @@ from src.db_services.metrics_service import (
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
 from src.configs.constant import bridge_ids, redis_keys, alert_types
-from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler
+from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
@@ -452,24 +452,45 @@ async def handle_pre_tools(parsed_data, custom_config):
         args["_response_type"] = parsed_data["configuration"]["response_type"]
 
         if tool_type == "custom_function":
-            pre_tool_response = await axios_work(
-                args,
-                {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
-            )
-            if pre_tool_response.get("status") == 0:
-                parsed_data["variables"]["pre_function"] = (
-                    f"Error while calling prefunction. Error message: {pre_tool_response.get('response')}"
+            try:
+                pre_tool_response = await axios_work(
+                    args,
+                    {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
                 )
-            else:
-                parsed_data["variables"]["pre_function"] = pre_tool_response.get("response")
-                response_data = pre_tool_response.get("response", {})
-                Helper.update_agentconfig_from_pre_function(response_data, parsed_data)
+                if pre_tool_response.get("status") == 0:
+                    parsed_data["variables"]["pre_function"] = (
+                        f"Error while calling prefunction. Error message: {pre_tool_response.get('response')}"
+                    )
+                else:
+                    parsed_data["variables"]["pre_function"] = pre_tool_response.get("response")
+                    response_data = pre_tool_response.get("response", {})
+                    Helper.update_agentconfig_from_pre_function(response_data, parsed_data)
                 entry = {
                     "id": tool.get("name", ""),
                     "args": args,
                     "data": pre_tool_response,
                     "type": "pre_tool",
                     "error": pre_tool_response.get("status", 0) != 1,
+                    "name": tool.get('name', "")
+                }
+            except Exception as pre_func_err:
+                error_msg = f"Error while calling prefunction. Error message: {str(pre_func_err)}"
+                logger.error(error_msg)
+                parsed_data["variables"]["pre_function"] = error_msg
+                asyncio.create_task(unknown_error_handler_alert({
+                    "error": error_msg,
+                    "function_name": tool.get("name", ""),
+                    "bridge_id": parsed_data.get("bridge_id"),
+                    "org_id": parsed_data.get("org_id"),
+                    "message_id": parsed_data.get("message_id"),
+                    "type": "pre_function_error",
+                }))
+                entry = {
+                    "id": tool.get("name", ""),
+                    "args": args,
+                    "data": {"response": str(pre_func_err), "status": 0},
+                    "type": "pre_tool",
+                    "error": True,
                     "name": tool.get('name', "")
                 }
         
@@ -1619,7 +1640,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                             _repaired = fix_json_string(_content)
                             result["response"]["data"]["content"] = _repaired
                         except Exception:
-                            asyncio.create_task(unknown_error_handler({
+                            asyncio.create_task(unknown_error_handler_alert({
                                 "error": f"Model returned invalid JSON: {str(_json_err)}",
                                 "raw_content": _content[:500],
                                 "model": parsed_data.get("model"),

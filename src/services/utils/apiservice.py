@@ -19,8 +19,8 @@ _RETRY_BASE_DELAY = 1.0  # seconds; doubles each attempt: 1s → 2s → 4s
 #   apiservice → send_alert → alert_utils → apiservice
 async def _fire_gateway_alert(status_code, url, error_text):
     try:
-        from src.services.commonServices.baseService.utils import unknown_error_handler
-        await unknown_error_handler({
+        from src.services.commonServices.baseService.utils import unknown_error_handler_alert
+        await unknown_error_handler_alert({
             "error_log": {"status_code": status_code, "url": url, "error": error_text[:500]},
             "service":"openai",
             "is_external_error":False

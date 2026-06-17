@@ -58,7 +58,7 @@ from src.services.utils.maximum_iterations_utils import (
 
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
-from .baseService.utils import fix_json_string, sendResponse, unknown_error_handler
+from .baseService.utils import fix_json_string, sendResponse, unknown_error_handler_alert
 from .response_caching_service import handle_response_caching
 from .reviewer_service import run_review_loop
 from src.services.todo.todo_handler import handle_todo_mode
@@ -153,6 +153,8 @@ async def chat_multiple_agents(request_body):
 async def chat(request_body):
     result = {}
     class_obj = {}
+    params = None
+    timer = None
     tool_count_key_for_cleanup = None
     tool_count_owner_token = None
     first_execution_error_code = None
@@ -387,7 +389,7 @@ async def chat(request_body):
                             _repaired = fix_json_string(_content)
                             result["response"]["data"]["content"] = _repaired
                         except Exception as _json_err:
-                            asyncio.create_task(unknown_error_handler({
+                            asyncio.create_task(unknown_error_handler_alert({
                                 "error": f"Model returned invalid JSON: {str(_json_err)}",
                                 "raw_content": _content[:500],
                                 "model": parsed_data.get("model"),

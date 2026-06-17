@@ -735,7 +735,7 @@ def makeFunctionName(name):
     return re.sub(r"[^a-zA-Z0-9_-]", "", name)
 
 
-async def unknown_error_handler(data):
+async def unknown_error_handler_alert(data):
     return await fetch(
             url="https://flow.sokt.io/func/scrimCFAKPWg",
             method="POST",
