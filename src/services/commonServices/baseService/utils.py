@@ -736,11 +736,12 @@ def makeFunctionName(name):
 
 
 async def unknown_error_handler_alert(data):
+    from config import Config
     return await fetch(
             url="https://flow.sokt.io/func/scrimCFAKPWg",
             method="POST",
             headers={},
-            json_body=data
+            json_body={**data, "env": Config.ENVIRONMENT}
         )
 
 def serialize_config(config) -> dict:

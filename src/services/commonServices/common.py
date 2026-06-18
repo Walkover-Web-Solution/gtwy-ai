@@ -2,6 +2,7 @@ import asyncio
 import json
 import traceback
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -23,7 +24,6 @@ from src.services.utils.common_utils import (
     build_service_params,
     build_service_params_for_batch,
     configure_custom_settings,
-    create_history_params,
     create_latency_object,
     filter_missing_vars,
     handle_agent_transfer,
@@ -36,7 +36,6 @@ from src.services.utils.common_utils import (
     parse_request_body,
     prepare_prompt,
     process_background_tasks,
-    process_background_tasks_for_error,
     process_batch_background_tasks,
     process_variable_state,
     render_template_if_applicable,
@@ -165,6 +164,9 @@ async def chat(request_body):
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
+        # Stamp request arrival time if not already set by the queue consumer
+        if not request_body.get("body", {}).get("created_at"):
+            request_body.setdefault("body", {})["created_at"] = datetime.now(timezone.utc).isoformat()
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
         print("\n\n\n", parsed_data, "\n\n\n")

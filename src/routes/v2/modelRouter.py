@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import uuid
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config import Config
@@ -51,6 +52,8 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
     is_webhook_playground = response_format and response_format.get("type") == "webhook" and is_playground
     if (response_format and response_format.get("type") != "default" and not is_webhook_playground):
         try:
+            # Stamp request arrival time before queuing so history reflects when the request came in
+            data_to_send.setdefault("body", {})["created_at"] = datetime.now(timezone.utc).isoformat()
             # Publish the message to the queue
             await queue_obj.publish_message(data_to_send)
             return {"success": True, "message_id": message_id, "message": "Your response will be sent through configured means."}

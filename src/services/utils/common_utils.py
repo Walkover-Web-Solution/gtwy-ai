@@ -253,6 +253,7 @@ def parse_request_body(request_body):
         "limit": body.get("limit"),
         "is_rerun": body.get("is_rerun", False),
         "is_playground": body.get("is_playground", False),
+        "created_at": body.get("created_at"),
     }
 
 
@@ -825,6 +826,7 @@ def build_service_params(
         "user_id": parsed_data.get("user_id"),
         "api_collection": parsed_data.get("api_collection"),
         "meta": parsed_data.get("meta"),
+        "created_at": parsed_data.get("created_at"),
     }
 
 
@@ -1659,6 +1661,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
             + [{"url": u, "type": "pdf"} for u in parsed_data.get("files", [])]
             + [{"url": u, "type": "audio"} for u in parsed_data.get("audios", [])]
         ),
+        "created_at": parsed_data.get("created_at"),
     }
 
 
