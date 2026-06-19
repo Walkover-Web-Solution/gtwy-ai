@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 
 from models.mongo_connection import db
+from src.services.utils.time import with_timeout
 
 prebuilt_db = db["preBuiltPrompts"]
 
@@ -20,7 +21,7 @@ async def get_specific_prebuilt_prompt_service(org_id: str, prompt_key: str):
         # Query specific prebuilt prompt for the organization
         query = {"org_id": org_id}
         projection = {"_id": 0, f"prebuilt_prompts.{prompt_key}": 1}
-        document = await prebuilt_db.find_one(query, projection)
+        document = await with_timeout(prebuilt_db.find_one(query, projection))
 
         if document and document.get("prebuilt_prompts") and document["prebuilt_prompts"].get(prompt_key):
             return {prompt_key: document["prebuilt_prompts"][prompt_key]}
@@ -36,7 +37,8 @@ async def get_multiple_prebuilt_prompts_without_org_service(prompt_keys: list[st
         query = {"$or": [{key: {"$exists": True}} for key in prompt_keys]}
         projection = {"_id": 0, **{key: 1 for key in prompt_keys}}
         result = {}
-        async for document in prebuilt_db.find(query, projection).sort("_id", -1):
+        documents = await with_timeout(prebuilt_db.find(query, projection).sort("_id", -1).to_list(length=None))
+        for document in documents:
             for key in prompt_keys:
                 if key not in result and document.get(key):
                     result[key] = document[key]
@@ -55,7 +57,7 @@ async def get_specific_prebuilt_prompt_without_org_service(prompt_key: str):
             ]
         }
         projection = {"_id": 0, prompt_key: 1}
-        document = await prebuilt_db.find_one(query, projection, sort=[("_id", -1)])
+        document = await with_timeout(prebuilt_db.find_one(query, projection, sort=[("_id", -1)]))
 
         if document and document.get(prompt_key):
             return {prompt_key: document[prompt_key]}

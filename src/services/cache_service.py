@@ -5,9 +5,14 @@ from redis.asyncio import Redis
 
 from config import Config
 from globals import logger
+from src.services.utils.time import SERVICE_TIMEOUTS
 
 # Initialize the Redis client
-client = Redis.from_url(Config.REDIS_URI)  # Adjust these parameters as needed
+client = Redis.from_url(
+    Config.REDIS_URI,
+    socket_timeout=SERVICE_TIMEOUTS["redis"],  # 10s read/write
+    socket_connect_timeout=SERVICE_TIMEOUTS["redis"],  # 10s connect
+)
 
 REDIS_PREFIX = f"AIMIDDLEWARE_{Config.ENVIRONMENT}_"
 DEFAULT_REDIS_TTL = 172800  # 2 days

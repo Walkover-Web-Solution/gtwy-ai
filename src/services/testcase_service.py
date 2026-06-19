@@ -22,6 +22,7 @@ from models.mongo_connection import db
 from src.services.commonServices.baseService.utils import send_message
 from src.services.commonServices.common import chat
 from src.services.utils.getConfiguration import getConfiguration
+from src.services.utils.time import with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ async def fetch_testcases_from_request(
             object_ids = [ObjectId(tid) for tid in testcase_ids]
         except Exception as e:
             raise TestcaseValidationError(f"Invalid testcase id in testcase_ids: {str(e)}")
-        testcases = await testcases_collection.find({"_id": {"$in": object_ids}}).to_list(length=None)
+        testcases = await with_timeout(testcases_collection.find({"_id": {"$in": object_ids}}).to_list(length=None))
         if not testcases:
             raise TestcaseNotFoundError("No testcases found for the given testcase_ids")
         # Preserve the order in which ids were supplied.
@@ -200,13 +201,13 @@ async def fetch_testcases_from_request(
         return testcases
 
     if testcase_id:
-        testcase = await testcases_collection.find_one({"_id": ObjectId(testcase_id)})
+        testcase = await with_timeout(testcases_collection.find_one({"_id": ObjectId(testcase_id)}))
         if not testcase:
             raise TestcaseNotFoundError("No testcase found for the given testcase_id")
         return [testcase]
 
     # No testcase_id(s) -> fetch all testcases for bridge_id
-    testcases = await testcases_collection.find({"bridge_id": bridge_id}).to_list(length=None)
+    testcases = await with_timeout(testcases_collection.find({"bridge_id": bridge_id}).to_list(length=None))
     if not testcases:
         raise TestcaseNotFoundError("No testcases found for the given bridge_id")
     return testcases

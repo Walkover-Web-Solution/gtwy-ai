@@ -1,5 +1,6 @@
 from globals import logger
 from models.mongo_connection import db
+from src.services.utils.time import with_timeout
 
 serviceConfigModel = db["services"]
 
@@ -11,7 +12,7 @@ async def get_service_configs():
     callers can fall back to the hardcoded defaults in service_registry.py.
     """
     try:
-        services = await serviceConfigModel.find({"status": 1}, {"_id": 0}).to_list(length=None)
+        services = await with_timeout(serviceConfigModel.find({"status": 1}, {"_id": 0}).to_list(length=None))
         config_dict = {}
         for svc in services:
             svc_dict = dict(svc)
