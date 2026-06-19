@@ -143,7 +143,18 @@ class BaseService:
             # Return transfer config instead of processing tools
             return [], [], {"transfer_agent_config": transfer_config}
 
-        return await process_data_and_run_tools(codes_mapping, self)
+        func_response_data, mapping_response_data, tools_call_data = await process_data_and_run_tools(codes_mapping, self)
+
+        if self.response_format.get("type", "") != "webhook":
+            asyncio.create_task(
+                sendResponse(
+                    self.response_format,
+                    data={"function_call": True, "Name": function_list, "result": func_response_data},
+                    success=True,
+                )
+            )
+
+        return func_response_data, mapping_response_data, tools_call_data
 
     def update_configration(self, response, function_responses, configuration, mapping_response_data, service, tools):
         if service == "anthropic":
