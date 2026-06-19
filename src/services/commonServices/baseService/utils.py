@@ -736,12 +736,13 @@ def makeFunctionName(name):
 
 
 async def unknown_error_handler_alert(data):
-    return await fetch(
-            url="https://flow.sokt.io/func/scrimCFAKPWg",
-            method="POST",
-            headers={},
-            json_body=data
-        )
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://flow.sokt.io/func/scrimCFAKPWg", json=data) as response:
+                return await response.json()
+    except Exception as e:
+        logger.error(f"unknown_error_handler_alert failed: {e}")
 
 def serialize_config(config) -> dict:
     def default(o):
