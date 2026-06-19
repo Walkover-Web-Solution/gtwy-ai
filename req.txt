@@ -66,23 +66,24 @@ setuptools==68.0.0
 pyroscope-io==1.0.1
 
 # OpenTelemetry Core
-# opentelemetry-api==1.36.0
-opentelemetry-sdk==1.36.0
-opentelemetry-distro==0.57b0
-opentelemetry-exporter-otlp==1.36.0
+opentelemetry-distro==0.37b0
+opentelemetry-sdk==1.16.0
+opentelemetry-api==1.16.0
+opentelemetry-exporter-otlp==1.16.0
 
 # Instrumentations
-opentelemetry-instrumentation==0.57b0
-opentelemetry-instrumentation-fastapi==0.57b0
-# opentelemetry-instrumentation-asgi==0.57b0
-# opentelemetry-instrumentation-httpx==0.57b0
-opentelemetry-instrumentation-requests==0.57b0
-opentelemetry-instrumentation-redis==0.57b0
-opentelemetry-instrumentation-sqlalchemy==0.57b0
-opentelemetry-instrumentation-celery==0.57b0
+opentelemetry-instrumentation==0.37b0
+opentelemetry-instrumentation-fastapi==0.37b0
+opentelemetry-instrumentation-asgi==0.37b0
+opentelemetry-instrumentation-httpx==0.37b0
+opentelemetry-instrumentation-requests==0.37b0
+opentelemetry-instrumentation-redis==0.37b0
+opentelemetry-instrumentation-sqlalchemy==0.37b0
+opentelemetry-instrumentation-celery==0.37b0
+
 
 # Semantic conventions
-# opentelemetry-semantic-conventions==0.57b0
+opentelemetry-semantic-conventions==0.37b0
 
 # Dev tools
 pre-commit>=3.5.0
