@@ -11,7 +11,7 @@ from src.configs.model_configuration import model_config_document
 
 from ..services.cache_service import delete_in_cache, find_in_cache, store_in_cache
 from ..services.cache_utils import extract_cache_tags, store_in_cache_with_tags
-from ..services.utils.time import log_slow_call, SLOW_CALL_THRESHOLDS
+from ..services.utils.time import log_slow_call, SLOW_CALL_THRESHOLDS, with_timeout
 
 configurationModel = db["configurations"]
 apiCallModel = db["apicalls"]
@@ -82,7 +82,7 @@ async def get_bridges_with_redis(bridge_id=None, org_id=None, version_id=None):
             },
         ]
 
-        result = await model.aggregate(pipeline).to_list(length=None)
+        result = await with_timeout(model.aggregate(pipeline).to_list(length=None))
         bridges = result[0] if result else {}
         await store_in_cache(cache_key, result)
         return {
@@ -100,7 +100,7 @@ async def get_bridges_without_tools(bridge_id=None, org_id=None, version_id=None
         model = version_model if version_id else configurationModel
         id_to_use = ObjectId(version_id) if version_id else ObjectId(bridge_id)
         _t = _time.time()
-        bridge_data = await model.find_one({"_id": ObjectId(id_to_use)})
+        bridge_data = await with_timeout(model.find_one({"_id": ObjectId(id_to_use)}))
         log_slow_call(f"Mongo find_one configurations {id_to_use}", _time.time() - _t, SLOW_CALL_THRESHOLDS["mongo"])
 
         if not bridge_data:
@@ -656,7 +656,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
         ]
 
         # Execute the main aggregation pipeline
-        result = await model.aggregate(pipeline).to_list(length=None)
+        result = await with_timeout(model.aggregate(pipeline).to_list(length=None))
 
         if not result:
             return {"success": False, "error": "No matching records found"}
@@ -966,7 +966,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             ]
 
             # Execute folder pipeline on folders collection
-            folder_result = await foldersModel.aggregate(folder_pipeline).to_list(length=None)
+            folder_result = await with_timeout(foldersModel.aggregate(folder_pipeline).to_list(length=None))
 
             # Append folder_apikeys to bridge_data if found
             if folder_result and folder_result[0].get("folder_apikeys"):
@@ -1112,7 +1112,7 @@ async def get_template_by_id(template_id):
             template_content = json.loads(template_content)
             return template_content
 
-        template_content = await templateModel.find_one({"_id": ObjectId(template_id)})
+        template_content = await with_timeout(templateModel.find_one({"_id": ObjectId(template_id)}))
         await store_in_cache(cache_key, template_content)
         return template_content
     except Exception as error:
@@ -1123,7 +1123,7 @@ async def get_template_by_id(template_id):
 async def get_bridge_by_slugname(org_id, slug_name):
     try:
         _t = _time.time()
-        bridge = await configurationModel.find_one({"slugName": slug_name, "org_id": org_id})
+        bridge = await with_timeout(configurationModel.find_one({"slugName": slug_name, "org_id": org_id}))
         log_slow_call(f"Mongo find_one configurations slugName={slug_name}", _time.time() - _t, SLOW_CALL_THRESHOLDS["mongo"])
 
         if not bridge:
@@ -1132,7 +1132,7 @@ async def get_bridge_by_slugname(org_id, slug_name):
         if "responseRef" in bridge:
             response_ref_id = bridge["responseRef"]
             _t = _time.time()
-            response_ref = await configurationModel.find_one({"_id": response_ref_id})
+            response_ref = await with_timeout(configurationModel.find_one({"_id": response_ref_id}))
             log_slow_call(f"Mongo find_one configurations responseRef={response_ref_id}", _time.time() - _t, SLOW_CALL_THRESHOLDS["mongo"])
             bridge["responseRef"] = response_ref
 
@@ -1150,9 +1150,9 @@ async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org
     cache_key = f"{org_id}_{'version' if version_id else 'bridge'}_{version_id if version_id else bridge_id}"
 
     _t = _time.time()
-    updated_bridge = await model.find_one_and_update(
+    updated_bridge = await with_timeout(model.find_one_and_update(
         {"_id": ObjectId(id_to_use)}, {"$set": update_fields}, return_document=True, upsert=True
-    )
+    ))
     log_slow_call(f"Mongo find_one_and_update configurations {id_to_use}", _time.time() - _t, SLOW_CALL_THRESHOLDS["mongo"])
 
     if not updated_bridge:
@@ -1170,7 +1170,7 @@ async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org
 
 async def get_agents_data(slug_name, user_email, org_id):
     _t = _time.time()
-    bridges = await configurationModel.find_one(
+    bridges = await with_timeout(configurationModel.find_one(
         {
             "$or": [
                 {"$and": [{"settings.publicAgentConfig.availability": "public"}, {"slugName": slug_name}, {"org_id": org_id}]},
@@ -1184,7 +1184,7 @@ async def get_agents_data(slug_name, user_email, org_id):
                 },
             ]
         }
-    )
+    ))
     log_slow_call(f"Mongo find_one configurations slugName={slug_name} (agents)", _time.time() - _t, SLOW_CALL_THRESHOLDS["mongo"])
     return bridges
 
@@ -1207,7 +1207,7 @@ async def get_prompt_wrapper_by_id(wrapper_id: str, org_id: str | None = None):
 
     try:
         _t = _time.time()
-        wrapper = await prompt_wrappersModel.find_one(query)
+        wrapper = await with_timeout(prompt_wrappersModel.find_one(query))
         log_slow_call(f"Mongo find_one prompt_wrappers {wrapper_id}", _time.time() - _t, SLOW_CALL_THRESHOLDS["mongo"])
         if not wrapper:
             return None

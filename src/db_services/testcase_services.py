@@ -5,17 +5,18 @@ from fastapi import HTTPException
 
 from globals import logger
 from models.mongo_connection import db
+from src.services.utils.time import with_timeout
 
 configurationModel = db["configurations"]
 testcases_model = db["testcases"]
 
 
 async def get_testcases(bridge_id):
-    return await testcases_model.find({"bridge_id": bridge_id}).to_list(length=None)
+    return await with_timeout(testcases_model.find({"bridge_id": bridge_id}).to_list(length=None))
 
 
 async def create_testcase(testcase_data):
-    result = await testcases_model.insert_one(testcase_data)
+    result = await with_timeout(testcases_model.insert_one(testcase_data))
     return result
 
 
@@ -23,7 +24,7 @@ async def delete_testcase_by_id(testcase_id):
     """Delete a testcase by _id"""
     try:
         object_id = ObjectId(testcase_id)
-        result = await testcases_model.delete_one({"_id": object_id})
+        result = await with_timeout(testcases_model.delete_one({"_id": object_id}))
         return result
     except Exception as e:
         logger.error(f"Error deleting testcase: {str(e)}")
@@ -32,14 +33,14 @@ async def delete_testcase_by_id(testcase_id):
 
 async def get_all_testcases_by_bridge_id(bridge_id):
     """Get all testcases for a specific bridge_id"""
-    return await testcases_model.find({"bridge_id": bridge_id}).to_list(length=None)
+    return await with_timeout(testcases_model.find({"bridge_id": bridge_id}).to_list(length=None))
 
 
 async def get_testcase_by_id(testcase_id):
     """Get a testcase by _id"""
     try:
         object_id = ObjectId(testcase_id)
-        return await testcases_model.find_one({"_id": object_id})
+        return await with_timeout(testcases_model.find_one({"_id": object_id}))
     except Exception as e:
         logger.error(f"Error fetching testcase: {str(e)}")
         raise e
@@ -50,7 +51,7 @@ async def update_testcase_by_id(testcase_id, update_data):
     try:
         object_id = ObjectId(testcase_id)
         update_data["updated_at"] = datetime.datetime.utcnow()
-        result = await testcases_model.update_one({"_id": object_id}, {"$set": update_data})
+        result = await with_timeout(testcases_model.update_one({"_id": object_id}, {"$set": update_data}))
         return result
     except Exception as e:
         logger.error(f"Error updating testcase: {str(e)}")
@@ -72,10 +73,10 @@ async def update_testcase_last_executed(testcase_ids):
         if not object_ids:
             return None
         now = datetime.datetime.utcnow()
-        result = await testcases_model.update_many(
+        result = await with_timeout(testcases_model.update_many(
             {"_id": {"$in": object_ids}},
             {"$set": {"execution.lastExecutedAt": now, "updatedAt": now}},
-        )
+        ))
         return result
     except Exception as e:
         logger.error(f"Error updating testcase lastExecutedAt: {str(e)}")

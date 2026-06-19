@@ -2,6 +2,7 @@ from config import Config
 from globals import logger
 from models.mongo_connection import db
 from src.services.utils.apiservice import fetch
+from src.services.utils.time import with_timeout
 
 HIPPOCAMPUS_SEARCH_URL = "http://hippocampus.gtwy.ai/search"
 agent_memory_collection = db["agent_memories"]
@@ -63,7 +64,7 @@ async def get_response_using_resourceid(resource_id: str) -> dict:
         logger.info("Mongo cache lookup skipped: empty resource_id")
         return {"found": False, "answer": None}
 
-    memory = await agent_memory_collection.find_one({"resource_id": resource_id})
+    memory = await with_timeout(agent_memory_collection.find_one({"resource_id": resource_id}))
     if not memory:
         logger.info(f"Mongo cache miss for resource_id={resource_id}")
         return {"found": False, "answer": None}

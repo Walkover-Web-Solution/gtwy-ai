@@ -18,6 +18,7 @@ from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr
 from src.services.mcp_gateway.client import call_mcp_tool
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
+from src.services.utils.time import SERVICE_TIMEOUTS
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 
 
@@ -172,8 +173,9 @@ async def axios_work(data, function_payload):
             data,
             function_payload.get("query_params", []),
         )
-        response, rs_headers = await fetch(
-            resolved_url, method, function_payload.get("headers", {}), query_params, body
+        response, rs_headers = await asyncio.wait_for(
+            fetch(resolved_url, method, function_payload.get("headers", {}), query_params, body),
+            timeout=SERVICE_TIMEOUTS["pre_function"],
         )  # required is not send then it will still hit the curl
         return {
             "response": response,
