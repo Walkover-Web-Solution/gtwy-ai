@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import src.services.grafana
 import uvicorn
 from fastapi import FastAPI, Request
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+# from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI):
 
 # Initialize the FastAPI app
 app = FastAPI(debug=True, lifespan=lifespan)
-FastAPIInstrumentor.instrument_app(app)
+# FastAPIInstrumentor.instrument_app(app)
 # CORS middleware
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"], max_age=86400

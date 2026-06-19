@@ -739,7 +739,11 @@ async def unknown_error_handler_alert(data):
     import aiohttp
     try:
         async with aiohttp.ClientSession() as session:
+<<<<<<< HEAD
             async with session.post("https://flow.sokt.io/func/scrimCFAKPWg", json={**data, "env": Config.ENVIRONMENT}) as response:
+=======
+            async with session.post("https://flow.sokt.io/func/scrimCFAKPWg", json=data) as response:
+>>>>>>> origin/master
                 return await response.json()
     except Exception as e:
         logger.error(f"unknown_error_handler_alert failed: {e}")
