@@ -1170,7 +1170,6 @@ async def update_bridge(bridge_id=None, update_fields=None, version_id=None, org
 
 
 async def get_agents_data(slug_name, user_email, org_id):
-    bridges = await with_timeout(configurationModel.find_one(
     _t = _time.time()
     bridges = await with_timeout(configurationModel.find_one(
         {
