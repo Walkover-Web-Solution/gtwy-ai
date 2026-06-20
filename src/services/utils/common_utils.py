@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time as _time
 import uuid
 
 import pydash
@@ -26,7 +27,7 @@ from src.services.commonServices.queueService.queueMetricsService import metrics
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
 from src.send_alert import send_alert
 from src.services.utils.apiservice import fetch
-from src.services.utils.time import Timer
+from src.services.utils.time import Timer, log_slow_call, SLOW_CALL_THRESHOLDS
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
 from src.utils.formatter import apply_variables_to_template_json
@@ -454,10 +455,12 @@ async def handle_pre_tools(parsed_data, custom_config):
 
         if tool_type == "custom_function":
             try:
+                _pre_t = _time.time()
                 pre_tool_response = await axios_work(
                     args,
                     {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
                 )
+                log_slow_call(f"pre_function {tool.get('name')}", _time.time() - _pre_t, SLOW_CALL_THRESHOLDS["pre_function"])
                 if pre_tool_response.get("status") == 0:
                     parsed_data["variables"]["pre_function"] = (
                         f"Error while calling prefunction. Error message: {pre_tool_response.get('response')}"

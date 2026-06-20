@@ -1,10 +1,12 @@
 import json
+import time as _time
 
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
 from config import Config
 from globals import logger
+from src.services.utils.time import log_slow_call, SLOW_CALL_THRESHOLDS
 
 # Initialize the Redis client
 client = Redis.from_url(Config.REDIS_URI)  # Adjust these parameters as needed
@@ -16,7 +18,10 @@ DEFAULT_REDIS_TTL = 172800  # 2 days
 async def store_in_cache(identifier: str, data: dict, ttl: int = DEFAULT_REDIS_TTL) -> bool:
     try:
         serialized_data = make_json_serializable(data)
-        return await client.set(f"{REDIS_PREFIX}{identifier}", json.dumps(serialized_data), ex=int(ttl))
+        _t = _time.time()
+        result = await client.set(f"{REDIS_PREFIX}{identifier}", json.dumps(serialized_data), ex=int(ttl))
+        log_slow_call(f"Redis SET {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
+        return result
     except Exception as e:
         logger.error(f"Error storing in cache: {str(e)}")
         return False
@@ -24,7 +29,9 @@ async def store_in_cache(identifier: str, data: dict, ttl: int = DEFAULT_REDIS_T
 
 async def find_in_cache(identifier: str) -> str | None:
     try:
+        _t = _time.time()
         result = await client.get(f"{REDIS_PREFIX}{identifier}")
+        log_slow_call(f"Redis GET {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
         if result and isinstance(result, bytes):
             return result.decode("utf-8")
         return result
@@ -36,7 +43,9 @@ async def find_in_cache(identifier: str) -> str | None:
 async def incr_in_cache(identifier: str, ttl: int = DEFAULT_REDIS_TTL) -> int:
     try:
         key = f"{REDIS_PREFIX}{identifier}"
+        _t = _time.time()
         value = await client.incr(key)
+        log_slow_call(f"Redis INCR {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
         if value == 1:
             await client.expire(key, int(ttl))
         return value
@@ -55,7 +64,9 @@ async def delete_in_cache(identifiers: str | list[str]) -> bool:
     keys_to_delete = [f"{REDIS_PREFIX}{id}" for id in identifiers]
 
     try:
+        _t = _time.time()
         delete_count = await client.delete(*keys_to_delete)
+        log_slow_call(f"Redis DEL {identifiers}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
         print(f"Deleted {delete_count} items from cache")
         return True
     except Exception as error:
@@ -67,7 +78,9 @@ async def verify_ttl(identifier: str) -> int:
     try:
         if await client.ping():
             key = f"{REDIS_PREFIX}{identifier}"
+            _t = _time.time()
             ttl = await client.ttl(key)
+            log_slow_call(f"Redis TTL {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
             print(f"TTL for key {key} is {ttl} seconds")
             return ttl
         else:
@@ -116,8 +129,10 @@ async def clear_cache(request) -> JSONResponse:
 async def find_in_cache_with_prefix(prefix: str) -> list[str] | None:
     try:
         pattern = f"{REDIS_PREFIX}{prefix}*"
+        _t = _time.time()
         keys = await client.keys(pattern)
         values = [json.loads(await client.get(key)) for key in keys]  # Fetch values
+        log_slow_call(f"Redis KEYS+MGET {prefix}*", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
         return values
 
     except Exception as e:
@@ -153,8 +168,10 @@ async def acquire_lock(lock_key: str, ttl: int = 1800) -> bool:
     """
     try:
         full_key = f"{REDIS_PREFIX}lock_{lock_key}"
+        _t = _time.time()
         # SET NX EX: Set if Not eXists with EXpiration
         result = await client.set(full_key, "locked", nx=True, ex=ttl)
+        log_slow_call(f"Redis SETNX lock_{lock_key}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
         return result is not None
     except Exception as e:
         logger.error(f"Error acquiring lock for {lock_key}: {str(e)}")
@@ -173,7 +190,9 @@ async def release_lock(lock_key: str) -> bool:
     """
     try:
         full_key = f"{REDIS_PREFIX}lock_{lock_key}"
+        _t = _time.time()
         result = await client.delete(full_key)
+        log_slow_call(f"Redis DEL lock_{lock_key}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
         return result > 0
     except Exception as e:
         logger.error(f"Error releasing lock for {lock_key}: {str(e)}")

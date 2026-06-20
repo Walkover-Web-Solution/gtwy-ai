@@ -25,3 +25,20 @@ class Timer:
 
 
 timer_obj = Timer()
+
+
+# Thresholds in seconds for slow-call warnings
+SLOW_CALL_THRESHOLDS = {
+    "redis": 0.3,        # 300ms
+    "mongo": 0.5,        # 500ms
+    "pg": 0.5,           # 500ms
+    "pre_function": 50.0, # 50s
+    "openai_batch": 10.0, # 10s
+    "batch_retrieve": 3.0, # 3s
+}
+
+
+def log_slow_call(label: str, elapsed: float, threshold: float) -> None:
+    """Prints a warning only when elapsed exceeds threshold (seconds)."""
+    if elapsed > threshold:
+        print(f"[SLOW] {label} took {elapsed * 1000:.1f}ms (threshold {threshold * 1000:.0f}ms)")
