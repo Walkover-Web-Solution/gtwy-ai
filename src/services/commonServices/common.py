@@ -169,7 +169,6 @@ async def chat(request_body):
             request_body.setdefault("body", {})["created_at"] = datetime.now(timezone.utc).isoformat()
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-        print("\n\n\n", parsed_data, "\n\n\n")
 
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
         if isinstance(mcp_cfg, dict):

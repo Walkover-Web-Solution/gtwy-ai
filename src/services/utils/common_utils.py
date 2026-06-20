@@ -1960,6 +1960,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 else result.get("stream_finish_reason")
                 or model_response.get("finish_reason")
                 or model_response.get("status")
+                # Gemini keeps its finish reason at candidates[0].finish_reason, so the
+                # top-level lookups above are None; fall back to the formatter's mapped value.
+                or (formatted_response.get("data") or {}).get("finish_reason")
                 or ""
             )
             post_tool_response = await handle_post_tool(parsed_data, result)
