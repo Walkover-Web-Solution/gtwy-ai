@@ -1,9 +1,12 @@
 import io
 import json
+import time as _time
 
 import certifi
 import httpx
 from openai import AsyncOpenAI
+
+from src.services.utils.time import log_slow_call, SLOW_CALL_THRESHOLDS
 
 
 async def create_batch_file(data, apiKey):
@@ -28,7 +31,9 @@ async def create_batch_file(data, apiKey):
         try:
             openAI = AsyncOpenAI(api_key=apiKey, http_client=http_client)
 
+            _t = _time.time()
             batch_input_file = await openAI.files.create(file=filelike_obj, purpose="batch")
+            log_slow_call("OpenAI files.create (batch upload)", _time.time() - _t, SLOW_CALL_THRESHOLDS["openai_batch"])
             return batch_input_file
         finally:
             await http_client.aclose()
@@ -55,9 +60,11 @@ async def process_batch_file(batch_input_file, apiKey):
         try:
             openAI = AsyncOpenAI(api_key=apiKey, http_client=http_client)
 
+            _t = _time.time()
             result = await openAI.batches.create(
                 input_file_id=batch_input_file_id, endpoint="/v1/responses", completion_window="24h"
             )
+            log_slow_call("OpenAI batches.create", _time.time() - _t, SLOW_CALL_THRESHOLDS["openai_batch"])
             print(result)
             return result
         finally:
@@ -81,7 +88,9 @@ async def retrieve_batch_status(batch_id, apiKey):
 
         try:
             openAI = AsyncOpenAI(api_key=apiKey, http_client=http_client)
+            _t = _time.time()
             batch = await openAI.batches.retrieve(batch_id)
+            log_slow_call(f"OpenAI batches.retrieve {batch_id}", _time.time() - _t, SLOW_CALL_THRESHOLDS["batch_retrieve"])
             return batch
         finally:
             await http_client.aclose()
