@@ -1794,6 +1794,16 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
                     fallback_class_obj.streamer = class_obj.streamer
                     fallback_class_obj.stream_mode = True
+
+                    if fallback_class_obj.streamer:
+                        await fallback_class_obj.streamer.emit_fallback(
+                            from_model=original_model,
+                            from_service=original_service,
+                            to_model=fallback_model,
+                            to_service=fallback_service,
+                            error=original_error,
+                        )
+
                     result = await handle_response_caching(parsed_data=parsed_data, class_obj=fallback_class_obj)
 
                     if result.get("response", {}).get("data") is not None:
