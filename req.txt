@@ -52,7 +52,6 @@ requests>=2.32.0,<3.0.0
 # Auth
 PyJWT>=2.8.0,<3.0.0
 pycryptodome>=3.20.0,<4.0.0
-jwt
 
 # ML / image processing
 scikit-learn>=1.6.1
