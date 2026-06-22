@@ -73,6 +73,7 @@ async def openai_response_stream(configuration, apiKey):
     usage = {}
     finish_reason = None
     service_tier = None
+    incomplete_details = None
     try:
         async for line in fetch_stream(url=OPENAI_RESPONSES_URL, headers=headers, json_body=payload):
             if line.startswith("event:"):
@@ -88,6 +89,32 @@ async def openai_response_stream(configuration, apiKey):
                 continue
 
             event_type = event.get("type", "")
+
+            # Opportunistically capture usage/status from any event carrying a response
+            # snapshot with a populated usage object. The terminal event
+            # (response.completed / response.incomplete / response.failed) always carries
+            # the final usage, but the exact event-type string can vary by model, so we
+            # key off the presence of usage rather than the type name. Intermediate
+            # snapshots (response.created / in_progress) have usage=None and are skipped.
+            resp_snapshot = event.get("response")
+            if isinstance(resp_snapshot, dict) and resp_snapshot.get("usage"):
+                usage = resp_snapshot["usage"]
+                status = resp_snapshot.get("status")
+                if status == "incomplete":
+                    # Reasoning models commonly end here after exhausting their token
+                    # budget; the meaningful reason lives in incomplete_details.reason.
+                    incomplete_details = resp_snapshot.get("incomplete_details") or {}
+                    finish_reason = incomplete_details.get("reason") or status
+                elif status == "failed":
+                    error_obj = resp_snapshot.get("error") or {}
+                    finish_reason = error_obj.get("code") or "failed"
+                elif status:
+                    finish_reason = status
+                response_output = resp_snapshot.get("output")
+                if isinstance(response_output, list) and response_output:
+                    accumulated_output = response_output
+                if resp_snapshot.get("service_tier"):
+                    service_tier = resp_snapshot["service_tier"]
 
             if event_type == "response.output_text.delta":
                 yield {"content": event.get("delta"), "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
@@ -208,20 +235,12 @@ async def openai_response_stream(configuration, apiKey):
                             }
                     else:
                         accumulated_output.append(item)
-            elif event_type == "response.completed":
-                resp_data = event.get("response", {})
-                usage = resp_data.get("usage", {})
-                finish_reason = resp_data.get("status")
-                service_tier = resp_data.get("service_tier")
-                response_output = resp_data.get("output")
-                if isinstance(response_output, list):
-                    accumulated_output = response_output
 
         tool_calls_list = [
             {"id": k, "call_id": v["call_id"], "type": "function", "function": {"name": v["name"], "arguments": v["arguments"]}}
             for k, v in accumulated_tool_calls.items()
         ] if accumulated_tool_calls else None
-        yield {"content": None, "tool_calls": tool_calls_list, "usage": usage, "finish_reason": finish_reason, "reasoning": None, "output": accumulated_output, "service_tier": service_tier}
+        yield {"content": None, "tool_calls": tool_calls_list, "usage": usage, "finish_reason": finish_reason, "reasoning": None, "output": accumulated_output, "service_tier": service_tier, "incomplete_details": incomplete_details}
     except Exception as error:
         yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
 

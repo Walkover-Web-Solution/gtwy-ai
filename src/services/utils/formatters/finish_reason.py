@@ -19,5 +19,7 @@ def finish_reason_mapping(finish_reason):
         # Tool / function invocation
         "tool_calls": "tool_call",  # openai #gemini
         "tool_use": "tool_call",  # anthropic
+        # Failed / errored generation
+        "failed": "other",  # openai_response (response.failed)
     }
     return mapping.get(finish_reason, "other")

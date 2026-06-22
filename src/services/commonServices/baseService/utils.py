@@ -827,6 +827,11 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
         resp = {"output": output, "model": configuration.get("model", ""), "usage": final_usage, "status": final_finish_reason}
         if service_tier:
             resp["service_tier"] = service_tier
+        # Carry incomplete_details so the formatter maps finish_reason for incomplete
+        # responses the same way the non-stream path does (status -> incomplete_details.reason).
+        incomplete_details = (last_delta or {}).get("incomplete_details")
+        if incomplete_details:
+            resp["incomplete_details"] = incomplete_details
         return resp
     return {"content": full_text, "usage": final_usage, "finish_reason": final_finish_reason}
 
