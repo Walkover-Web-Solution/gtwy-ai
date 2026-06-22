@@ -51,6 +51,10 @@ from src.exceptions import ApiCallError
 
 executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
 
+# Same-model retries for an empty / prematurely-dropped stream, attempted
+# inside stream() BEFORE the model-level fallback in sse_stream_and_finalize.
+STREAM_SAME_MODEL_MAX_RETRIES = 1
+
 
 class BaseService:
     def __init__(self, params):
@@ -727,71 +731,100 @@ class BaseService:
                     message_id=str(self.message_id or ""),
                 )
 
-            if service == service_name["openai"]:
-                generator = openai_response_stream(configuration, apikey)
-            elif service == service_name["anthropic"]:
-                generator = anthropic_stream(configuration, apikey)
-            elif service == service_name["groq"]:
-                generator = groq_stream(configuration, apikey)
-            elif service == service_name["grok"]:
-                generator = grok_stream(configuration, apikey)
-            elif uses_openai_sdk(service):
-                # open_router / neev_cloud / moonshot (+ any future openai_sdk service)
-                generator = openai_compatible_stream(configuration, apikey, service)
-            elif service == service_name["mistral"]:
-                generator = mistral_stream(configuration, apikey)
-            elif service == service_name["gemini"]:
-                generator = gemini_modelrun_stream(configuration, apikey)
-            else:
-                raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
+            # Retry the SAME model on an empty / prematurely-dropped stream before
+            # the model-level fallback (in sse_stream_and_finalize) ever kicks in.
+            # emit_start above is intentionally outside this loop so a retry never
+            # re-emits the SSE start event.
+            for stream_attempt in range(STREAM_SAME_MODEL_MAX_RETRIES + 1):
+                # Fresh generator each attempt => fresh provider request.
+                if service == service_name["openai"]:
+                    generator = openai_response_stream(configuration, apikey)
+                elif service == service_name["anthropic"]:
+                    generator = anthropic_stream(configuration, apikey)
+                elif service == service_name["groq"]:
+                    generator = groq_stream(configuration, apikey)
+                elif service == service_name["grok"]:
+                    generator = grok_stream(configuration, apikey)
+                elif uses_openai_sdk(service):
+                    # open_router / neev_cloud / moonshot (+ any future openai_sdk service)
+                    generator = openai_compatible_stream(configuration, apikey, service)
+                elif service == service_name["mistral"]:
+                    generator = mistral_stream(configuration, apikey)
+                elif service == service_name["gemini"]:
+                    generator = gemini_modelrun_stream(configuration, apikey)
+                else:
+                    raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
 
-            if self.timer:
-                self.timer.start()
-            _stream_exc = None
-            try:
-                stream_state = await run_stream_and_collect(generator, self.streamer)
-            except Exception as _exc:
-                _stream_exc = _exc
-            finally:
-                if self.timer and self.timer.start_times:
-                    _elapsed = self.timer.stop(f"{service} stream")
-                    if _stream_exc is None:
-                        self.execution_time_logs.append({
-                            "step": f"{service} stream time for call :- {count + 1}",
-                            "time_taken": round(_elapsed, 4),
-                        })
-            if _stream_exc is not None:
-                raise _stream_exc
-            accumulated_content = stream_state["accumulated_content"]
-            accumulated_reasoning = stream_state.get("accumulated_reasoning", [])
-            final_tool_calls = stream_state["final_tool_calls"]
-            final_usage = stream_state["final_usage"]
-            final_finish_reason = stream_state["final_finish_reason"]
-            error_in_stream = stream_state["error_in_stream"]
-            last_delta = stream_state["last_delta"]
+                if self.timer:
+                    self.timer.start()
+                _stream_exc = None
+                try:
+                    stream_state = await run_stream_and_collect(generator, self.streamer)
+                except Exception as _exc:
+                    _stream_exc = _exc
+                finally:
+                    if self.timer and self.timer.start_times:
+                        _elapsed = self.timer.stop(f"{service} stream")
+                        if _stream_exc is None:
+                            self.execution_time_logs.append({
+                                "step": f"{service} stream time for call :- {count + 1} (attempt {stream_attempt + 1})",
+                                "time_taken": round(_elapsed, 4),
+                            })
+                # A genuinely raised exception is re-raised as before (not retried);
+                # for OpenAI, real drops/timeouts surface as error_in_stream instead.
+                if _stream_exc is not None:
+                    raise _stream_exc
+                accumulated_content = stream_state["accumulated_content"]
+                accumulated_reasoning = stream_state.get("accumulated_reasoning", [])
+                final_tool_calls = stream_state["final_tool_calls"]
+                final_usage = stream_state["final_usage"]
+                final_finish_reason = stream_state["final_finish_reason"]
+                error_in_stream = stream_state["error_in_stream"]
+                last_delta = stream_state["last_delta"]
 
-            if error_in_stream:
-                raise ApiCallError(error_in_stream, service=service)
+                # Did anything reach the client yet? content/reasoning/tool_calls are
+                # accumulated in lock-step with their streamer emits, so this is a
+                # reliable "nothing streamed yet" signal.
+                emitted_any = bool(accumulated_content or accumulated_reasoning or final_tool_calls)
 
-            # An incomplete stream (e.g. the provider closed the connection before
-            # sending its completion/usage event) yields nothing at all. Treat it as
-            # a failure instead of returning an empty "success" response.
-            if (
-                not accumulated_content
-                and not accumulated_reasoning
-                and not final_tool_calls
-                and not final_finish_reason
-                and not final_usage
-            ):
-                logger.error(
-                    f"{service} stream returned no data — incomplete stream. last_delta keys="
-                    f"{list(last_delta.keys()) if isinstance(last_delta, dict) else type(last_delta).__name__}, "
-                    f"last_delta={str(last_delta)[:500]}"
+                # An incomplete stream (e.g. the provider closed the connection before
+                # sending its completion/usage event) yields nothing at all.
+                is_empty = (
+                    not accumulated_content
+                    and not accumulated_reasoning
+                    and not final_tool_calls
+                    and not final_finish_reason
+                    and not final_usage
                 )
-                raise ApiCallError(
-                    f"{service} stream returned no data (incomplete stream — no completion event received)",
-                    service=service,
-                )
+
+                # Retry the no-data case, and pre-emission connection drops — but never
+                # after partial output was streamed (avoids duplicate tokens to client).
+                is_retryable = is_empty or (error_in_stream and not emitted_any)
+                if is_retryable and stream_attempt < STREAM_SAME_MODEL_MAX_RETRIES:
+                    logger.warning(
+                        f"{service} stream incomplete (empty={is_empty}, "
+                        f"error_in_stream={bool(error_in_stream)}), retrying same model "
+                        f"(attempt {stream_attempt + 1}/{STREAM_SAME_MODEL_MAX_RETRIES})"
+                    )
+                    continue
+
+                if error_in_stream:
+                    raise ApiCallError(error_in_stream, service=service)
+
+                # Attempts exhausted and still empty — treat as a failure instead of
+                # returning an empty "success" response.
+                if is_empty:
+                    logger.error(
+                        f"{service} stream returned no data — incomplete stream. last_delta keys="
+                        f"{list(last_delta.keys()) if isinstance(last_delta, dict) else type(last_delta).__name__}, "
+                        f"last_delta={str(last_delta)[:500]}"
+                    )
+                    raise ApiCallError(
+                        f"{service} stream returned no data (incomplete stream — no completion event received)",
+                        service=service,
+                    )
+
+                break  # success — exit retry loop with final stream_state in scope
 
             stream_service_tier = stream_state.get("service_tier")
 
