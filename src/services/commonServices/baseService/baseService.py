@@ -485,33 +485,10 @@ class BaseService:
                 del new_config["tool_choice"]
             if "tools" in new_config and len(new_config["tools"]) == 0:
                 del new_config["tools"]
-            if service == service_name["openai"]:
-                # The Responses API takes the system prompt as a developer/system message
-                # inside `input`. A top-level string `prompt` is invalid here (the param is
-                # reserved for prompt-template objects), so drop a stray string prompt.
-                if isinstance(new_config.get("prompt"), str):
-                    new_config.pop("prompt", None)
-
-                if "text" in new_config:
-                    data = new_config["text"]
-                    if isinstance(data, dict):
-                        rtype = data.get("type")
-                        fmt = {"type": rtype} if rtype else dict(data)
-                        if rtype == "json_schema":
-                            # json_schema format fields may live flattened alongside `type`
-                            # (restructure_json_schema) or still nested under `json_schema`.
-                            for k in ("name", "schema", "strict", "description"):
-                                if data.get(k) is not None:
-                                    fmt[k] = data[k]
-                            nested = data.get("json_schema")
-                            if isinstance(nested, dict):
-                                for k, v in nested.items():
-                                    if v is not None:
-                                        fmt[k] = v
-                        new_config["text"] = {"format": fmt}
-                    else:
-                        new_config["text"] = {"format": data}
-
+            if service == service_name["openai"] and "text" in new_config:
+                data = new_config["text"]
+                new_config["text"] = {"format": data}
+            
             if new_config.get("verbosity") and service == service_name["openai"]:
                 verbosity = new_config.pop("verbosity", {})
 

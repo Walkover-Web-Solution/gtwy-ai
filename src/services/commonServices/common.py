@@ -304,7 +304,7 @@ async def chat(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        normalize_response_type(custom_config, parsed_data["service"], model_config, parsed_data["configuration"])
+        normalize_response_type(custom_config, parsed_data["service"], model_config)
         if parsed_data.get("mode") == "plan":
             # Executor orchestration actions keep the existing pipeline.
             # The planner LLM call (no action) falls through to chat() with
@@ -496,7 +496,7 @@ async def chat(request_body):
                     bridge_configurations,
                 )
 
-                normalize_response_type(fallback_custom_config, parsed_data["service"], fallback_model_config, parsed_data["configuration"])
+                normalize_response_type(fallback_custom_config, parsed_data["service"], fallback_model_config)
 
                 class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
@@ -858,7 +858,7 @@ async def batch(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        normalize_response_type(custom_config, parsed_data["service"], model_config, parsed_data["configuration"])
+        normalize_response_type(custom_config, parsed_data["service"], model_config)
 
         # Step 8: Execute Service Handler
         params = build_service_params_for_batch(parsed_data, custom_config, model_output_config)
