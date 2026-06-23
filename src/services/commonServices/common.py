@@ -39,7 +39,7 @@ from src.services.utils.common_utils import (
     process_batch_background_tasks,
     process_variable_state,
     render_template_if_applicable,
-    normalize_response_type,
+    restructure_json_schema,
     save_error_history,
     setup_agent_tools,
     sse_stream_and_finalize,
@@ -304,7 +304,10 @@ async def chat(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        normalize_response_type(custom_config, parsed_data["service"], model_config)
+        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
+            custom_config["response_type"] = restructure_json_schema(
+                custom_config["response_type"], parsed_data["service"]
+            )
         if parsed_data.get("mode") == "plan":
             # Executor orchestration actions keep the existing pipeline.
             # The planner LLM call (no action) falls through to chat() with
@@ -496,7 +499,13 @@ async def chat(request_body):
                     bridge_configurations,
                 )
 
-                normalize_response_type(fallback_custom_config, parsed_data["service"], fallback_model_config)
+                if (
+                    "response_type" in fallback_custom_config
+                    and fallback_custom_config["response_type"].get("type") == "json_schema"
+                ):
+                    fallback_custom_config["response_type"] = restructure_json_schema(
+                        fallback_custom_config["response_type"], parsed_data["service"]
+                    )
 
                 class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
@@ -858,7 +867,10 @@ async def batch(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        normalize_response_type(custom_config, parsed_data["service"], model_config)
+        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
+            custom_config["response_type"] = restructure_json_schema(
+                custom_config["response_type"], parsed_data["service"]
+            )
 
         # Step 8: Execute Service Handler
         params = build_service_params_for_batch(parsed_data, custom_config, model_output_config)
