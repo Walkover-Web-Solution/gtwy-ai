@@ -7,6 +7,42 @@ from src.configs.constant import service_name
 MCP_NAME_SUFFIX = "__mcp"
 _MCP_TOOL_MAP_KEY = "__mcp_tool_map__"
 
+# Services for which server_mcp_config() can serialize an MCP server (Strategy A).
+# An agent can only run its own tools in server-mode on one of these.
+SERVER_MODE_SUPPORTED_SERVICES = (
+    service_name["openai"],
+    service_name["groq"],
+    service_name["grok"],
+    service_name["mistral"],
+    service_name["anthropic"],
+)
+
+# tool_id_and_name_mapping entry types that are NOT plain HTTP and therefore
+# cannot be executed by viasocket-mcp's generic HTTP executor.
+_NON_HTTP_TOOL_TYPES = {"RAG", "AGENT", "MCP"}
+
+
+def is_agent_server_eligible(tool_id_and_name_mapping: dict | None) -> bool:
+    """All-or-nothing eligibility for self-serve MCP server-mode.
+
+    Eligible only when the agent has at least one tool and EVERY tool is a plain
+    HTTP tool (no RAG / AGENT / client-MCP / built-in web-search). Plain HTTP
+    tools carry no ``type`` key in the mapping; special tools always set one.
+    """
+    if not tool_id_and_name_mapping:
+        return False
+    for entry in tool_id_and_name_mapping.values():
+        if not isinstance(entry, dict):
+            return False
+        tool_type = entry.get("type")
+        if tool_type and tool_type in _NON_HTTP_TOOL_TYPES:
+            return False
+        if tool_type and str(tool_type).startswith("Gtwy_"):  # built-in tools (e.g. Gtwy_Web_Search)
+            return False
+        if not entry.get("url"):  # must be an HTTP-callable tool
+            return False
+    return True
+
 
 def _parse_arguments(raw):
     if isinstance(raw, dict):

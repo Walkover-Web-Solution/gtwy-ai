@@ -284,6 +284,11 @@ class Helper:
         else:
             raise ValueError(f"Unsupported service: {service}")
 
+        # Opt-in: switch eligible agents to MCP server-mode before execute()/
+        # service_formatter run. No-op (client path) for everyone else.
+        if hasattr(class_obj, "prepare_mcp_server_mode"):
+            await class_obj.prepare_mcp_server_mode(service)
+
         return class_obj
 
     async def create_service_handler_for_batch(params, service):

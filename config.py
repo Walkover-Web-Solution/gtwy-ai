@@ -41,6 +41,9 @@ class Config:
     OPTIONS_APIKEY = os.getenv("OPTIONS_APIKEY")
     GCP_CREDENTIALS = os.getenv("GCP_CREDENTIALS")
     REDIS_URI = os.getenv("REDIS_URI")
+    # Base URL of the viasocket-mcp service that hosts GTWY agent tools as an
+    # MCP server (server-mode). Used to mint the per-agent MCP URL.
+    VIASOCKET_MCP_URL = os.getenv("VIASOCKET_MCP_URL", "https://mcp.viasocket.com")
     TIMESCALE_SERVICE_URL = os.getenv("TIMESCALE_SERVICE_URL")
     PUBLIC_REFERENCEID = os.getenv("PUBLIC_REFERENCEID")
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")

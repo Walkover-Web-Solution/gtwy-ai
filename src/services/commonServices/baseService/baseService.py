@@ -40,12 +40,19 @@ from .utils import (
 )
 from src.services.utils.mcp_utils import (
     MCP_NAME_SUFFIX,
+    SERVER_MODE_SUPPORTED_SERVICES,
     client_mcp_config,
     display_mcp_tool_name,
     extract_server_side_mcp_calls,
+    is_agent_server_eligible,
     resolve_mcp_type,
     server_mcp_config,
 )
+from src.services.utils.mcp_shared_cache import (
+    write_mcp_request_vars,
+    write_mcp_tools_bundle,
+)
+from uuid import uuid4
 from src.services.utils.maximum_iterations_utils import build_tool_count_key, decrement_tool_count, get_tool_count
 from src.exceptions import ApiCallError
 
@@ -125,6 +132,94 @@ class BaseService:
 
     def aiconfig(self):
         return self.customConfig
+
+    async def prepare_mcp_server_mode(self, service):
+        """Opt-in: expose this agent's own HTTP tools as an MCP server and let the
+        provider run the tool loop (server-mode), instead of GTWY proxying each call.
+
+        Gated and fail-safe: if the agent isn't opted in, the service doesn't
+        support server-mode MCP, or any tool is ineligible, this is a no-op and the
+        request proceeds on the existing client-side path unchanged. Any error here
+        also falls back to the client path.
+        """
+        try:
+            cfg = self.configuration if isinstance(self.configuration, dict) else {}
+            if not cfg.get("mcp_self_serve"):
+                return
+            if service not in SERVER_MODE_SUPPORTED_SERVICES:
+                return
+            mapping = self.tool_id_and_name_mapping or {}
+            if not is_agent_server_eligible(mapping):
+                return
+
+            # The formatted tool list (name/description/properties/required) lives
+            # on customConfig (what service_formatter reads); fall back to configuration.
+            tools_cfg = (self.customConfig or {}).get("tools") or cfg.get("tools") or []
+            if not tools_cfg:
+                return
+
+            # GTWY already strips variables_path-controlled fields out of the
+            # tool `properties` at build time, so the bundle schema is what the
+            # model should see. viasocket-mcp only needs variables_path to INJECT
+            # those hidden values back at execution time — re-keyed here by the
+            # exposed function name so the consumer can look it up by tool name.
+            vp = self.variables_path or {}
+            bundle_tools = []
+            bundle_variables_path = {}
+            for tool in tools_cfg:
+                name = tool.get("name")
+                if not name:
+                    continue
+                m = mapping.get(name, {})
+                bundle_tools.append({
+                    "name": name,
+                    "description": tool.get("description") or "",
+                    "properties": tool.get("properties") or {},
+                    "required": tool.get("required") or [],
+                    "url": m.get("url"),
+                    "method": (m.get("method") or "POST"),
+                    "headers": m.get("headers") or {},
+                    "query_params": m.get("query_params") or [],
+                })
+                # variables_path is keyed by the tool mapping name (script_id for
+                # API tools, raw name for extra tools) — same key replace_variables_in_args uses.
+                per_tool_vp = vp.get(m.get("name")) or vp.get(name) or {}
+                if per_tool_vp:
+                    bundle_variables_path[name] = per_tool_vp
+            if not bundle_tools:
+                return
+
+            bundle = {"tools": bundle_tools, "variables_path": bundle_variables_path}
+            token = uuid4().hex
+
+            wrote_bundle = await write_mcp_tools_bundle(self.org_id, self.bridge_id, bundle)
+            wrote_vars = await write_mcp_request_vars(
+                token,
+                {
+                    "org_id": self.org_id,
+                    "bridge_id": self.bridge_id,
+                    "message_id": self.message_id,
+                    "variables": self.variables or {},
+                },
+            )
+            if not (wrote_bundle and wrote_vars):
+                logger.error("prepare_mcp_server_mode: redis write failed; using client path")
+                return
+
+            base = (Config.VIASOCKET_MCP_URL or "").rstrip("/")
+            url = f"{base}/gtwy/mcp/{self.bridge_id}-{self.org_id}"
+            self.configuration["mcp_config"] = {
+                "mcp_type": "server",
+                "servers": [{
+                    "name": "gtwy",
+                    "url": url,
+                    "headers": {"Authorization": f"Bearer {token}"},
+                }],
+            }
+            self._mcp_server_mode = True
+            logger.info(f"prepare_mcp_server_mode: server-mode enabled for bridge {self.bridge_id} ({service})")
+        except Exception as e:
+            logger.error(f"prepare_mcp_server_mode failed; falling back to client path: {e}")
 
     async def run_tool(self, responses, service):
         codes_mapping, function_list = make_code_mapping_by_service(responses, service)
@@ -454,9 +549,18 @@ class BaseService:
 
             mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
             mcp_active = bool(mcp_config and mcp_config.get("servers"))
-            mcp_type = resolve_mcp_type(service, self.model) if mcp_active else None
+            # Per-agent override (self-serve server-mode sets mcp_type on the
+            # config) takes precedence over the per-model lookup. External MCP
+            # servers carry no mcp_type key, so they fall back to resolve_mcp_type.
+            mcp_type = (mcp_config.get("mcp_type") or resolve_mcp_type(service, self.model)) if mcp_active else None
             if mcp_active and mcp_type == "client":
                 client_mcp_config(service, configuration, mcp_config, self.tool_id_and_name_mapping)
+            if mcp_active and mcp_type == "server" and getattr(self, "_mcp_server_mode", False):
+                # Self-serve mode: the agent's own tools are exposed by the MCP
+                # server, so do NOT also pass them inline (would duplicate them).
+                configuration["tools"] = []
+                new_config.pop("tools", None)
+                new_config.pop("tool_choice", None)
 
             if configuration.get("tools", ""):
                 if service == service_name["anthropic"]:
