@@ -1,6 +1,7 @@
 from src.db_services import ConfigurationServices
 import asyncio
 import json
+import time as _time
 import uuid
 
 import pydash
@@ -21,25 +22,22 @@ from src.db_services.metrics_service import (
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
 from src.configs.constant import bridge_ids, redis_keys, alert_types
-from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof
+from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
 from src.send_alert import send_alert
 from src.services.utils.apiservice import fetch
-from src.services.utils.time import Timer
+from src.services.utils.time import Timer, log_slow_call, SLOW_CALL_THRESHOLDS
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
-from src.utils.formatter import apply_variables_to_template_json, fix_json_string
+from src.utils.formatter import apply_variables_to_template_json
 from src.services.utils.helper import Helper
-
 from ...controllers.conversationController import getThread
 from ..commonServices.baseService.utils import sendResponse
 
 UTC = timezone.utc
 
-from src.services.utils.rich_text_support import process_chatbot_response
-from src.db_services.orchestrator_history_service import orchestrator_collector
 from src.services.utils.api_key_status_helper import mark_apikey_status_from_response
 
 def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
@@ -151,6 +149,15 @@ def parse_request_body(request_body):
     state = request_body.get("state", {})
     path_params = request_body.get("path_params", {})
 
+    # Extract ai_matching_custom_prompt from bridge_configurations
+    bridge_id = path_params.get("bridge_id") or body.get("bridge_id")
+    bridge_configurations = body.get("bridge_configurations", {})
+    ai_matching_custom_prompt = None
+    if bridge_id and isinstance(bridge_configurations, dict) and bridge_id in bridge_configurations:
+        cfg_for_bridge = bridge_configurations[bridge_id]
+        if isinstance(cfg_for_bridge, dict):
+            ai_matching_custom_prompt = cfg_for_bridge.get("ai_matching_custom_prompt")
+
     return {
         "body": body,
         "state": state,
@@ -176,6 +183,7 @@ def parse_request_body(request_body):
         "mode": body.get("mode"),
         "action": body.get("action"),
         "task_id": body.get("task_id"),
+        "ai_matching_custom_prompt": ai_matching_custom_prompt or body.get("ai_matching_custom_prompt"),
         "plans": body.get("plans"),
         "model": body.get("configuration", {}).get("model"),
         "auto_model_select": body.get("auto_model_select", False),
@@ -249,6 +257,7 @@ def parse_request_body(request_body):
         "limit": body.get("limit"),
         "is_rerun": body.get("is_rerun", False),
         "is_playground": body.get("is_playground", False),
+        "created_at": body.get("created_at"),
     }
 
 
@@ -282,8 +291,7 @@ def render_template_if_applicable(parsed_data, result):
                         ai_data = parsed
                 except Exception:
                     try:
-                        repaired = fix_json_string(ai_data)
-                        ai_data = json.loads(repaired)
+                        ai_data = json.loads(ai_data)
                         ai_data = ai_data.get("item")
                     except Exception:
                         pass
@@ -451,24 +459,47 @@ async def handle_pre_tools(parsed_data, custom_config, timer):
         args["_response_type"] = parsed_data["configuration"]["response_type"]
 
         if tool_type == "custom_function":
-            pre_tool_response = await axios_work(
-                args,
-                {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
-            )
-            if pre_tool_response.get("status") == 0:
-                parsed_data["variables"]["pre_function"] = (
-                    f"Error while calling prefunction. Error message: {pre_tool_response.get('response')}"
+            try:
+                _pre_t = _time.time()
+                pre_tool_response = await axios_work(
+                    args,
+                    {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
                 )
-            else:
-                parsed_data["variables"]["pre_function"] = pre_tool_response.get("response")
-                response_data = pre_tool_response.get("response", {})
-                Helper.update_agentconfig_from_pre_function(response_data, parsed_data)
+                log_slow_call(f"pre_function {tool.get('name')}", _time.time() - _pre_t, SLOW_CALL_THRESHOLDS["pre_function"])
+                if pre_tool_response.get("status") == 0:
+                    parsed_data["variables"]["pre_function"] = (
+                        f"Error while calling prefunction. Error message: {pre_tool_response.get('response')}"
+                    )
+                else:
+                    parsed_data["variables"]["pre_function"] = pre_tool_response.get("response")
+                    response_data = pre_tool_response.get("response", {})
+                    Helper.update_agentconfig_from_pre_function(response_data, parsed_data)
                 entry = {
                     "id": tool.get("name", ""),
                     "args": args,
                     "data": pre_tool_response,
                     "type": "pre_tool",
                     "error": pre_tool_response.get("status", 0) != 1,
+                    "name": tool.get('name', "")
+                }
+            except Exception as pre_func_err:
+                error_msg = f"Error while calling prefunction. Error message: {str(pre_func_err)}"
+                logger.error(error_msg)
+                parsed_data["variables"]["pre_function"] = error_msg
+                asyncio.create_task(unknown_error_handler_alert({
+                    "error": error_msg,
+                    "function_name": tool.get("name", ""),
+                    "bridge_id": parsed_data.get("bridge_id"),
+                    "org_id": parsed_data.get("org_id"),
+                    "message_id": parsed_data.get("message_id"),
+                    "type": "pre_function_error",
+                }))
+                entry = {
+                    "id": tool.get("name", ""),
+                    "args": args,
+                    "data": {"response": str(pre_func_err), "status": 0},
+                    "type": "pre_tool",
+                    "error": True,
                     "name": tool.get('name', "")
                 }
         
@@ -811,6 +842,7 @@ def build_service_params(
         "user_id": parsed_data.get("user_id"),
         "api_collection": parsed_data.get("api_collection"),
         "meta": parsed_data.get("meta"),
+        "created_at": parsed_data.get("created_at"),
     }
 
 
@@ -1354,6 +1386,105 @@ def restructure_json_schema(response_type, service):
             return response_type
 
 
+def _append_to_prompt(target, text):
+    """Append `text` to target["prompt"] (newline-separated), preserving the existing prompt.
+
+    Idempotent: if `text` is already present in the prompt it is not appended again. This
+    matters because normalize_response_type may run more than once over a request lifecycle
+    (primary attempt + fallback) against the same shared `configuration` dict.
+    """
+    existing_prompt = target.get("prompt") or ""
+    text = str(text)
+    if text and text in existing_prompt:
+        return
+    target["prompt"] = (
+        f"{existing_prompt}\n{text}".strip() if existing_prompt else text
+    )
+
+
+def model_supports_json_schema(model_config):
+    """
+    Return True if the model config advertises a json_schema response_type option.
+
+    The model config document stores supported response types under
+    configuration.response_type.options (e.g. [{"key": "type", "type": "json_schema"}]).
+    When the options list can't be determined we preserve the existing behavior and
+    assume support (so configured json_schema requests are not silently downgraded).
+    """
+    options = None
+    if isinstance(model_config, dict):
+        response_type = (model_config.get("configuration") or {}).get("response_type")
+        if isinstance(response_type, dict):
+            options = response_type.get("options")
+    if not isinstance(options, list):
+        return True
+    return any(isinstance(opt, dict) and opt.get("type") == "json_schema" for opt in options)
+
+
+def normalize_response_type(custom_config, service, model_config=None, configuration=None):
+    """
+    Normalize custom_config["response_type"] in place before service formatting.
+
+    - type == "text" with a "text" value: fold the text into the prompt and pass
+      response_type through as a plain {"type": "text"}.
+    - type == "text" without a "text" value: leave as-is.
+    - type == "json_object" carrying a "json_schema": promote it to json_schema (then
+      the json_schema handling below applies).
+    - type == "json_object" without a schema: leave untouched.
+    - type == "json_schema":
+        * if the model supports json_schema -> restructure (unchanged behavior).
+        * if the model does NOT support json_schema -> inline the schema into the prompt
+          and drop the response_type key entirely (don't send it to the model).
+
+    Folded text is written to `configuration["prompt"]` when a configuration dict is
+    supplied, because every service builds its system/developer message from
+    `self.configuration["prompt"]` (not from custom_config). Writing it into custom_config
+    both loses the instruction and leaks a stray top-level `prompt` string into providers
+    (e.g. the OpenAI Responses API) that forward custom_config verbatim.
+    """
+    response_type = custom_config.get("response_type")
+    if not isinstance(response_type, dict):
+        return
+
+    prompt_target = configuration if isinstance(configuration, dict) else custom_config
+
+    rtype = response_type.get("type")
+
+    if rtype == "text":
+        text_value = response_type.get("text")
+        if text_value:
+            _append_to_prompt(prompt_target, text_value)
+        custom_config["response_type"] = {"type": "text"}
+        return
+
+    if rtype == "json_object":
+        if response_type.get("json_schema"):
+            response_type["type"] = "json_schema"
+            rtype = "json_schema"
+        else:
+            # json_object without a schema -> leave untouched.
+            return
+
+    if rtype == "json_schema":
+        if model_supports_json_schema(model_config):
+            custom_config["response_type"] = restructure_json_schema(response_type, service)
+        else:
+            # Model can't enforce a json_schema: inline the schema into the prompt
+            # and stop sending response_type to the model.
+            schema = response_type.get("json_schema") or {}
+            schema_text = (
+                json.dumps(schema, ensure_ascii=False)
+                if isinstance(schema, (dict, list))
+                else str(schema)
+            )
+            _append_to_prompt(
+                prompt_target,
+                "Respond ONLY with valid JSON that strictly conforms to this JSON schema:\n"
+                f"{schema_text}",
+            )
+            custom_config.pop("response_type", None)
+
+
 def validate_json_schema_configuration(configuration):
     """
     Validates the JSON schema configuration for response_type.
@@ -1495,7 +1626,11 @@ def update_usage_metrics(parsed_data, params, latency, result=None, error=None, 
         "variables": parsed_data.get('variables') or {},
         "outputTokens": output_tokens,
         "inputTokens": input_tokens,
-        "total_tokens": total_tokens
+        "total_tokens": total_tokens,
+        # Full breakdowns carried forward so every token type / per-type cost
+        # can be persisted into conversation_logs.tokens (JSONB) for the UI.
+        "token_usage": usage_data or {},
+        "cost_breakdown": parsed_data.get('tokens') or {},
     }
 
     # Add success-specific fields
@@ -1558,6 +1693,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
             + [{"url": u, "type": "pdf"} for u in parsed_data.get("files", [])]
             + [{"url": u, "type": "audio"} for u in parsed_data.get("audios", [])]
         ),
+        "created_at": parsed_data.get("created_at"),
     }
 
 
@@ -1610,6 +1746,30 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
         try:
             result = await handle_response_caching(parsed_data=parsed_data, class_obj=class_obj)
+                    # Validate JSON content when model was configured for JSON output.
+            _rt = (params.get("customConfig") or {}).get("response_type") or {}
+            if isinstance(_rt, dict) and _rt.get("type") in ("json_object", "json_schema"):
+                _content = (result.get("response") or {}).get("data", {}).get("content")
+                if isinstance(_content, str):
+                    try:
+                        json.loads(_content)
+                    except (json.JSONDecodeError, ValueError):
+                        try:
+                            _repaired = fix_json_string(_content)
+                            result["response"]["data"]["content"] = _repaired
+                        except Exception:
+                            asyncio.create_task(unknown_error_handler_alert({
+                                "error": f"Model returned invalid JSON: {str(_json_err)}",
+                                "raw_content": _content[:500],
+                                "model": parsed_data.get("model"),
+                                "service": parsed_data.get("service"),
+                                "bridge_id": parsed_data.get("bridge_id"),
+                                "org_id": parsed_data.get("org_id"),
+                                "message_id": parsed_data.get("message_id"),
+                                "response_type": _rt.get("type"),
+                            }))
+                            raise ValueError(f"Model returned invalid JSON: {_content[:200]}")
+
         except Exception as first_err:
             original_error = str(first_err)
             logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")
@@ -1631,6 +1791,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                     fb_custom_config = await configure_custom_settings(
                         fb_model_config["configuration"], fb_custom_config, parsed_data["service"]
                     )
+                    normalize_response_type(
+                        fb_custom_config, parsed_data["service"], fb_model_config, parsed_data["configuration"]
+                    )
                     fallback_params = build_service_params(
                         parsed_data,
                         fb_custom_config,
@@ -1644,6 +1807,16 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
                     fallback_class_obj.streamer = class_obj.streamer
                     fallback_class_obj.stream_mode = True
+
+                    if fallback_class_obj.streamer:
+                        await fallback_class_obj.streamer.emit_fallback(
+                            from_model=original_model,
+                            from_service=original_service,
+                            to_model=fallback_model,
+                            to_service=fallback_service,
+                            error=original_error,
+                        )
+
                     result = await handle_response_caching(parsed_data=parsed_data, class_obj=fallback_class_obj)
 
                     if result.get("response", {}).get("data") is not None:
@@ -1832,6 +2005,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 else result.get("stream_finish_reason")
                 or model_response.get("finish_reason")
                 or model_response.get("status")
+                # Gemini keeps its finish reason at candidates[0].finish_reason, so the
+                # top-level lookups above are None; fall back to the formatter's mapped value.
+                or (formatted_response.get("data") or {}).get("finish_reason")
                 or ""
             )
             post_tool_response = await handle_post_tool(parsed_data, result)

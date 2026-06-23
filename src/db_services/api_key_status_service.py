@@ -1,6 +1,7 @@
 from bson import ObjectId
 from globals import logger
 from models.mongo_connection import db
+from src.services.utils.time import with_timeout
 
 apikeyCredentialsModel = db["apikeycredentials"]
 
@@ -9,10 +10,10 @@ async def update_apikey_status(apikey_id: str, status: str) -> bool:
         return False
 
     try:
-        result = await apikeyCredentialsModel.update_one(
+        result = await with_timeout(apikeyCredentialsModel.update_one(
             {"_id": ObjectId(apikey_id)},
             {"$set": {"status": status}}
-        )
+        ))
         if not result.modified_count:
             logger.warning(f"No apikey credential updated for id={apikey_id}")
             return False

@@ -12,6 +12,7 @@ import asyncio
 import copy
 import json
 import logging
+import time
 from typing import Any
 
 from bson import ObjectId
@@ -21,6 +22,7 @@ from models.mongo_connection import db
 from src.services.commonServices.baseService.utils import send_message
 from src.services.commonServices.common import chat
 from src.services.utils.getConfiguration import getConfiguration
+from src.services.utils.time import with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -90,19 +92,36 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
 
     bridge_id = body.get("bridge_id")
     testcase_id = body.get("testcase_id")
+    # Accept multiple testcase ids via testcase_ids (array).
+    testcase_ids = body.get("testcase_ids")
+    if testcase_ids is not None and not isinstance(testcase_ids, list):
+        testcase_ids = [testcase_ids]
     testcases_flag = body.get("testcases", False)
     testcase_data = body.get("testcase_data")
     variables = body.get("variables", {})
     matching_type = body.get("matching_type", None)
+    model_override = body.get("model")
+    service_override = body.get("service")
+    models = body.get("models")
+    if models is not None:
+        if not isinstance(models, list):
+            raise TestcaseValidationError("models must be a list of {model, service} objects")
+        for m in models:
+            if not isinstance(m, dict) or not m.get("model") or not m.get("service"):
+                raise TestcaseValidationError("each entry in models must include 'model' and 'service'")
 
     return {
         "bridge_id": bridge_id,
         "version_ids": version_ids,
         "testcase_id": testcase_id,
+        "testcase_ids": testcase_ids,
         "testcases_flag": testcases_flag,
         "testcase_data": testcase_data,
         "variables": variables,
         "matching_type": matching_type,
+        "model_override": model_override,
+        "service_override": service_override,
+        "models": models or [],
     }
 
 
@@ -124,7 +143,11 @@ def validate_direct_testcase_data(testcase_data: dict[str, Any]) -> None:
 
 
 async def fetch_testcases_from_request(
-    testcases_flag: bool, testcase_data: dict[str, Any] | None, bridge_id: str | None, testcase_id: str | None = None
+    testcases_flag: bool,
+    testcase_data: dict[str, Any] | None,
+    bridge_id: str | None,
+    testcase_id: str | None = None,
+    testcase_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Fetch testcases either from direct input or MongoDB
@@ -164,14 +187,27 @@ async def fetch_testcases_from_request(
 
     testcases_collection = db["testcases"]
 
+    if testcase_ids:
+        try:
+            object_ids = [ObjectId(tid) for tid in testcase_ids]
+        except Exception as e:
+            raise TestcaseValidationError(f"Invalid testcase id in testcase_ids: {str(e)}")
+        testcases = await with_timeout(testcases_collection.find({"_id": {"$in": object_ids}}).to_list(length=None))
+        if not testcases:
+            raise TestcaseNotFoundError("No testcases found for the given testcase_ids")
+        # Preserve the order in which ids were supplied.
+        order = {str(oid): i for i, oid in enumerate(object_ids)}
+        testcases.sort(key=lambda tc: order.get(str(tc.get("_id")), 0))
+        return testcases
+
     if testcase_id:
-        testcase = await testcases_collection.find_one({"_id": ObjectId(testcase_id)})
+        testcase = await with_timeout(testcases_collection.find_one({"_id": ObjectId(testcase_id)}))
         if not testcase:
             raise TestcaseNotFoundError("No testcase found for the given testcase_id")
         return [testcase]
 
-    # No testcase_id -> fetch all testcases for bridge_id
-    testcases = await testcases_collection.find({"bridge_id": bridge_id}).to_list(length=None)
+    # No testcase_id(s) -> fetch all testcases for bridge_id
+    testcases = await with_timeout(testcases_collection.find({"bridge_id": bridge_id}).to_list(length=None))
     if not testcases:
         raise TestcaseNotFoundError("No testcases found for the given bridge_id")
     return testcases
@@ -269,7 +305,7 @@ async def process_single_testcase(
                 },
                 **db_config,
             },
-            "state": {"version": 2},
+            "state": {"version": 2, "timer": [time.time()]},
         }
 
         # Call chat function
@@ -280,6 +316,9 @@ async def process_single_testcase(
             result_data = json.loads(result.body.decode("utf-8"))
         else:
             result_data = result
+
+        model_name = db_config.get("configuration", {}).get("model")
+        service_name = db_config.get("service")
 
         # Detect non-exception error responses (e.g. JSONResponse with success=False)
         if isinstance(result_data, dict) and result_data.get("success") is False:
@@ -293,14 +332,26 @@ async def process_single_testcase(
                 "matching_type": testcase.get("matching_type", "cosine"),
                 "error": err_msg,
                 "success": False,
+                "model": model_name,
+                "service": service_name,
             }
-            await _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": outcome})
+            await _publish_event(
+                rtlayer_cred,
+                "testcase_result",
+                {"version_id": version_id, "model": model_name, "service": service_name, "result": outcome},
+            )
             return outcome
 
         # Extract testcase result with score if available
         testcase_result = (
             result_data.get("response", {}).get("testcase_result", {}) if isinstance(result_data, dict) else {}
         )
+        
+        # Extract tools_call_data from testcase_result (sourced from historyParams)
+        tools_call_data = testcase_result.get("tools_call_data", []) if isinstance(testcase_result, dict) else []
+        usage_data = result_data.get("response", {}).get("usage", {}) if isinstance(result_data, dict) else {}
+        total_tokens = usage_data.get("total_tokens", 0)
+        cost = usage_data.get("cost", 0)
 
         outcome = {
             "testcase_id": str(testcase.get("_id")) if testcase.get("_id") != "direct_testcase" else "direct_testcase",
@@ -310,10 +361,21 @@ async def process_single_testcase(
             if isinstance(result_data, dict)
             else str(result_data),
             "score": testcase_result.get("score"),
+            "reason": testcase_result.get("reason"),
             "matching_type": testcase_result.get("matching_type") or testcase.get("matching_type", ""),
             "success": True,
+            "tools_call_data": tools_call_data,
+            "total_tokens": total_tokens,
+            "cost": cost,
+            "latency": testcase_result.get("latency") if isinstance(testcase_result, dict) else None,
+            "model": model_name,
+            "service": service_name,
         }
-        await _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": outcome})
+        await _publish_event(
+            rtlayer_cred,
+            "testcase_result",
+            {"version_id": version_id, "model": model_name, "service": service_name, "result": outcome},
+        )
         return outcome
 
     except Exception as e:
@@ -324,6 +386,8 @@ async def process_single_testcase(
         if err_args and isinstance(err_args[0], dict):
             error_message = err_args[0].get("error") or error_message
         logger.error(f"Error processing testcase {testcase.get('_id')}: {error_message}")
+        model_name = db_config.get("configuration", {}).get("model")
+        service_name = db_config.get("service")
         outcome = {
             "testcase_id": str(testcase.get("_id")) if testcase.get("_id") != "direct_testcase" else "direct_testcase",
             "bridge_id": testcase.get("bridge_id"),
@@ -333,8 +397,14 @@ async def process_single_testcase(
             "matching_type": testcase.get("matching_type", "cosine"),
             "error": error_message,
             "success": False,
+            "model": model_name,
+            "service": service_name,
         }
-        await _publish_event(rtlayer_cred, "testcase_result", {"version_id": version_id, "result": outcome})
+        await _publish_event(
+            rtlayer_cred,
+            "testcase_result",
+            {"version_id": version_id, "model": model_name, "service": service_name, "result": outcome},
+        )
         return outcome
 
 
@@ -360,7 +430,9 @@ async def run_testcases_parallel(
     """
     results = await asyncio.gather(
         *[
-            process_single_testcase(tc, copy.deepcopy(db_config), override_matching_type, rtlayer_cred, version_id)
+            process_single_testcase(
+                tc, copy.deepcopy(db_config), override_matching_type, rtlayer_cred, version_id
+            )
             for tc in testcases
         ]
     )
@@ -409,6 +481,7 @@ async def execute_testcases(
         request_data["testcase_data"],
         request_data["bridge_id"],
         request_data["testcase_id"],
+        request_data.get("testcase_ids"),
     )
 
     version_ids = request_data["version_ids"]
@@ -422,8 +495,9 @@ async def execute_testcases(
             "total_testcases": len(testcases),
         },
     )
+    models_list = request_data.get("models") or []
 
-    async def run_for_version(version_id):
+    async def run_for_version_model(version_id, model_spec):
         db_config = await get_testcase_configuration(
             org_id,
             version_id,
@@ -432,6 +506,17 @@ async def execute_testcases(
             request_data["testcase_data"],
             request_data["variables"],
         )
+        if model_spec:
+            db_config["service"] = (model_spec.get("service") or "").lower()
+            db_config.setdefault("configuration", {})["model"] = model_spec.get("model")
+        else:
+            model_override = request_data.get("model_override")
+            service_override = request_data.get("service_override")
+            if service_override:
+                db_config["service"] = service_override.lower()
+            if model_override:
+                db_config.setdefault("configuration", {})["model"] = model_override
+
         results = await run_testcases_parallel(
             testcases,
             db_config,
@@ -439,14 +524,35 @@ async def execute_testcases(
             rtlayer_cred=rtlayer_cred,
             version_id=version_id,
         )
+        tools_call_data = []
+        if results and isinstance(results[0], dict):
+            tools_call_data = results[0].get("tools_call_data", [])
+        total_tokens = 0
+        total_cost = 0
+        for result in results:
+            if isinstance(result, dict):
+                total_tokens += result.get("total_tokens", 0)
+                total_cost += result.get("cost", 0)
+
         return {
             "version_id": version_id,
             "total_testcases": len(testcases),
             "results": results,
+            "model": db_config.get("configuration", {}).get("model"),
+            "service": db_config.get("service"),
+            "tools_call_data": tools_call_data,
+            "total_tokens": total_tokens,
+            "cost": total_cost,
         }
 
-    # Run all versions concurrently (works for 1 or N)
-    version_results = await asyncio.gather(*[run_for_version(vid) for vid in version_ids])
+    # Cartesian product of versions × models (single run per version when no models supplied)
+    model_specs = models_list if models_list else [None]
+    tasks = [
+        run_for_version_model(vid, ms)
+        for vid in version_ids
+        for ms in model_specs
+    ]
+    version_results = await asyncio.gather(*tasks)
     final_payload = {
         "success": True,
         "bridge_id": request_data["bridge_id"],

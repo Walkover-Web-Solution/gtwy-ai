@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import re
+from typing import Any
 
 import httpx
 from fastapi import Request
@@ -10,12 +11,14 @@ from google.genai import types
 from globals import *
 from globals import logger, traceback
 from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name
+from src.configs.service_registry import has_openai_choices_shape, uses_string_tool_choice
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
 from src.services.mcp_gateway.client import call_mcp_tool
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
+from src.services.utils.time import SERVICE_TIMEOUTS
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 
 
@@ -108,7 +111,7 @@ def apply_variable_path_filters(
 
 def validate_tool_call(service, response):
     match service: # TODO: Fix validation process.
-        case  'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
+        case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
             tool_calls = response.get('choices', [])[0].get('message', {}).get("tool_calls", [])
             return len(tool_calls) > 0 if tool_calls is not None else False
         case "openai":
@@ -125,10 +128,54 @@ def validate_tool_call(service, response):
             return False
 
 
+def resolve_url_params(url, method, data, query_param_keys=None):
+    """
+    Replace :param or {param} route params in URL with values from data dict.
+    For GET requests all remaining args become query params.
+    For non-GET, keys listed in query_param_keys are sent as query params; the rest go as JSON body.
+    Returns (resolved_url, query_params_dict_or_None, body_or_None).
+    """
+    if not data:
+        return url, None, None
+
+    data = dict(data)
+    query_param_keys = query_param_keys or []
+
+    def _replace(match):
+        key = match.group(1) or match.group(2)
+        if key in data:
+            return str(data.pop(key))
+        return match.group(0)
+
+    resolved_url = re.sub(r":([A-Za-z_][A-Za-z0-9_]*)|{([A-Za-z_][A-Za-z0-9_]*)}", _replace, url)
+
+    def _coerce(v):
+        if isinstance(v, bool):
+            return str(v).lower()
+        if not isinstance(v, (str, int, float)):
+            return str(v)
+        return v
+
+    if method.upper() == "GET":
+        coerced = {k: _coerce(v) for k, v in data.items()}
+        return resolved_url, coerced or None, None
+
+    query_params = {k: _coerce(data.pop(k)) for k in list(query_param_keys) if k in data}
+    return resolved_url, query_params or None, data or None
+
+
 async def axios_work(data, function_payload):
     try:
-        response, rs_headers = await fetch(
-            function_payload.get("url"), function_payload.get("method", "POST"), function_payload.get("headers", {}), None, data
+        method = function_payload.get("method", "POST")
+        resolved_url, query_params, body = resolve_url_params(
+            function_payload.get("url"),
+            method,
+            data,
+            function_payload.get("query_params", []),
+        )
+        response, rs_headers = await asyncio.wait_for(
+            fetch(resolved_url, method, function_payload.get("headers", {}), query_params, body),
+            timeout=SERVICE_TIMEOUTS["pre_function"],
         )  # required is not send then it will still hit the curl
         return {
             "response": response,
@@ -142,16 +189,7 @@ async def axios_work(data, function_payload):
 
 
 def disable_tool_call(configuration: dict, service: str):
-    if service in (
-        service_name["openai"],
-        service_name["openai_completion"],
-        service_name["mistral"],
-        service_name["groq"],
-        service_name["grok"],
-        service_name["open_router"],
-        service_name["neev_cloud"],
-        service_name["moonshot"]
-    ):
+    if uses_string_tool_choice(service):
         configuration["tool_choice"] = "none"
 
     elif service == service_name["gemini"]:
@@ -170,13 +208,10 @@ def disable_tool_call(configuration: dict, service: str):
         configuration["tool_choice"] = {"type": "none"}
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
-    if (
-        service == service_name["openai_completion"]
-        or service == service_name["open_router"]
-        or service == service_name["mistral"]
-        or service == service_name["neev_cloud"]
-        or service == service_name["moonshot"]
-    ):
+    if has_openai_choices_shape(service):
+        # All openai_chat services share the function-nested tool schema
+        # (openai_completion, open_router, mistral, neev_cloud, moonshot,
+        # deepseek, groq, grok). openai (flat) / gemini / anthropic differ below.
         data_to_send = [
             {
                 "type": "function",
@@ -278,30 +313,6 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             }
             for transformed_tool in configuration.get("tools", [])
         ]
-    elif service == service_name["groq"] or service == service_name["grok"]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": transformed_tool["name"],
-                    "description": transformed_tool["description"],
-                    "parameters": {
-                        "type": "object",
-                        "properties": clean_json(
-                            apply_variable_path_filters(
-                                transformed_tool.get("properties", {}),
-                                variables=variables,
-                                variables_path=variables_path,
-                                function_name=transformed_tool["name"],
-                                parentValue={"required": transformed_tool.get("required", [])},
-                            )
-                        ),
-                        "required": transformed_tool.get("required"),
-                    },
-                },
-            }
-            for transformed_tool in configuration.get("tools", [])
-        ]
 
 def reasoning_formatter(service: str, new_config: dict) -> None:
     if service == service_name["openai"]:
@@ -329,6 +340,12 @@ def reasoning_formatter(service: str, new_config: dict) -> None:
     elif service == service_name["groq"]:
         effort = new_config["reasoning"].get("effort", "medium")
         new_config["reasoning_effort"] = effort
+        new_config.pop("reasoning", None)
+
+    elif service == service_name["deepseek"]:
+        effort = new_config["reasoning"].get("effort", "medium")
+        new_config["reasoning_effort"] = effort
+        new_config["extra_body"] = {"thinking": {"type": "enabled"}}
         new_config.pop("reasoning", None)
 
     # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
@@ -521,7 +538,7 @@ def make_code_mapping_by_service(responses, service):
     codes_mapping = {}
     function_list = []
     match service:
-        case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
+        case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
 
             for tool_call in responses['choices'][0]['message']['tool_calls']:
                 name = tool_call['function']['name']
@@ -720,13 +737,14 @@ def makeFunctionName(name):
     return re.sub(r"[^a-zA-Z0-9_-]", "", name)
 
 
-async def unknown_error_handler(data):
-    return await fetch(
-            url="https://flow.sokt.io/func/scrirBtsbXm4",
-            method="POST",
-            headers={},
-            json_body=data
-        )
+async def unknown_error_handler_alert(data):
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://flow.sokt.io/func/scrimCFAKPWg", json={**data, "env": Config.ENVIRONMENT}) as response:
+                return await response.json()
+    except Exception as e:
+        logger.error(f"unknown_error_handler_alert failed: {e}")
 
 def serialize_config(config) -> dict:
     def default(o):
@@ -756,7 +774,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
                                 service_tier=None, accumulated_reasoning=None):
     """Build a complete response dict from streamed data, matching the shape of each service's non-stream response."""
     full_text = "".join(accumulated_content)
-    if service in [service_name["groq"], service_name["grok"],
+    if service in [service_name["groq"], service_name["grok"], service_name["deepseek"], 
                    service_name["open_router"], service_name["mistral"],
                    service_name["neev_cloud"], service_name["moonshot"]]:
         message = {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls or []}
@@ -809,6 +827,11 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
         resp = {"output": output, "model": configuration.get("model", ""), "usage": final_usage, "status": final_finish_reason}
         if service_tier:
             resp["service_tier"] = service_tier
+        # Carry incomplete_details so the formatter maps finish_reason for incomplete
+        # responses the same way the non-stream path does (status -> incomplete_details.reason).
+        incomplete_details = (last_delta or {}).get("incomplete_details")
+        if incomplete_details:
+            resp["incomplete_details"] = incomplete_details
         return resp
     return {"content": full_text, "usage": final_usage, "finish_reason": final_finish_reason}
 
@@ -945,3 +968,150 @@ def remove_additional_properties_with_anyof(schema):
 
     process_schema(schema)
     return schema
+
+
+# ─────────────────────── JSON REPAIR UTILITY ───────────────────────
+
+def fix_json_string(bad_json: str, max_rounds: int = 30) -> str:
+    """Attempt to repair a malformed JSON string and return a compact valid JSON string."""
+    s = (bad_json or "").strip()
+    if not s:
+        raise ValueError("Input is empty.")
+
+    parsed = _try_ast_literal(s)
+    if parsed is not None:
+        return _dump_compact(parsed)
+
+    s = _strip_common_wrappers(s)
+
+    parsed = _try_ast_literal(s)
+    if parsed is not None:
+        return _dump_compact(parsed)
+
+    s = _repair_common_text_issues(s)
+    s = _balance_brackets_and_braces(s)
+
+    for _ in range(max_rounds):
+        try:
+            return _dump_compact(json.loads(s))
+        except json.JSONDecodeError as err:
+            new_s = _repair_from_decode_error(s, err)
+            if new_s == s:
+                break
+            s = _balance_brackets_and_braces(new_s)
+
+    final_s = _balance_brackets_and_braces(s)
+    try:
+        return _dump_compact(json.loads(final_s))
+    except Exception:
+        return bad_json
+
+
+def _try_ast_literal(text: str) -> Any:
+    """Parse a Python literal (dict/list repr) via ast.literal_eval."""
+    try:
+        result = ast.literal_eval(text)
+        if isinstance(result, (dict, list)):
+            return result
+        return None
+    except Exception:
+        return None
+
+
+def _dump_compact(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _strip_common_wrappers(s: str) -> str:
+    """Remove markdown code fences if present."""
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+
+def _repair_common_text_issues(s: str) -> str:
+    """Fix common JSON formatting mistakes."""
+    s = re.sub(r",\s*(\}|\])", r"\1", s)
+    s = re.sub(r'(?<!["\w])True(?!["\w])', 'true', s)
+    s = re.sub(r'(?<!["\w])False(?!["\w])', 'false', s)
+    s = re.sub(r'(?<!["\w])None(?!["\w])', 'null', s)
+    s = re.sub(r"(?<!\\)'([A-Za-z0-9_\- ]+)'\s*:", r'"\1":', s)
+    s = re.sub(r":\s*'([^'\\]*(?:\\.[^'\\]*)*)'", r':"\1"', s)
+    s = re.sub(r"(\[|,)\s*'([^'\\]*(?:\\.[^'\\]*)*)'" , r'\1"\2"', s)
+    s = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
+    return s
+
+
+def _balance_brackets_and_braces(s: str) -> str:
+    """Add missing closing brackets/braces and remove unmatched closers."""
+    out = []
+    stack = []
+    in_string = False
+    escape = False
+    open_to_close = {"{": "}", "[": "]"}
+
+    for ch in s:
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+        elif ch in open_to_close:
+            stack.append(open_to_close[ch])
+            out.append(ch)
+        elif ch in ("}", "]"):
+            if stack and ch == stack[-1]:
+                stack.pop()
+                out.append(ch)
+        else:
+            out.append(ch)
+
+    if in_string:
+        out.append('"')
+    while stack:
+        out.append(stack.pop())
+
+    repaired = "".join(out)
+    return re.sub(r",\s*(\}|\])", r"\1", repaired)
+
+
+def _repair_from_decode_error(s: str, err: json.JSONDecodeError) -> str:
+    """Apply a targeted fix based on the position reported in a JSONDecodeError."""
+    msg = err.msg
+    pos = max(0, min(len(s), err.pos))
+
+    def insert_at(text: str, idx: int, token: str) -> str:
+        return text[:idx] + token + text[idx:]
+
+    if "Expecting ',' delimiter" in msg:
+        return insert_at(s, pos, ",")
+
+    if "Expecting ':' delimiter" in msg:
+        return insert_at(s, pos, ":")
+
+    if "Unterminated string" in msg:
+        return s + '"'
+
+    if "Expecting property name enclosed in double quotes" in msg:
+        candidate = re.sub(r",\s*(\})", r"\1", s)
+        if candidate != s:
+            return candidate
+        if pos < len(s) and s[pos] == "'":
+            return s[:pos] + '"' + s[pos + 1:]
+
+    if "Extra data" in msg:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(s)
+            return _dump_compact(obj)
+        except Exception:
+            pass
+
+    return _balance_brackets_and_braces(s[:pos].rstrip())

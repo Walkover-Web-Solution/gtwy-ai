@@ -19,6 +19,9 @@ MONGO_SEMAPHORE = asyncio.Semaphore(50)
 # Structure: {request_id: [{'bridge_id': ..., 'history_params': ..., 'dataset': ..., 'version_id': ..., 'thread_info': ...}]}
 TRANSFER_HISTORY = {}
 
+# Flipped to False on SIGTERM so /ready returns 503 and new batch crons are skipped
+is_ready = True
+
 __all__ = [
     "logger",
     "BadRequestException",
@@ -27,4 +30,5 @@ __all__ = [
     "REDIS_SEMAPHORE",
     "MONGO_SEMAPHORE",
     "TRANSFER_HISTORY",
+    "is_ready",
 ]

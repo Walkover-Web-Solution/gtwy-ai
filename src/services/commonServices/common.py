@@ -2,6 +2,7 @@ import asyncio
 import json
 import traceback
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -23,7 +24,6 @@ from src.services.utils.common_utils import (
     build_service_params,
     build_service_params_for_batch,
     configure_custom_settings,
-    create_history_params,
     create_latency_object,
     filter_missing_vars,
     handle_agent_transfer,
@@ -36,11 +36,10 @@ from src.services.utils.common_utils import (
     parse_request_body,
     prepare_prompt,
     process_background_tasks,
-    process_background_tasks_for_error,
     process_batch_background_tasks,
     process_variable_state,
     render_template_if_applicable,
-    restructure_json_schema,
+    normalize_response_type,
     save_error_history,
     setup_agent_tools,
     sse_stream_and_finalize,
@@ -54,12 +53,11 @@ from src.services.utils.maximum_iterations_utils import (
     cleanup_tool_count_after,
     init_tool_count,
 )
-from src.services.utils.rich_text_support import process_chatbot_response
 
 
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
-from .baseService.utils import sendResponse
+from .baseService.utils import fix_json_string, sendResponse, unknown_error_handler_alert
 from .response_caching_service import handle_response_caching
 from .reviewer_service import run_review_loop
 from src.services.todo.todo_handler import handle_todo_mode
@@ -154,6 +152,8 @@ async def chat_multiple_agents(request_body):
 async def chat(request_body):
     result = {}
     class_obj = {}
+    params = None
+    timer = None
     tool_count_key_for_cleanup = None
     tool_count_owner_token = None
     first_execution_error_code = None
@@ -164,11 +164,14 @@ async def chat(request_body):
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
+        # Stamp request arrival time if not already set by the queue consumer
+        if not request_body.get("body", {}).get("created_at"):
+            request_body.setdefault("body", {})["created_at"] = datetime.now(timezone.utc).isoformat()
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
 
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
-        if isinstance(mcp_cfg, dict) and mcp_cfg.get("enabled"):
+        if isinstance(mcp_cfg, dict):
             from src.services.utils.mcp_utils import resolve_mcp_type
             mcp_type = resolve_mcp_type(parsed_data.get("service"), parsed_data.get("model"))
             if mcp_type == "client":
@@ -301,10 +304,7 @@ async def chat(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
-            custom_config["response_type"] = restructure_json_schema(
-                custom_config["response_type"], parsed_data["service"]
-            )
+        normalize_response_type(custom_config, parsed_data["service"], model_config, parsed_data["configuration"])
         if parsed_data.get("mode") == "plan":
             # Executor orchestration actions keep the existing pipeline.
             # The planner LLM call (no action) falls through to chat() with
@@ -374,6 +374,32 @@ async def chat(request_body):
         original_exception = None
         try:
             result = await handle_response_caching(parsed_data=parsed_data,class_obj=class_obj)
+
+            # If the model was configured to return JSON, validate and repair the content.
+            # Types "json_object" and "json_schema" imply the content must be parsable JSON.
+            _rt = custom_config.get("response_type") or {}
+            if isinstance(_rt, dict) and _rt.get("type") in ("json_object", "json_schema"):
+                _content = (result.get("response") or {}).get("data", {}).get("content")
+                if isinstance(_content, str):
+                    try:
+                        json.loads(_content)
+                    except (json.JSONDecodeError, ValueError):
+                        try:
+                            _repaired = fix_json_string(_content)
+                            result["response"]["data"]["content"] = _repaired
+                        except Exception as _json_err:
+                            asyncio.create_task(unknown_error_handler_alert({
+                                "error": f"Model returned invalid JSON: {str(_json_err)}",
+                                "raw_content": _content[:500],
+                                "model": parsed_data.get("model"),
+                                "service": parsed_data.get("service"),
+                                "bridge_id": parsed_data.get("bridge_id"),
+                                "org_id": parsed_data.get("org_id"),
+                                "message_id": parsed_data.get("message_id"),
+                                "response_type": _rt.get("type"),
+                            }))
+                            result["success"] = False
+                            original_error = f"Model returned invalid JSON: {_content[:200]}"
 
             # Check if agent transfer is needed
             transfer_agent_config = result.get("transfer_agent_config")
@@ -470,13 +496,7 @@ async def chat(request_body):
                     bridge_configurations,
                 )
 
-                if (
-                    "response_type" in fallback_custom_config
-                    and fallback_custom_config["response_type"].get("type") == "json_schema"
-                ):
-                    fallback_custom_config["response_type"] = restructure_json_schema(
-                        fallback_custom_config["response_type"], parsed_data["service"]
-                    )
+                normalize_response_type(fallback_custom_config, parsed_data["service"], fallback_model_config, parsed_data["configuration"])
 
                 class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
@@ -531,14 +551,6 @@ async def chat(request_body):
                 is_external_error=False,
             ))
 
-        if parsed_data["configuration"]["type"] == "chat":
-            if parsed_data["is_rich_text"] and parsed_data["bridgeType"] and not parsed_data["reasoning_model"]:
-                try:
-                    await process_chatbot_response(
-                        result, params, parsed_data, model_output_config, timer, params["execution_time_logs"]
-                    )
-                except Exception as e:
-                    raise RuntimeError(f"error in chatbot : {e}") from e
         parsed_data["alert_flag"] = result["modelResponse"].get("alert_flag", False)
         if parsed_data.get("type") != "image":
             parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
@@ -613,6 +625,8 @@ async def chat(request_body):
             testcase_result = await process_single_testcase_result(
                 parsed_data.get("testcase_data", {}), result, parsed_data
             )
+            # Attach latency so it can be forwarded over RTLayer to the client
+            testcase_result["latency"] = latency
             result["response"]["testcase_result"] = testcase_result
 
             # Stamp the testcase fields onto historyParams so the log queue
@@ -623,6 +637,7 @@ async def chat(request_body):
                     "expected": testcase_result.get("expected"),
                     "actual": testcase_result.get("actual"),
                     "score": testcase_result.get("score"),
+                    "reason": testcase_result.get("reason"),
                     "matching_type": testcase_result.get("matching_type"),
                     "type": testcase_result.get("type"),
                     "success": testcase_result.get("success"),
@@ -843,10 +858,7 @@ async def batch(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
-            custom_config["response_type"] = restructure_json_schema(
-                custom_config["response_type"], parsed_data["service"]
-            )
+        normalize_response_type(custom_config, parsed_data["service"], model_config, parsed_data["configuration"])
 
         # Step 8: Execute Service Handler
         params = build_service_params_for_batch(parsed_data, custom_config, model_output_config)
@@ -857,7 +869,7 @@ async def batch(request_body):
             raise ValueError(result)
 
         # Store custom_config as AiConfig for batch conversation logs
-        parsed_data["AiConfig"] = custom_config
+        parsed_data["ai_config_mapping"] = result["ai_config_mapping"]
 
         if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
                 result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])

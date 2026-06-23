@@ -4,6 +4,7 @@ import json
 from aio_pika import DeliveryMode, Message, RobustConnection, connect_robust
 from aio_pika.abc import AbstractIncomingMessage
 
+import globals as _globals
 from config import Config
 from src.services.utils.logger import logger
 
@@ -139,6 +140,10 @@ class BaseQueue:
         raise Exception(last_error)
 
     async def _message_handler_wrapper(self, message: AbstractIncomingMessage, process_callback):
+        if not _globals.is_ready:
+            await message.nack(requeue=True)
+            logger.info("Server not ready, requeued message")
+            return
         async with message.process():
             try:
                 message_body = message.body.decode()

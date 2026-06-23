@@ -126,6 +126,8 @@ async def get_default_values_controller(service, model, current_configuration, t
             return get_default_values(modelObj)
         elif service == service_name["grok"]:
             return get_default_values(modelObj)
+        elif service == service_name["deepseek"]:
+            return get_default_values(modelObj)
         elif service == service_name["open_router"]:
             return get_default_values(modelObj)
         elif service == service_name["mistral"]:

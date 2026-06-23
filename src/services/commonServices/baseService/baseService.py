@@ -8,6 +8,7 @@ import pydash as _
 from config import Config
 from globals import logger
 from src.configs.serviceKeys import ServiceKeys
+from src.configs.service_registry import has_openai_choices_shape, supports_tool_calls, uses_openai_sdk
 
 from ....configs.constant import service_name
 from ....db_services import metrics_service
@@ -22,11 +23,9 @@ from ..grok.grokModelRun import grok_runmodel, grok_stream
 from ..groq.groqModelRun import groq_runmodel, groq_stream
 from ..Mistral.mistral_model_run import mistral_model_run, mistral_stream
 from ..openAI.image_model import OpenAIImageModel
-from ..openAI.runModel import openai_completion, openai_response_model, openai_response_stream
+from ..openAI.runModel import openai_response_model, openai_response_stream
 from ..openAI.openai_stream_utils import sanitize_openai_response_item
-from ..openRouter.openRouter_modelrun import openrouter_modelrun, openrouter_stream
-from ..neevCloud.neevCloud_modelrun import neevcloud_modelrun, neevcloud_stream
-from ..moonShot.moonShot_modelrun import moonshot_modelrun, moonshot_stream
+from ..openaiCompatible.openai_compatible_modelrun import openai_compatible_modelrun, openai_compatible_stream
 from ..streaming_service import StreamingService
 from .utils import (
     build_accumulated_response,
@@ -51,6 +50,10 @@ from src.services.utils.maximum_iterations_utils import build_tool_count_key, de
 from src.exceptions import ApiCallError
 
 executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
+
+# Same-model retries for an empty / prematurely-dropped stream, attempted
+# inside stream() BEFORE the model-level fallback in sse_stream_and_finalize.
+STREAM_SAME_MODEL_MAX_RETRIES = 1
 
 
 class BaseService:
@@ -109,6 +112,7 @@ class BaseService:
         self.user_id = params.get("user_id")
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
+        self.created_at = params.get("created_at")
         self.tool_call_limit_error = None
         self.maximum_iteration_limit_reached = False
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
@@ -143,7 +147,18 @@ class BaseService:
             # Return transfer config instead of processing tools
             return [], [], {"transfer_agent_config": transfer_config}
 
-        return await process_data_and_run_tools(codes_mapping, self)
+        func_response_data, mapping_response_data, tools_call_data = await process_data_and_run_tools(codes_mapping, self)
+
+        if self.response_format.get("type", "") != "webhook":
+            asyncio.create_task(
+                sendResponse(
+                    self.response_format,
+                    data={"function_call": True, "Name": function_list, "result": func_response_data},
+                    success=True,
+                )
+            )
+
+        return func_response_data, mapping_response_data, tools_call_data
 
     def update_configration(self, response, function_responses, configuration, mapping_response_data, service, tools):
         if service == "anthropic":
@@ -155,7 +170,7 @@ class BaseService:
             tools[display_tool_name] = function_response["content"]
 
             match service:
-                case 'openai_completion' | 'groq' | 'grok' | 'open_router' | 'mistral' | 'neev_cloud' | 'moonshot':
+                case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
                     assistant_tool_calls = response['choices'][0]['message']['tool_calls'][index]
                     assistant_msg = {'role': 'assistant', 'content': None, 'tool_calls': [assistant_tool_calls]}
                     # Moonshot requires reasoning_content in assistant messages when thinking mode is enabled
@@ -334,18 +349,7 @@ class BaseService:
         if functionCallRes is None:
             functionCallRes = {}
         funcModelResponse = functionCallRes.get("modelResponse", {})
-        if self.service in [
-            service_name["openai"],
-            service_name["groq"],
-            service_name["grok"],
-            service_name["anthropic"],
-            service_name["open_router"],
-            service_name["neev_cloud"],
-            service_name["moonshot"],
-            service_name["mistral"],
-            service_name["gemini"],
-            service_name["openai_completion"],
-        ]:
+        if supports_tool_calls(self.service):
             if funcModelResponse and self.service != service_name["openai"]:
                 _.set_(
                     model_response,
@@ -356,6 +360,7 @@ class BaseService:
                     service_name["openai_completion"],
                     service_name["groq"],
                     service_name["grok"],
+                    service_name["deepseek"],
                     service_name["open_router"],
                     service_name["neev_cloud"],
                     service_name["moonshot"],
@@ -438,6 +443,7 @@ class BaseService:
             "is_cached": is_cached,
             "error": "",
             "plans": self.parsed_data.get("plans") if hasattr(self, 'parsed_data') else None,
+            "created_at": self.created_at,
         }
 
     def service_formatter(self, configuration: object, service: str):  # changes
@@ -451,7 +457,7 @@ class BaseService:
                 new_config.pop("stream")
 
             mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
-            mcp_active = bool(mcp_config and mcp_config.get("enabled") and mcp_config.get("servers"))
+            mcp_active = bool(mcp_config and mcp_config.get("servers"))
             mcp_type = resolve_mcp_type(service, self.model) if mcp_active else None
             if mcp_active and mcp_type == "client":
                 client_mcp_config(service, configuration, mcp_config, self.tool_id_and_name_mapping)
@@ -463,6 +469,7 @@ class BaseService:
                     service == service_name["openai_completion"]
                     or service == service_name["groq"]
                     or service == service_name["grok"]
+                    or service == service_name["deepseek"]
                 ):
                     if configuration.get("tool_choice"):
                         if configuration["tool_choice"] not in ["auto", "none", "required", "default"]:
@@ -478,10 +485,33 @@ class BaseService:
                 del new_config["tool_choice"]
             if "tools" in new_config and len(new_config["tools"]) == 0:
                 del new_config["tools"]
-            if service == service_name["openai"] and "text" in new_config:
-                data = new_config["text"]
-                new_config["text"] = {"format": data}
-            
+            if service == service_name["openai"]:
+                # The Responses API takes the system prompt as a developer/system message
+                # inside `input`. A top-level string `prompt` is invalid here (the param is
+                # reserved for prompt-template objects), so drop a stray string prompt.
+                if isinstance(new_config.get("prompt"), str):
+                    new_config.pop("prompt", None)
+
+                if "text" in new_config:
+                    data = new_config["text"]
+                    if isinstance(data, dict):
+                        rtype = data.get("type")
+                        fmt = {"type": rtype} if rtype else dict(data)
+                        if rtype == "json_schema":
+                            # json_schema format fields may live flattened alongside `type`
+                            # (restructure_json_schema) or still nested under `json_schema`.
+                            for k in ("name", "schema", "strict", "description"):
+                                if data.get(k) is not None:
+                                    fmt[k] = data[k]
+                            nested = data.get("json_schema")
+                            if isinstance(nested, dict):
+                                for k, v in nested.items():
+                                    if v is not None:
+                                        fmt[k] = v
+                        new_config["text"] = {"format": fmt}
+                    else:
+                        new_config["text"] = {"format": data}
+
             if new_config.get("verbosity") and service == service_name["openai"]:
                 verbosity = new_config.pop("verbosity", {})
 
@@ -610,8 +640,11 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
-            elif service == service_name["open_router"]:
-                response = await openrouter_modelrun(
+            elif uses_openai_sdk(service):
+                # open_router / neev_cloud / moonshot / openai_completion (+ any future
+                # openai_sdk service) share one AsyncOpenAI runner; base_url + flags
+                # come from the registry.
+                response = await openai_compatible_modelrun(
                     configuration,
                     apikey,
                     self.execution_time_logs,
@@ -624,36 +657,10 @@ class BaseService:
                     service,
                     count,
                     self.token_calculator,
-                )
-            elif service == service_name["neev_cloud"]:
-                response = await neevcloud_modelrun(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
-                )
-            elif service == service_name["moonshot"]:
-                response = await moonshot_modelrun(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
+                    self.is_embed,
+                    self.user_id,
+                    self.thread_id,
+                    self.api_collection,
                 )
             elif service == service_name["mistral"]:
                 response = await mistral_model_run(
@@ -700,25 +707,6 @@ class BaseService:
                     count,
                     self.token_calculator,
                 )
-            elif service == service_name["openai_completion"]:
-                response = await openai_completion(
-                    configuration,
-                    apikey,
-                    self.execution_time_logs,
-                    self.bridge_id,
-                    self.timer,
-                    self.message_id,
-                    self.org_id,
-                    self.name,
-                    self.org_name,
-                    service,
-                    count,
-                    self.token_calculator,
-                    self.is_embed,
-                    self.user_id,
-                    self.thread_id,
-                    self.api_collection,
-                )
             if not response["success"]:
                 raise ApiCallError(response["error"], status_code=response.get("status_code"), service=service)
             return {"success": True, "modelResponse": response["response"]}
@@ -743,54 +731,100 @@ class BaseService:
                     message_id=str(self.message_id or ""),
                 )
 
-            if service == service_name["openai"]:
-                generator = openai_response_stream(configuration, apikey)
-            elif service == service_name["anthropic"]:
-                generator = anthropic_stream(configuration, apikey)
-            elif service == service_name["groq"]:
-                generator = groq_stream(configuration, apikey)
-            elif service == service_name["grok"]:
-                generator = grok_stream(configuration, apikey)
-            elif service == service_name["open_router"]:
-                generator = openrouter_stream(configuration, apikey)
-            elif service == service_name["neev_cloud"]:
-                generator = neevcloud_stream(configuration, apikey)
-            elif service == service_name["moonshot"]:
-                generator = moonshot_stream(configuration, apikey)
-            elif service == service_name["mistral"]:
-                generator = mistral_stream(configuration, apikey)
-            elif service == service_name["gemini"]:
-                generator = gemini_modelrun_stream(configuration, apikey)
-            else:
-                raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
+            # Retry the SAME model on an empty / prematurely-dropped stream before
+            # the model-level fallback (in sse_stream_and_finalize) ever kicks in.
+            # emit_start above is intentionally outside this loop so a retry never
+            # re-emits the SSE start event.
+            for stream_attempt in range(STREAM_SAME_MODEL_MAX_RETRIES + 1):
+                # Fresh generator each attempt => fresh provider request.
+                if service == service_name["openai"]:
+                    generator = openai_response_stream(configuration, apikey)
+                elif service == service_name["anthropic"]:
+                    generator = anthropic_stream(configuration, apikey)
+                elif service == service_name["groq"]:
+                    generator = groq_stream(configuration, apikey)
+                elif service == service_name["grok"]:
+                    generator = grok_stream(configuration, apikey)
+                elif uses_openai_sdk(service):
+                    # open_router / neev_cloud / moonshot (+ any future openai_sdk service)
+                    generator = openai_compatible_stream(configuration, apikey, service)
+                elif service == service_name["mistral"]:
+                    generator = mistral_stream(configuration, apikey)
+                elif service == service_name["gemini"]:
+                    generator = gemini_modelrun_stream(configuration, apikey)
+                else:
+                    raise ApiCallError(f"Streaming not supported for service: {service}", service=service)
 
-            if self.timer:
-                self.timer.start()
-            _stream_exc = None
-            try:
-                stream_state = await run_stream_and_collect(generator, self.streamer)
-            except Exception as _exc:
-                _stream_exc = _exc
-            finally:
-                if self.timer and self.timer.start_times:
-                    _elapsed = self.timer.stop(f"{service} stream")
-                    if _stream_exc is None:
-                        self.execution_time_logs.append({
-                            "step": f"{service} stream time for call :- {count + 1}",
-                            "time_taken": round(_elapsed, 4),
-                        })
-            if _stream_exc is not None:
-                raise _stream_exc
-            accumulated_content = stream_state["accumulated_content"]
-            accumulated_reasoning = stream_state.get("accumulated_reasoning", [])
-            final_tool_calls = stream_state["final_tool_calls"]
-            final_usage = stream_state["final_usage"]
-            final_finish_reason = stream_state["final_finish_reason"]
-            error_in_stream = stream_state["error_in_stream"]
-            last_delta = stream_state["last_delta"]
+                if self.timer:
+                    self.timer.start()
+                _stream_exc = None
+                try:
+                    stream_state = await run_stream_and_collect(generator, self.streamer)
+                except Exception as _exc:
+                    _stream_exc = _exc
+                finally:
+                    if self.timer and self.timer.start_times:
+                        _elapsed = self.timer.stop(f"{service} stream")
+                        if _stream_exc is None:
+                            self.execution_time_logs.append({
+                                "step": f"{service} stream time for call :- {count + 1} (attempt {stream_attempt + 1})",
+                                "time_taken": round(_elapsed, 4),
+                            })
+                # A genuinely raised exception is re-raised as before (not retried);
+                # for OpenAI, real drops/timeouts surface as error_in_stream instead.
+                if _stream_exc is not None:
+                    raise _stream_exc
+                accumulated_content = stream_state["accumulated_content"]
+                accumulated_reasoning = stream_state.get("accumulated_reasoning", [])
+                final_tool_calls = stream_state["final_tool_calls"]
+                final_usage = stream_state["final_usage"]
+                final_finish_reason = stream_state["final_finish_reason"]
+                error_in_stream = stream_state["error_in_stream"]
+                last_delta = stream_state["last_delta"]
 
-            if error_in_stream:
-                raise ApiCallError(error_in_stream, service=service)
+                # Did anything reach the client yet? content/reasoning/tool_calls are
+                # accumulated in lock-step with their streamer emits, so this is a
+                # reliable "nothing streamed yet" signal.
+                emitted_any = bool(accumulated_content or accumulated_reasoning or final_tool_calls)
+
+                # An incomplete stream (e.g. the provider closed the connection before
+                # sending its completion/usage event) yields nothing at all.
+                is_empty = (
+                    not accumulated_content
+                    and not accumulated_reasoning
+                    and not final_tool_calls
+                    and not final_finish_reason
+                    and not final_usage
+                )
+
+                # Retry the no-data case, and pre-emission connection drops — but never
+                # after partial output was streamed (avoids duplicate tokens to client).
+                is_retryable = is_empty or (error_in_stream and not emitted_any)
+                if is_retryable and stream_attempt < STREAM_SAME_MODEL_MAX_RETRIES:
+                    logger.warning(
+                        f"{service} stream incomplete (empty={is_empty}, "
+                        f"error_in_stream={bool(error_in_stream)}), retrying same model "
+                        f"(attempt {stream_attempt + 1}/{STREAM_SAME_MODEL_MAX_RETRIES})"
+                    )
+                    continue
+
+                if error_in_stream:
+                    raise ApiCallError(error_in_stream, service=service)
+
+                # Attempts exhausted and still empty — treat as a failure instead of
+                # returning an empty "success" response.
+                if is_empty:
+                    logger.error(
+                        f"{service} stream returned no data — incomplete stream. last_delta keys="
+                        f"{list(last_delta.keys()) if isinstance(last_delta, dict) else type(last_delta).__name__}, "
+                        f"last_delta={str(last_delta)[:500]}"
+                    )
+                    raise ApiCallError(
+                        f"{service} stream returned no data (incomplete stream — no completion event received)",
+                        service=service,
+                    )
+
+                break  # success — exit retry loop with final stream_state in scope
 
             stream_service_tier = stream_state.get("service_tier")
 

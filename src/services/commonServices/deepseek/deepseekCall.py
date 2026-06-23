@@ -5,7 +5,7 @@ from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService
 
 
-class Grok(BaseService):
+class Deepseek(BaseService):
     async def execute(self):
         history_params = {}
         tools = {}
@@ -30,17 +30,17 @@ class Grok(BaseService):
             messages.append({"role": "user", "content": self.user})
 
         self.customConfig["messages"] = messages
-        self.customConfig = self.service_formatter(self.customConfig, service_name["grok"])
+        self.customConfig = self.service_formatter(self.customConfig, service_name["deepseek"])
 
         if self.stream_mode:
-            grok_response = await self.stream(self.customConfig, self.apikey, service_name["grok"])
+            deepseek_response = await self.stream(self.customConfig, self.apikey, service_name["deepseek"])
         else:
-            grok_response = await self.chats(self.customConfig, self.apikey, service_name["grok"])
-        model_response = grok_response.get("modelResponse", {})
+            deepseek_response = await self.chats(self.customConfig, self.apikey, service_name["deepseek"])
+        model_response = deepseek_response.get("modelResponse", {})
 
-        if not grok_response.get("success"):
-            await self.handle_failure(grok_response)
-            raise ValueError(grok_response.get("error"))
+        if not deepseek_response.get("success"):
+            await self.handle_failure(deepseek_response)
+            raise ValueError(deepseek_response.get("error"))
 
         choices = model_response.get("choices") or []
         first_choice = choices[0] if choices else {}
@@ -48,7 +48,7 @@ class Grok(BaseService):
 
         if tool_calls:
             function_call_response = await self.function_call(
-                self.customConfig, service_name["grok"], grok_response, 0, {}
+                self.customConfig, service_name["deepseek"], deepseek_response, 0, {}
             )
 
             if not function_call_response.get("success"):
@@ -58,7 +58,9 @@ class Grok(BaseService):
             self.update_model_response(model_response, function_call_response)
             tools = function_call_response.get("tools", {})
 
-        response = await Response_formatter(model_response, service_name["grok"], tools, self.type, self.image_data)
+        response = await Response_formatter(
+            model_response, service_name["deepseek"], tools, self.type, self.image_data
+        )
 
         transfer_config = function_call_response.get("transfer_agent_config") if function_call_response else None
         history_params = self.prepare_history_params(response, model_response, tools, transfer_config)

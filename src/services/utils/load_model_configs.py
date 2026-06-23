@@ -1,5 +1,6 @@
 from globals import logger
 from models.mongo_connection import db
+from src.services.utils.time import with_timeout
 
 modelConfigModel = db["modelconfigurations"]
 
@@ -7,7 +8,7 @@ modelConfigModel = db["modelconfigurations"]
 async def get_model_configurations():
     try:
         # Remove the projection to allow _id to be included in the results
-        configurations = await modelConfigModel.find({"status": 1}, {"_id": 0}).to_list(length=None)
+        configurations = await with_timeout(modelConfigModel.find({"status": 1}, {"_id": 0}).to_list(length=None))
         config_dict = {}
         for conf in configurations:
             conf_dict = dict(conf)
