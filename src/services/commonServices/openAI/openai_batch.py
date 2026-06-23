@@ -19,16 +19,7 @@ class OpenaiBatch(BaseService):
         message_mappings = []
         config_mappings = {}
 
-        # Validate batch_variables if provided
         batch_variables = self.batch_variables if hasattr(self, "batch_variables") and self.batch_variables else None
-        if batch_variables is not None:
-            if not isinstance(batch_variables, list):
-                return {"success": False, "message": "batch_variables must be an array"}
-            if len(batch_variables) != len(self.batch):
-                return {
-                    "success": False,
-                    "message": f"batch_variables array length ({len(batch_variables)}) must match batch array length ({len(self.batch)})",
-                }
 
         # Fetch thread history if thread_id is present (only completed conversations, not queued)
         thread_history = []

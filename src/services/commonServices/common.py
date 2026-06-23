@@ -776,23 +776,12 @@ async def batch(request_body):
     result = {}
     class_obj = {}
     try:
-        # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-        if parsed_data["batch_webhook"] is None:
-            raise ValueError("webhook is required")
 
         # Manage threads (set thread_id / sub_thread_id when not in body)
         await manage_threads(parsed_data)
 
-        # Validate batch_variables if provided
         batch_variables = parsed_data.get("batch_variables")
-        if batch_variables is not None:
-            if not isinstance(batch_variables, list):
-                raise ValueError("batch_variables must be an array")
-            if len(batch_variables) != len(parsed_data["batch"]):
-                raise ValueError(
-                    f"batch_variables array length ({len(batch_variables)}) must match batch array length ({len(parsed_data['batch'])})"
-                )
 
         # Step 2: Process prompts with variable replacement for each batch message
         original_prompt = parsed_data["configuration"].get("prompt", "")
