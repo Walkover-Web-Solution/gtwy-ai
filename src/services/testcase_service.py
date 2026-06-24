@@ -514,19 +514,33 @@ async def execute_testcases(
             request_data["variables"],
         )
         is_overridden = False
+        new_service: str | None = None
         if model_spec:
-            db_config["service"] = (model_spec.get("service") or "").lower()
+            new_service = (model_spec.get("service"))
+            db_config["service"] = new_service
             db_config.setdefault("configuration", {})["model"] = model_spec.get("model")
             is_overridden = True
         else:
             model_override = request_data.get("model_override")
             service_override = request_data.get("service_override")
             if service_override:
-                db_config["service"] = service_override.lower()
+                new_service = service_override
+                db_config["service"] = new_service
                 is_overridden = True
             if model_override:
                 db_config.setdefault("configuration", {})["model"] = model_override
                 is_overridden = True
+
+        if new_service:
+            service_apikeys = db_config.get("service_apikeys") or {}
+            new_apikey = service_apikeys.get(new_service)
+            if new_apikey:
+                db_config["apikey"] = new_apikey
+            else:
+                logger.warning(
+                    f"No apikey configured on bridge for service '{new_service}' (version_id={version_id}); "
+                    f"falling back to the version's primary apikey — call will likely fail."
+                )
 
         db_config["_testcase_model_overridden"] = is_overridden
 

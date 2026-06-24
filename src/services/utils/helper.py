@@ -492,19 +492,27 @@ def build_rerun_queue_message(log, data_to_send):
     rerun_suffix = uuid.uuid4().hex[:8]
     rerun_thread_base = original_thread_id or original_sub_thread_id or "thread"
     rerun_sub_thread_base = original_sub_thread_id or original_thread_id or "subthread"
+    merged_variables =log.get("variables") 
 
     body.update({
         "user": log["user"],
         "message_id": str(uuid.uuid1()),
         "thread_id": f"rerun_{rerun_thread_base}_{rerun_suffix}",
         "sub_thread_id": f"rerun_{rerun_sub_thread_base}_{rerun_suffix}",
-        "variables": log.get("variables") or {},
+        "variables": merged_variables,
         "user_urls": log.get("user_urls") or [],
         "is_rerun": True,
         "original_message_id": log["message_id"],
         "original_thread_id": original_thread_id,
         "original_sub_thread_id": original_sub_thread_id,
     })
+
+    # Also update variables in bridge_configurations so they don't get clobbered during update in chat_multiple_agents
+    bridge_confs = body.get("bridge_configurations") or {}
+    for _, b_config in bridge_confs.items():
+        if isinstance(b_config, dict):
+            b_config["variables"] = merged_variables
+
     body.setdefault("settings", {}).update({"response_format": {"type": "default"}, "stream": False})
     return {"body": body, "state": data_to_send.get("state", {}), "path_params": data_to_send.get("path_params", {})}
 
@@ -543,4 +551,3 @@ async def queue_rerun_messages(data_to_send, queue_obj, org_id, message_ids=None
         queued.append(mid)
 
     return {"queued": queued, "not_found": not_found, "conversations": conversations}
-
