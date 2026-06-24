@@ -531,26 +531,62 @@ async def execute_testcases(
                 db_config.setdefault("configuration", {})["model"] = model_override
                 is_overridden = True
 
+        missing_apikey_error: str | None = None
         if new_service:
             service_apikeys = db_config.get("service_apikeys") or {}
             new_apikey = service_apikeys.get(new_service)
             if new_apikey:
                 db_config["apikey"] = new_apikey
             else:
+                missing_apikey_error = (
+                    f"No API key configured on the version for service '{new_service}'. "
+                    f"Add an API key for this service before running testcases with it."
+                )
                 logger.warning(
-                    f"No apikey configured on bridge for service '{new_service}' (version_id={version_id}); "
-                    f"falling back to the version's primary apikey — call will likely fail."
+                    f"{missing_apikey_error} (version_id={version_id}, model={db_config.get('configuration', {}).get('model')})"
                 )
 
         db_config["_testcase_model_overridden"] = is_overridden
 
-        results = await run_testcases_parallel(
-            testcases,
-            db_config,
-            request_data["matching_type"],
-            rtlayer_cred=rtlayer_cred,
-            version_id=version_id,
-        )
+        if missing_apikey_error:
+            results = []
+            for tc in testcases:
+                outcome = {
+                    "testcase_id": (
+                        str(tc.get("_id")) if tc.get("_id") != "direct_testcase" else "direct_testcase"
+                    ),
+                    "bridge_id": tc.get("bridge_id"),
+                    "expected": tc.get("expected"),
+                    "actual_result": None,
+                    "score": 0,
+                    "matching_type": tc.get("matching_type", "cosine"),
+                    "error": missing_apikey_error,
+                    "success": False,
+                    "model": db_config.get("configuration", {}).get("model"),
+                    "service": new_service,
+                    "is_overridden": is_overridden,
+                }
+                if rtlayer_cred:
+                    await _publish_event(
+                        rtlayer_cred,
+                        "testcase_result",
+                        {
+                            "version_id": version_id,
+                            "model": db_config.get("configuration", {}).get("model"),
+                            "service": new_service,
+                            "is_overridden": is_overridden,
+                            "result": outcome,
+                        },
+                    )
+                results.append(outcome)
+        else:
+            results = await run_testcases_parallel(
+                testcases,
+                db_config,
+                request_data["matching_type"],
+                rtlayer_cred=rtlayer_cred,
+                version_id=version_id,
+            )
         tools_call_data = []
         if results and isinstance(results[0], dict):
             tools_call_data = results[0].get("tools_call_data", [])
