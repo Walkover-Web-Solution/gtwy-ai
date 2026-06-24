@@ -442,7 +442,7 @@ async def handle_fine_tune_model(parsed_data, custom_config):
         custom_config["model"] = parsed_data["fine_tune_model"]
 
 
-async def handle_pre_tools(parsed_data, custom_config, timer):
+async def handle_pre_tools(parsed_data, custom_config, timer = None):
     pre_tools = parsed_data.get("pre_tools") or []
     if not pre_tools:
         return
@@ -451,7 +451,8 @@ async def handle_pre_tools(parsed_data, custom_config, timer):
     entry = {}
     execution_time_logs = []
     for tool in pre_tools:
-        timer.start()
+        if timer:
+            timer.start()
 
         tool_type = tool.get("type")
         args = dict(tool.get("args", {}))
@@ -580,12 +581,13 @@ async def handle_pre_tools(parsed_data, custom_config, timer):
                     "error":pre_tool_response.get("status") != 1,
                 }
         
-        execution_time_logs.append(
-            {
-                "step": f"PRETOOL: {tool_type}",
-                "time_taken": timer.stop("API chat completion"),
-            }
-        )
+        if timer:
+            execution_time_logs.append(
+                {
+                    "step": f"PRETOOL: {tool_type}",
+                    "time_taken": timer.stop("API chat completion"),
+                }
+            )
     parsed_data['execution_time_logs'].extend(execution_time_logs)
     parsed_data.setdefault('pre_tool_response_to_save', {})
     parsed_data['pre_tool_response_to_save'].update({entry['id']: entry})
