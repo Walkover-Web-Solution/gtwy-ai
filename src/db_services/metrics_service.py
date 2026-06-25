@@ -525,5 +525,38 @@ async def publish_plan_history_update(
         logger.error(traceback.format_exc())
 
 
+async def publish_testcase_data_update(*, message_id, testcase_id, testcase_data):
+    """
+    Publish an update_history message that updates ONLY the testcase columns
+    (testcase_id, testcase_data) of an existing conversation_logs row, matched
+    by message_id.
+
+    Used when POST /api/v2/model/testcases is called with a message_id so the
+    testcase is re-scored in place against an already-logged message instead of
+    creating a new history row. The Node consumer whitelist-updates by
+    message_id alone (no org_id), so the org_id-is-None case is irrelevant here.
+    """
+    try:
+        from ..services.cache_service import make_json_serializable
+        from ..services.commonServices.queueService.queueLogService import sub_queue_obj
+
+        if not message_id:
+            logger.error("publish_testcase_data_update: missing message_id — cannot update history row")
+            return
+
+        update_data = {
+            "message_id": str(message_id),
+            "testcase_id": testcase_id,
+            "testcase_data": testcase_data,
+        }
+        message = make_json_serializable({"update_history": update_data})
+        await sub_queue_obj.publish_message(message)
+        logger.info(f"Published testcase_data update for message_id: {message_id}")
+
+    except Exception as error:
+        logger.error(f"Error publishing testcase_data update: {str(error)}")
+        logger.error(traceback.format_exc())
+
+
 # Exporting functions
-__all__ = ["find", "find_one", "find_one_pg", "create_batch_conversation_logs", "build_history_and_metrics_payload", "build_orchestrator_log_data", "publish_plan_history_update"]
+__all__ = ["find", "find_one", "find_one_pg", "create_batch_conversation_logs", "build_history_and_metrics_payload", "build_orchestrator_log_data", "publish_plan_history_update", "publish_testcase_data_update"]

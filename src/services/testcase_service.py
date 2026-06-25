@@ -110,6 +110,17 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(m, dict) or not m.get("model") or not m.get("service"):
                 raise TestcaseValidationError("each entry in models must include 'model' and 'service'")
 
+    # In-place update mode: a message_id targets a single existing
+    # conversation_logs row, so it is only valid for a single result — one
+    # version, no model/service overrides, and (checked later, once resolved)
+    # exactly one testcase.
+    message_id = body.get("message_id")
+    if message_id and (len(version_ids) > 1 or models or model_override or service_override):
+        raise TestcaseValidationError(
+            "message_id is only supported for a single-result run: one version_id and no "
+            "model/service/models overrides."
+        )
+
     return {
         "bridge_id": bridge_id,
         "version_ids": version_ids,
@@ -122,6 +133,7 @@ def validate_testcase_request_data(body: dict[str, Any]) -> dict[str, Any]:
         "model_override": model_override,
         "service_override": service_override,
         "models": models or [],
+        "message_id": message_id,
     }
 
 
@@ -265,6 +277,8 @@ async def process_single_testcase(
     override_matching_type: str | None,
     rtlayer_cred: dict[str, Any] | None = None,
     version_id: str | None = None,
+    message_id: str | None = None,
+    org_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Process a single testcase
@@ -312,6 +326,20 @@ async def process_single_testcase(
             },
             "state": {"version": 2, "timer": [time.time()]},
         }
+
+        # The testcase request is constructed without the request profile, so
+        # parse_request_body can't derive org_id from state.profile. Stamp it on
+        # the body directly so the persisted conversation_logs row carries the
+        # correct org_id (parse reads `body.get("org_id")` as the fallback).
+        if org_id:
+            testcase_request_data["body"]["org_id"] = org_id
+
+        # In-place update mode: when a message_id is supplied, target the
+        # existing conversation_logs row instead of creating a new one. The flag
+        # is read in common.chat()'s testcase-scoring block.
+        if message_id:
+            testcase_request_data["body"]["message_id"] = message_id
+            testcase_request_data["body"]["testcase_data"]["update_message_id"] = message_id
 
         # Call chat function
         result = await chat(testcase_request_data)
@@ -421,6 +449,8 @@ async def run_testcases_parallel(
     override_matching_type: str | None,
     rtlayer_cred: dict[str, Any] | None = None,
     version_id: str | None = None,
+    message_id: str | None = None,
+    org_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run multiple testcases in parallel.
@@ -438,7 +468,7 @@ async def run_testcases_parallel(
     results = await asyncio.gather(
         *[
             process_single_testcase(
-                tc, copy.deepcopy(db_config), override_matching_type, rtlayer_cred, version_id
+                tc, copy.deepcopy(db_config), override_matching_type, rtlayer_cred, version_id, message_id, org_id
             )
             for tc in testcases
         ]
@@ -492,6 +522,11 @@ async def execute_testcases(
     )
 
     version_ids = request_data["version_ids"]
+    update_message_id = request_data.get("message_id")
+    if update_message_id and len(testcases) != 1:
+        raise TestcaseValidationError(
+            "message_id is only supported when exactly one testcase is run."
+        )
 
     await _publish_event(
         rtlayer_cred,
@@ -586,6 +621,8 @@ async def execute_testcases(
                 request_data["matching_type"],
                 rtlayer_cred=rtlayer_cred,
                 version_id=version_id,
+                message_id=update_message_id,
+                org_id=org_id,
             )
         tools_call_data = []
         if results and isinstance(results[0], dict):
