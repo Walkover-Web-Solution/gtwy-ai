@@ -64,16 +64,26 @@ pytz
 # Observability
 setuptools==68.0.0
 pyroscope-io==1.0.1
+
+# OpenTelemetry Core
 opentelemetry-distro==0.37b0
 opentelemetry-sdk==1.16.0
+opentelemetry-api==1.16.0
 opentelemetry-exporter-otlp==1.16.0
-opentelemetry-instrumentation-sqlalchemy==0.37b0
-opentelemetry-instrumentation-redis==0.37b0
-opentelemetry-instrumentation-celery==0.37b0
+
+# Instrumentations
+opentelemetry-instrumentation==0.37b0
+opentelemetry-instrumentation-fastapi==0.37b0
+opentelemetry-instrumentation-asgi==0.37b0
+opentelemetry-instrumentation-httpx==0.37b0
 opentelemetry-instrumentation-requests==0.37b0
-opentelemetry-instrumentation-fastapi
-opentelemetry-instrumentation-asgi
-opentelemetry-instrumentation-httpx
+opentelemetry-instrumentation-redis==0.37b0
+opentelemetry-instrumentation-sqlalchemy==0.37b0
+opentelemetry-instrumentation-celery==0.37b0
+
+
+# Semantic conventions
+opentelemetry-semantic-conventions==0.37b0
 
 # Dev tools
 pre-commit>=3.5.0

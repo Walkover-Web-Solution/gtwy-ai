@@ -1,3 +1,4 @@
+from src.db_services import ConfigurationServices
 import asyncio
 import json
 import time as _time
@@ -190,6 +191,8 @@ def parse_request_body(request_body):
         "pre_tools": body.get("pre_tools"),
         "version": state.get("version"),
         "fine_tune_model": body.get("configuration", {}).get("fine_tune_model", {}).get("current_model", {}),
+        "execution_time_logs": [],
+        "is_rich_text": body.get("configuration", {}).get("is_rich_text", False),
         "actions": body.get("actions", {}),
         "user_reference": body.get("user_reference", ""),
         "variables_path": body.get("variables_path") or {},
@@ -335,7 +338,7 @@ async def apply_prompt_wrapper(parsed_data):
     if not wrapper_id:
         return
 
-    wrapper_doc = await ConfigurationService.get_prompt_wrapper_by_id(str(wrapper_id), parsed_data.get("org_id"))
+    wrapper_doc = await ConfigurationServices.get_prompt_wrapper_by_id(str(wrapper_id), parsed_data.get("org_id"))
     if not wrapper_doc:
         return
 
@@ -439,15 +442,18 @@ async def handle_fine_tune_model(parsed_data, custom_config):
         custom_config["model"] = parsed_data["fine_tune_model"]
 
 
-async def handle_pre_tools(parsed_data, custom_config):
+async def handle_pre_tools(parsed_data, custom_config, timer = None):
     pre_tools = parsed_data.get("pre_tools") or []
     if not pre_tools:
         return
 
     pre_tool_response = None
     entry = {}
-
+    execution_time_logs = []
     for tool in pre_tools:
+        if timer:
+            timer.start()
+
         tool_type = tool.get("type")
         args = dict(tool.get("args", {}))
         args["user"] = parsed_data["user"]
@@ -574,6 +580,15 @@ async def handle_pre_tools(parsed_data, custom_config):
                     "args":args,
                     "error":pre_tool_response.get("status") != 1,
                 }
+        
+        if timer:
+            execution_time_logs.append(
+                {
+                    "step": f"PRETOOL: {tool_type}",
+                    "time_taken": timer.stop("API chat completion"),
+                }
+            )
+    parsed_data['execution_time_logs'].extend(execution_time_logs)
     parsed_data.setdefault('pre_tool_response_to_save', {})
     parsed_data['pre_tool_response_to_save'].update({entry['id']: entry})
 
@@ -737,7 +752,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
 
         if bridge_type and model_config.get("response_type") and suggest:
-            template_content = (await ConfigurationService.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
+            template_content = (await ConfigurationServices.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
                 "template", ""
             )
             configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
@@ -1692,6 +1707,16 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
                     fallback_class_obj.streamer = class_obj.streamer
                     fallback_class_obj.stream_mode = True
+
+                    if fallback_class_obj.streamer:
+                        await fallback_class_obj.streamer.emit_fallback(
+                            from_model=original_model,
+                            from_service=original_service,
+                            to_model=fallback_model,
+                            to_service=fallback_service,
+                            error=original_error,
+                        )
+
                     result = await handle_response_caching(parsed_data=parsed_data, class_obj=fallback_class_obj)
 
                     if result.get("response", {}).get("data") is not None:
@@ -1880,6 +1905,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 else result.get("stream_finish_reason")
                 or model_response.get("finish_reason")
                 or model_response.get("status")
+                # Gemini keeps its finish reason at candidates[0].finish_reason, so the
+                # top-level lookups above are None; fall back to the formatter's mapped value.
+                or (formatted_response.get("data") or {}).get("finish_reason")
                 or ""
             )
             post_tool_response = await handle_post_tool(parsed_data, result)

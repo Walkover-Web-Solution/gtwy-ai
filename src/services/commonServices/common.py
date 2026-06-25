@@ -245,7 +245,7 @@ async def chat(request_body):
         await handle_fine_tune_model(parsed_data, custom_config)
 
         # Step 4: Handle Pre-Tools Execution
-        await handle_pre_tools(parsed_data,custom_config)
+        await handle_pre_tools(parsed_data, custom_config, timer)
 
         # Step 5: Manage Threads
         thread_info = await manage_threads(parsed_data)
@@ -634,6 +634,8 @@ async def chat(request_body):
             testcase_result = await process_single_testcase_result(
                 parsed_data.get("testcase_data", {}), result, parsed_data
             )
+            # Attach latency so it can be forwarded over RTLayer to the client
+            testcase_result["latency"] = latency
             result["response"]["testcase_result"] = testcase_result
 
             # Stamp the testcase fields onto historyParams so the log queue
@@ -644,12 +646,14 @@ async def chat(request_body):
                     "expected": testcase_result.get("expected"),
                     "actual": testcase_result.get("actual"),
                     "score": testcase_result.get("score"),
+                    "reason": testcase_result.get("reason"),
                     "matching_type": testcase_result.get("matching_type"),
                     "type": testcase_result.get("type"),
                     "success": testcase_result.get("success"),
                     "error": testcase_result.get("error"),
                     "system_prompt": parsed_data.get("configuration", {}).get("prompt", ""),
                     "model": parsed_data.get("configuration", {}).get("model", ""),
+                    "is_overridden": parsed_data.get("testcase_data", {}).get("is_overridden", False),
                 }
 
             if parsed_data.get("body", {}).get("bridge_configurations", {}).get("playground_response_format"):

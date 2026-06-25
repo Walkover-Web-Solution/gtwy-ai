@@ -14,9 +14,9 @@ async def compare_result(expected, actual, matching_type, response_type, ai_matc
         case "cosine":
             expected = str(expected)
             actual = str(actual)
-            return compute_cosine_similarity(expected, actual)
+            return compute_cosine_similarity(expected, actual), None
         case "exact":
-            return 1 if _.is_equal(expected, actual) else 0
+            return (1 if _.is_equal(expected, actual) else 0), None
         case "ai":
             variables = {"expected": str(expected)}
             if ai_matching_custom_prompt:
@@ -24,7 +24,9 @@ async def compare_result(expected, actual, matching_type, response_type, ai_matc
             response = await call_ai_middleware(
                 str(actual), bridge_ids["compare_result"], variables=variables
             )
-            return response["response"]["score"]
+            ai_response = response.get("response", {}) if isinstance(response, dict) else {}
+            return ai_response.get("score"), ai_response.get("reason")
+    return None, None
 
 
 async def process_single_testcase_result(testcase_data, model_result, parsed_data):
@@ -48,7 +50,7 @@ async def process_single_testcase_result(testcase_data, model_result, parsed_dat
         testcase_type = testcase_data.get("type", "response")
 
         ai_matching_custom_prompt = parsed_data.get("ai_matching_custom_prompt") if isinstance(parsed_data, dict) else None
-        score = await compare_result(expected_result, actual_result, matching_type, testcase_type, ai_matching_custom_prompt)
+        score, reason = await compare_result(expected_result, actual_result, matching_type, testcase_type, ai_matching_custom_prompt)
         tools_call_data = (
             (model_result or {}).get("historyParams", {}).get("tools_call_data", [])
             if isinstance(model_result, dict) else []
@@ -59,6 +61,7 @@ async def process_single_testcase_result(testcase_data, model_result, parsed_dat
             "expected": expected_result,
             "actual": actual_result,
             "score": score,
+            "reason": reason,
             "matching_type": matching_type,
             "type": testcase_type,
             "success": True,

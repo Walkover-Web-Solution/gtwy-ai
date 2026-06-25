@@ -1,3 +1,4 @@
+import time as _time
 from datetime import datetime
 
 from sqlalchemy import and_, text
@@ -9,6 +10,7 @@ from models.postgres.pg_models import (
     system_prompt_versionings,
     user_bridge_config_history,
 )
+from src.services.utils.time import log_slow_call, SLOW_CALL_THRESHOLDS
 
 pg = models["pg"]
 
@@ -28,6 +30,7 @@ async def find_conversation_logs(org_id, thread_id, sub_thread_id, bridge_id):
     """
     try:
         session = pg["session"]()
+        _t = _time.time()
         logs = (
             session.query(ConversationLog)
             .filter(
@@ -43,6 +46,8 @@ async def find_conversation_logs(org_id, thread_id, sub_thread_id, bridge_id):
             .limit(3)
             .all()
         )
+        log_slow_call("PG query find_conversation_logs", _time.time() - _t, SLOW_CALL_THRESHOLDS["pg"])
+        
 
         # Convert logs to conversation format expected by the application
         conversations = []
@@ -120,9 +125,10 @@ async def find_completed_batch_conversations(org_id, thread_id, sub_thread_id, b
     """
     try:
         session = pg["session"]()
-        
+
         # Query for completed conversations only
         # Exclude logs where batch_data->>'status' = 'queued'
+        _t = _time.time()
         logs = (
             session.query(ConversationLog)
             .filter(
@@ -143,6 +149,7 @@ async def find_completed_batch_conversations(org_id, thread_id, sub_thread_id, b
             .limit(limit)
             .all()
         )
+        log_slow_call("PG query find_completed_batch_conversations", _time.time() - _t, SLOW_CALL_THRESHOLDS["pg"])
 
         # Convert logs to conversation format expected by the application
         conversations = []
@@ -214,7 +221,9 @@ async def storeSystemPrompt(prompt, org_id, bridge_id):
             updated_at=datetime.now(),
         )
         session.add(new_prompt)
+        _t = _time.time()
         session.commit()
+        log_slow_call("PG commit storeSystemPrompt", _time.time() - _t, SLOW_CALL_THRESHOLDS["pg"])
         return {"id": new_prompt.id}
     except Exception as error:
         session.rollback()
@@ -238,6 +247,7 @@ async def find_rerun_logs(org_id, message_ids=None, bridge_id=None, thread_id=No
     try:
         query = session.query(ConversationLog).filter(ConversationLog.org_id == org_id)
 
+        _t = _time.time()
         if message_ids:
             logs = query.filter(ConversationLog.message_id.in_(message_ids)).all()
         else:
@@ -254,6 +264,7 @@ async def find_rerun_logs(org_id, message_ids=None, bridge_id=None, thread_id=No
                 .limit(limit)
                 .all()
             )
+        log_slow_call("PG query find_rerun_logs", _time.time() - _t, SLOW_CALL_THRESHOLDS["pg"])
 
         if not logs:
             return {}, []
@@ -352,7 +363,9 @@ async def update_conversation_log(message_id, org_id, update_data):
             )
             .update(update_data)
         )
+        _t = _time.time()
         session.commit()
+        log_slow_call("PG commit update_conversation_log", _time.time() - _t, SLOW_CALL_THRESHOLDS["pg"])
         return rows_updated > 0
     except Exception as e:
         session.rollback()
@@ -367,7 +380,9 @@ async def add_bulk_user_entries(entries):
     try:
         user_history = [user_bridge_config_history(**data) for data in entries]
         session.add_all(user_history)
+        _t = _time.time()
         session.commit()
+        log_slow_call("PG commit add_bulk_user_entries", _time.time() - _t, SLOW_CALL_THRESHOLDS["pg"])
     except Exception as e:
         session.rollback()
         logger.error(f"Error in creating bulk user entries: {str(e)}")

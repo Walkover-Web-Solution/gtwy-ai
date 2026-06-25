@@ -30,9 +30,10 @@ timer_obj = Timer()
 
 # Thresholds in seconds for slow-call warnings
 SLOW_CALL_THRESHOLDS = {
-    "redis": 0.1,       # 100ms
+    "redis": 0.3,        # 300ms
     "mongo": 0.5,        # 500ms
-    "pre_function": 5.0,  # 5s
+    "pg": 0.5,           # 500ms
+    "pre_function": 50.0, # 50s
     "openai_batch": 10.0, # 10s
     "batch_retrieve": 3.0, # 3s
 }
