@@ -1,4 +1,4 @@
-from src.services.commonServices.baseService.utils import fix_json_string
+from json_repair import repair_json
 from src.db_services import ConfigurationServices
 import asyncio
 import json
@@ -1671,7 +1671,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         json.loads(_content)
                     except (json.JSONDecodeError, ValueError):
                         try:
-                            _repaired = fix_json_string(_content)
+                            _repaired = repair_json(_content)
                             result["response"]["data"]["content"] = _repaired
                         except Exception:
                             asyncio.create_task(unknown_error_handler_alert({
