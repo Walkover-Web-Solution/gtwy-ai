@@ -1,3 +1,4 @@
+from src.services.commonServices.baseService.utils import fix_json_string
 from src.db_services import ConfigurationServices
 import asyncio
 import json
@@ -279,51 +280,63 @@ def render_template_if_applicable(parsed_data, result):
         if template_ids and response_type:
             richui_templates = parsed_data.get("richui_templates", {}) or {}
 
-            ai_data = result.get("response", {}).get("data", {}).get("content", {})
-            if isinstance(ai_data, dict) and "item" in ai_data:
-                ai_data = ai_data["item"]
-            elif isinstance(ai_data, str):
+            raw_content = result.get("response", {}).get("data", {}).get("content", {})
+            ai_data_full = raw_content  # keep a reference to the full object before extracting item
+            ai_data = raw_content
+
+            # If the content is a JSON string, parse it first
+            if isinstance(ai_data, str):
                 try:
-                    parsed = json.loads(ai_data)
-                    if isinstance(parsed, dict) and "item" in parsed:
-                        ai_data = parsed["item"]
-                    else:
-                        ai_data = parsed
+                    ai_data = json.loads(ai_data)
+                    ai_data_full = ai_data
                 except Exception:
-                    try:
-                        ai_data = json.loads(ai_data)
-                        ai_data = ai_data.get("item")
-                    except Exception:
-                        pass
+                    pass
 
-            if isinstance(ai_data, dict):
-                widget_id = ai_data.get("widget_id")
-                if widget_id and str(widget_id) in richui_templates:
-                    base_template = richui_templates[str(widget_id)]
-                else:
-                    logger.warning(
-                        f"Template with widget_id '{widget_id}' not found in richui_templates"
-                    )
-
-            if base_template:
-                try:
-                    render_format = base_template.get("template_format", {})
-                    render_data = ai_data if isinstance(ai_data, dict) else {}
-                    filled_json = apply_variables_to_template_json(render_format, render_data)
-                    result.setdefault("response", {}).setdefault("data", {})
-                    result["response"]["type"] = "richui_json"
-                    result["response"]["data"]["content"] = filled_json
-                    result["response"]["data"]["ai_response"] = render_data
-
-                    template_data = {
-                        "template_id": base_template.get("_id") or base_template.get("id"),
-                        "template_name": base_template.get("name"),
-                        "is_template": True,
-                    }
-                except Exception as render_err:
-                    logger.error(f"Template Rendering Failed: {render_err}")
+            # If the content dict already has a top-level `response` key, assign it
+            # directly as the final content and skip template rendering entirely
+            if isinstance(ai_data_full, dict) and "response" in ai_data_full:
+                result.setdefault("response", {}).setdefault("data", {})
+                result["response"]["data"]["content"] = ai_data_full["response"]
+                logger.info("is_template: content has top-level 'response' key, assigning it directly as final content")
             else:
-                logger.info("No matching template found, returning data as-is")
+                # Extract the `item` sub-object for rich UI template rendering
+                if isinstance(ai_data, dict) and "item" in ai_data:
+                    ai_data = ai_data["item"]
+
+                if isinstance(ai_data, dict):
+                    widget_id = ai_data.get("widget_id")
+                    if widget_id and str(widget_id) in richui_templates:
+                        base_template = richui_templates[str(widget_id)]
+                    else:
+                        logger.warning(
+                            f"Template with widget_id '{widget_id}' not found in richui_templates"
+                        )
+
+                if base_template:
+                    try:
+                        render_format = base_template.get("template_format", {})
+                        render_data = ai_data if isinstance(ai_data, dict) else {}
+                        filled_json = apply_variables_to_template_json(render_format, render_data)
+                        result.setdefault("response", {}).setdefault("data", {})
+                        result["response"]["type"] = "richui_json"
+                        result["response"]["data"]["content"] = filled_json
+                        result["response"]["data"]["ai_response"] = render_data
+
+                        template_data = {
+                            "template_id": base_template.get("_id") or base_template.get("id"),
+                            "template_name": base_template.get("name"),
+                            "is_template": True,
+                        }
+                    except Exception as render_err:
+                        logger.error(f"Template Rendering Failed: {render_err}")
+                else:
+                    logger.info("No matching template found, returning data as-is")
+
+                if not template_data:
+                    if isinstance(ai_data, dict) and "response" in ai_data:
+                        result.setdefault("response", {}).setdefault("data", {})
+                        result["response"]["data"]["content"] = ai_data["response"]
+                        logger.info("is_template: No matching template, extracted 'response' as final content")
     except Exception as exc:
         logger.error(f"Error rendering template: {str(exc)}")
 
