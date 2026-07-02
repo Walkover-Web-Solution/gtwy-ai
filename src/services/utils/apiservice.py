@@ -49,10 +49,16 @@ async def fetch(url, method="GET", headers=None, params=None, json_body=None, im
                                 f"fetch: HTTP {response.status} from {url}, "
                                 f"retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_RETRIES})"
                             )
-                            last_exc = ValueError(error_response)
+                            last_exc = ValueError({
+                                "error": error_response,
+                                "status_code": response.status,
+                            })
                             await asyncio.sleep(delay)
                             continue
-                    raise ValueError(error_response)
+                    raise ValueError({
+                        "error": error_response,
+                        "status_code": response.status,
+                    })
                 if image:
                     response_data = BytesIO(await response.read())
                 else:

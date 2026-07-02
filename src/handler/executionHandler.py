@@ -5,9 +5,24 @@ import traceback
 from functools import wraps
 
 from fastapi.responses import JSONResponse
+from openai import APITimeoutError
+from pymongo.errors import ExecutionTimeout, NetworkTimeout, ServerSelectionTimeoutError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
+from globals import logger
 from src.configs.constant import alert_types
 from src.send_alert import send_alert
+from src.services.utils.time import TIMEOUT_ERROR_MESSAGE
+
+_TIMEOUT_EXC = (
+    ServerSelectionTimeoutError,
+    NetworkTimeout,
+    ExecutionTimeout,
+    RedisTimeoutError,
+    APITimeoutError,
+    asyncio.TimeoutError,
+    TimeoutError,
+)
 
 
 def handle_exceptions(func):
@@ -34,23 +49,27 @@ def handle_exceptions(func):
                     "location_string": f"{last_frame.filename.split('/')[-1]}:{last_frame.lineno}"
                 }
 
-            if isinstance(exc, ValueError):
-                error_details = exc.args[0] if exc.args else str(exc)
+            if isinstance(exc, _TIMEOUT_EXC):
+                logger.error(f"[TIMEOUT] {type(exc).__name__}: {exc}")
+                error_json = {"error": TIMEOUT_ERROR_MESSAGE}
             else:
-                error_details = str(exc)
+                if isinstance(exc, ValueError):
+                    error_details = exc.args[0] if exc.args else str(exc)
+                else:
+                    error_details = str(exc)
 
-            if isinstance(error_details, ValueError):
-                error_details = error_details.args[0] if error_details.args else str(error_details)
+                if isinstance(error_details, ValueError):
+                    error_details = error_details.args[0] if error_details.args else str(error_details)
 
-            if isinstance(error_details, dict):
-                error_json = error_details
-            elif isinstance(error_details, str):
-                try:
-                    error_json = json.loads(error_details)
-                except json.JSONDecodeError:
-                    error_json = {"error_message": error_details}
-            else:
-                error_json = {"error_message": str(error_details)}               
+                if isinstance(error_details, dict):
+                    error_json = error_details
+                elif isinstance(error_details, str):
+                    try:
+                        error_json = json.loads(error_details)
+                    except json.JSONDecodeError:
+                        error_json = {"error_message": error_details}
+                else:
+                    error_json = {"error_message": str(error_details)}
             body = request_body.get("body", {})
             bridge_id = path_params.get("bridge_id") or body.get("bridge_id")
             org_id = state.get("profile", {}).get("org", {}).get("id")

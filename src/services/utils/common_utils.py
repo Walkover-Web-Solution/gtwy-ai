@@ -1,5 +1,8 @@
+from json_repair import repair_json
+from src.db_services import ConfigurationServices
 import asyncio
 import json
+import time as _time
 import uuid
 
 import pydash
@@ -26,7 +29,7 @@ from src.services.commonServices.queueService.queueMetricsService import metrics
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
 from src.send_alert import send_alert
 from src.services.utils.apiservice import fetch
-from src.services.utils.time import Timer
+from src.services.utils.time import Timer, log_slow_call, SLOW_CALL_THRESHOLDS
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
 from src.utils.formatter import apply_variables_to_template_json
@@ -189,6 +192,8 @@ def parse_request_body(request_body):
         "pre_tools": body.get("pre_tools"),
         "version": state.get("version"),
         "fine_tune_model": body.get("configuration", {}).get("fine_tune_model", {}).get("current_model", {}),
+        "execution_time_logs": [],
+        "is_rich_text": body.get("configuration", {}).get("is_rich_text", False),
         "actions": body.get("actions", {}),
         "user_reference": body.get("user_reference", ""),
         "variables_path": body.get("variables_path") or {},
@@ -275,51 +280,63 @@ def render_template_if_applicable(parsed_data, result):
         if template_ids and response_type:
             richui_templates = parsed_data.get("richui_templates", {}) or {}
 
-            ai_data = result.get("response", {}).get("data", {}).get("content", {})
-            if isinstance(ai_data, dict) and "item" in ai_data:
-                ai_data = ai_data["item"]
-            elif isinstance(ai_data, str):
+            raw_content = result.get("response", {}).get("data", {}).get("content", {})
+            ai_data_full = raw_content  # keep a reference to the full object before extracting item
+            ai_data = raw_content
+
+            # If the content is a JSON string, parse it first
+            if isinstance(ai_data, str):
                 try:
-                    parsed = json.loads(ai_data)
-                    if isinstance(parsed, dict) and "item" in parsed:
-                        ai_data = parsed["item"]
-                    else:
-                        ai_data = parsed
+                    ai_data = json.loads(ai_data)
+                    ai_data_full = ai_data
                 except Exception:
-                    try:
-                        ai_data = json.loads(ai_data)
-                        ai_data = ai_data.get("item")
-                    except Exception:
-                        pass
+                    pass
 
-            if isinstance(ai_data, dict):
-                widget_id = ai_data.get("widget_id")
-                if widget_id and str(widget_id) in richui_templates:
-                    base_template = richui_templates[str(widget_id)]
-                else:
-                    logger.warning(
-                        f"Template with widget_id '{widget_id}' not found in richui_templates"
-                    )
-
-            if base_template:
-                try:
-                    render_format = base_template.get("template_format", {})
-                    render_data = ai_data if isinstance(ai_data, dict) else {}
-                    filled_json = apply_variables_to_template_json(render_format, render_data)
-                    result.setdefault("response", {}).setdefault("data", {})
-                    result["response"]["type"] = "richui_json"
-                    result["response"]["data"]["content"] = filled_json
-                    result["response"]["data"]["ai_response"] = render_data
-
-                    template_data = {
-                        "template_id": base_template.get("_id") or base_template.get("id"),
-                        "template_name": base_template.get("name"),
-                        "is_template": True,
-                    }
-                except Exception as render_err:
-                    logger.error(f"Template Rendering Failed: {render_err}")
+            # If the content dict already has a top-level `response` key, assign it
+            # directly as the final content and skip template rendering entirely
+            if isinstance(ai_data_full, dict) and "response" in ai_data_full:
+                result.setdefault("response", {}).setdefault("data", {})
+                result["response"]["data"]["content"] = ai_data_full["response"]
+                logger.info("is_template: content has top-level 'response' key, assigning it directly as final content")
             else:
-                logger.info("No matching template found, returning data as-is")
+                # Extract the `item` sub-object for rich UI template rendering
+                if isinstance(ai_data, dict) and "item" in ai_data:
+                    ai_data = ai_data["item"]
+
+                if isinstance(ai_data, dict):
+                    widget_id = ai_data.get("widget_id")
+                    if widget_id and str(widget_id) in richui_templates:
+                        base_template = richui_templates[str(widget_id)]
+                    else:
+                        logger.warning(
+                            f"Template with widget_id '{widget_id}' not found in richui_templates"
+                        )
+
+                if base_template:
+                    try:
+                        render_format = base_template.get("template_format", {})
+                        render_data = ai_data if isinstance(ai_data, dict) else {}
+                        filled_json = apply_variables_to_template_json(render_format, render_data)
+                        result.setdefault("response", {}).setdefault("data", {})
+                        result["response"]["type"] = "richui_json"
+                        result["response"]["data"]["content"] = filled_json
+                        result["response"]["data"]["ai_response"] = render_data
+
+                        template_data = {
+                            "template_id": base_template.get("_id") or base_template.get("id"),
+                            "template_name": base_template.get("name"),
+                            "is_template": True,
+                        }
+                    except Exception as render_err:
+                        logger.error(f"Template Rendering Failed: {render_err}")
+                else:
+                    logger.info("No matching template found, returning data as-is")
+
+                if not template_data:
+                    if isinstance(ai_data, dict) and "response" in ai_data:
+                        result.setdefault("response", {}).setdefault("data", {})
+                        result["response"]["data"]["content"] = ai_data["response"]
+                        logger.info("is_template: No matching template, extracted 'response' as final content")
     except Exception as exc:
         logger.error(f"Error rendering template: {str(exc)}")
 
@@ -334,7 +351,7 @@ async def apply_prompt_wrapper(parsed_data):
     if not wrapper_id:
         return
 
-    wrapper_doc = await ConfigurationService.get_prompt_wrapper_by_id(str(wrapper_id), parsed_data.get("org_id"))
+    wrapper_doc = await ConfigurationServices.get_prompt_wrapper_by_id(str(wrapper_id), parsed_data.get("org_id"))
     if not wrapper_doc:
         return
 
@@ -438,15 +455,18 @@ async def handle_fine_tune_model(parsed_data, custom_config):
         custom_config["model"] = parsed_data["fine_tune_model"]
 
 
-async def handle_pre_tools(parsed_data, custom_config):
+async def handle_pre_tools(parsed_data, custom_config, timer = None):
     pre_tools = parsed_data.get("pre_tools") or []
     if not pre_tools:
         return
 
     pre_tool_response = None
     entry = {}
-
+    execution_time_logs = []
     for tool in pre_tools:
+        if timer:
+            timer.start()
+
         tool_type = tool.get("type")
         args = dict(tool.get("args", {}))
         args["user"] = parsed_data["user"]
@@ -454,10 +474,12 @@ async def handle_pre_tools(parsed_data, custom_config):
 
         if tool_type == "custom_function":
             try:
+                _pre_t = _time.time()
                 pre_tool_response = await axios_work(
                     args,
                     {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
                 )
+                log_slow_call(f"pre_function {tool.get('name')}", _time.time() - _pre_t, SLOW_CALL_THRESHOLDS["pre_function"])
                 if pre_tool_response.get("status") == 0:
                     parsed_data["variables"]["pre_function"] = (
                         f"Error while calling prefunction. Error message: {pre_tool_response.get('response')}"
@@ -571,6 +593,15 @@ async def handle_pre_tools(parsed_data, custom_config):
                     "args":args,
                     "error":pre_tool_response.get("status") != 1,
                 }
+        
+        if timer:
+            execution_time_logs.append(
+                {
+                    "step": f"PRETOOL: {tool_type}",
+                    "time_taken": timer.stop("API chat completion"),
+                }
+            )
+    parsed_data['execution_time_logs'].extend(execution_time_logs)
     parsed_data.setdefault('pre_tool_response_to_save', {})
     parsed_data['pre_tool_response_to_save'].update({entry['id']: entry})
 
@@ -734,7 +765,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
 
         if bridge_type and model_config.get("response_type") and suggest:
-            template_content = (await ConfigurationService.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
+            template_content = (await ConfigurationServices.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
                 "template", ""
             )
             configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
@@ -1370,89 +1401,6 @@ def restructure_json_schema(response_type, service):
             return response_type
 
 
-def _append_to_prompt(custom_config, text):
-    """Append `text` to custom_config["prompt"] (newline-separated), preserving the existing prompt."""
-    existing_prompt = custom_config.get("prompt") or ""
-    custom_config["prompt"] = (
-        f"{existing_prompt}\n{text}".strip() if existing_prompt else str(text)
-    )
-
-
-def model_supports_json_schema(model_config):
-    """
-    Return True if the model config advertises a json_schema response_type option.
-
-    The model config document stores supported response types under
-    configuration.response_type.options (e.g. [{"key": "type", "type": "json_schema"}]).
-    When the options list can't be determined we preserve the existing behavior and
-    assume support (so configured json_schema requests are not silently downgraded).
-    """
-    options = None
-    if isinstance(model_config, dict):
-        response_type = (model_config.get("configuration") or {}).get("response_type")
-        if isinstance(response_type, dict):
-            options = response_type.get("options")
-    if not isinstance(options, list):
-        return True
-    return any(isinstance(opt, dict) and opt.get("type") == "json_schema" for opt in options)
-
-
-def normalize_response_type(custom_config, service, model_config=None):
-    """
-    Normalize custom_config["response_type"] in place before service formatting.
-
-    - type == "text" with a "text" value: fold the text into the prompt and pass
-      response_type through as a plain {"type": "text"}.
-    - type == "text" without a "text" value: leave as-is.
-    - type == "json_object" carrying a "json_schema": promote it to json_schema (then
-      the json_schema handling below applies).
-    - type == "json_object" without a schema: leave untouched.
-    - type == "json_schema":
-        * if the model supports json_schema -> restructure (unchanged behavior).
-        * if the model does NOT support json_schema -> inline the schema into the prompt
-          and drop the response_type key entirely (don't send it to the model).
-    """
-    response_type = custom_config.get("response_type")
-    if not isinstance(response_type, dict):
-        return
-
-    rtype = response_type.get("type")
-
-    if rtype == "text":
-        text_value = response_type.get("text")
-        if text_value:
-            _append_to_prompt(custom_config, text_value)
-        custom_config["response_type"] = {"type": "text"}
-        return
-
-    if rtype == "json_object":
-        if response_type.get("json_schema"):
-            response_type["type"] = "json_schema"
-            rtype = "json_schema"
-        else:
-            # json_object without a schema -> leave untouched.
-            return
-
-    if rtype == "json_schema":
-        if model_supports_json_schema(model_config):
-            custom_config["response_type"] = restructure_json_schema(response_type, service)
-        else:
-            # Model can't enforce a json_schema: inline the schema into the prompt
-            # and stop sending response_type to the model.
-            schema = response_type.get("json_schema") or {}
-            schema_text = (
-                json.dumps(schema, ensure_ascii=False)
-                if isinstance(schema, (dict, list))
-                else str(schema)
-            )
-            _append_to_prompt(
-                custom_config,
-                "Respond ONLY with valid JSON that strictly conforms to this JSON schema:\n"
-                f"{schema_text}",
-            )
-            custom_config.pop("response_type", None)
-
-
 def validate_json_schema_configuration(configuration):
     """
     Validates the JSON schema configuration for response_type.
@@ -1723,7 +1671,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         json.loads(_content)
                     except (json.JSONDecodeError, ValueError):
                         try:
-                            _repaired = fix_json_string(_content)
+                            _repaired = repair_json(_content)
                             result["response"]["data"]["content"] = _repaired
                         except Exception:
                             asyncio.create_task(unknown_error_handler_alert({
@@ -1772,6 +1720,16 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
                     fallback_class_obj.streamer = class_obj.streamer
                     fallback_class_obj.stream_mode = True
+
+                    if fallback_class_obj.streamer:
+                        await fallback_class_obj.streamer.emit_fallback(
+                            from_model=original_model,
+                            from_service=original_service,
+                            to_model=fallback_model,
+                            to_service=fallback_service,
+                            error=original_error,
+                        )
+
                     result = await handle_response_caching(parsed_data=parsed_data, class_obj=fallback_class_obj)
 
                     if result.get("response", {}).get("data") is not None:
@@ -1960,6 +1918,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 else result.get("stream_finish_reason")
                 or model_response.get("finish_reason")
                 or model_response.get("status")
+                # Gemini keeps its finish reason at candidates[0].finish_reason, so the
+                # top-level lookups above are None; fall back to the formatter's mapped value.
+                or (formatted_response.get("data") or {}).get("finish_reason")
                 or ""
             )
             post_tool_response = await handle_post_tool(parsed_data, result)

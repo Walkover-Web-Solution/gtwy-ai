@@ -22,6 +22,7 @@ from models.mongo_connection import db
 from src.services.commonServices.baseService.utils import send_message
 from src.services.commonServices.common import chat
 from src.services.utils.getConfiguration import getConfiguration
+from src.services.utils.time import with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ async def fetch_testcases_from_request(
             object_ids = [ObjectId(tid) for tid in testcase_ids]
         except Exception as e:
             raise TestcaseValidationError(f"Invalid testcase id in testcase_ids: {str(e)}")
-        testcases = await testcases_collection.find({"_id": {"$in": object_ids}}).to_list(length=None)
+        testcases = await with_timeout(testcases_collection.find({"_id": {"$in": object_ids}}).to_list(length=None))
         if not testcases:
             raise TestcaseNotFoundError("No testcases found for the given testcase_ids")
         # Preserve the order in which ids were supplied.
@@ -200,13 +201,13 @@ async def fetch_testcases_from_request(
         return testcases
 
     if testcase_id:
-        testcase = await testcases_collection.find_one({"_id": ObjectId(testcase_id)})
+        testcase = await with_timeout(testcases_collection.find_one({"_id": ObjectId(testcase_id)}))
         if not testcase:
             raise TestcaseNotFoundError("No testcase found for the given testcase_id")
         return [testcase]
 
     # No testcase_id(s) -> fetch all testcases for bridge_id
-    testcases = await testcases_collection.find({"bridge_id": bridge_id}).to_list(length=None)
+    testcases = await with_timeout(testcases_collection.find({"bridge_id": bridge_id}).to_list(length=None))
     if not testcases:
         raise TestcaseNotFoundError("No testcases found for the given bridge_id")
     return testcases
@@ -290,6 +291,10 @@ async def process_single_testcase(
         # parseable JSONResponse regardless of the bridge's configured stream flag.
         db_config["configuration"]["stream"] = False
 
+        settings = db_config.setdefault("settings", {})
+        if isinstance(settings.get("fall_back"), dict):
+            settings["fall_back"]["is_enable"] = False
+
         # Create request data for this testcase
         testcase_request_data = {
             "body": {
@@ -301,6 +306,7 @@ async def process_single_testcase(
                     "expected": testcase.get("expected"),
                     "type": testcase.get("type", "response"),
                     "skip_testcase_creation": True,  # Don't create new testcases during execution
+                    "is_overridden": bool(db_config.get("_testcase_model_overridden")),
                 },
                 **db_config,
             },
@@ -318,6 +324,7 @@ async def process_single_testcase(
 
         model_name = db_config.get("configuration", {}).get("model")
         service_name = db_config.get("service")
+        is_overridden = bool(db_config.get("_testcase_model_overridden"))
 
         # Detect non-exception error responses (e.g. JSONResponse with success=False)
         if isinstance(result_data, dict) and result_data.get("success") is False:
@@ -333,11 +340,12 @@ async def process_single_testcase(
                 "success": False,
                 "model": model_name,
                 "service": service_name,
+                "is_overridden": is_overridden,
             }
             await _publish_event(
                 rtlayer_cred,
                 "testcase_result",
-                {"version_id": version_id, "model": model_name, "service": service_name, "result": outcome},
+                {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "result": outcome},
             )
             return outcome
 
@@ -369,11 +377,12 @@ async def process_single_testcase(
             "latency": testcase_result.get("latency") if isinstance(testcase_result, dict) else None,
             "model": model_name,
             "service": service_name,
+            "is_overridden": is_overridden,
         }
         await _publish_event(
             rtlayer_cred,
             "testcase_result",
-            {"version_id": version_id, "model": model_name, "service": service_name, "result": outcome},
+            {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "result": outcome},
         )
         return outcome
 
@@ -385,8 +394,6 @@ async def process_single_testcase(
         if err_args and isinstance(err_args[0], dict):
             error_message = err_args[0].get("error") or error_message
         logger.error(f"Error processing testcase {testcase.get('_id')}: {error_message}")
-        model_name = db_config.get("configuration", {}).get("model")
-        service_name = db_config.get("service")
         outcome = {
             "testcase_id": str(testcase.get("_id")) if testcase.get("_id") != "direct_testcase" else "direct_testcase",
             "bridge_id": testcase.get("bridge_id"),
@@ -398,11 +405,12 @@ async def process_single_testcase(
             "success": False,
             "model": model_name,
             "service": service_name,
+            "is_overridden": is_overridden,
         }
         await _publish_event(
             rtlayer_cred,
             "testcase_result",
-            {"version_id": version_id, "model": model_name, "service": service_name, "result": outcome},
+            {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "result": outcome},
         )
         return outcome
 
@@ -505,24 +513,80 @@ async def execute_testcases(
             request_data["testcase_data"],
             request_data["variables"],
         )
+        is_overridden = False
+        new_service: str | None = None
         if model_spec:
-            db_config["service"] = (model_spec.get("service") or "").lower()
+            new_service = (model_spec.get("service") or "").lower()
+            db_config["service"] = new_service
             db_config.setdefault("configuration", {})["model"] = model_spec.get("model")
+            is_overridden = True
         else:
             model_override = request_data.get("model_override")
             service_override = request_data.get("service_override")
             if service_override:
-                db_config["service"] = service_override.lower()
+                new_service = service_override.lower()
+                db_config["service"] = new_service
+                is_overridden = True
             if model_override:
                 db_config.setdefault("configuration", {})["model"] = model_override
+                is_overridden = True
 
-        results = await run_testcases_parallel(
-            testcases,
-            db_config,
-            request_data["matching_type"],
-            rtlayer_cred=rtlayer_cred,
-            version_id=version_id,
-        )
+        missing_apikey_error: str | None = None
+        if new_service:
+            service_apikeys = db_config.get("service_apikeys") or {}
+            new_apikey = service_apikeys.get(new_service)
+            if new_apikey:
+                db_config["apikey"] = new_apikey
+            else:
+                missing_apikey_error = (
+                    f"No API key configured on the version for service '{new_service}'. "
+                    f"Add an API key for this service before running testcases with it."
+                )
+                logger.warning(
+                    f"{missing_apikey_error} (version_id={version_id}, model={db_config.get('configuration', {}).get('model')})"
+                )
+
+        db_config["_testcase_model_overridden"] = is_overridden
+
+        if missing_apikey_error:
+            results = []
+            for tc in testcases:
+                outcome = {
+                    "testcase_id": (
+                        str(tc.get("_id")) if tc.get("_id") != "direct_testcase" else "direct_testcase"
+                    ),
+                    "bridge_id": tc.get("bridge_id"),
+                    "expected": tc.get("expected"),
+                    "actual_result": None,
+                    "score": 0,
+                    "matching_type": tc.get("matching_type", "cosine"),
+                    "error": missing_apikey_error,
+                    "success": False,
+                    "model": db_config.get("configuration", {}).get("model"),
+                    "service": new_service,
+                    "is_overridden": is_overridden,
+                }
+                if rtlayer_cred:
+                    await _publish_event(
+                        rtlayer_cred,
+                        "testcase_result",
+                        {
+                            "version_id": version_id,
+                            "model": db_config.get("configuration", {}).get("model"),
+                            "service": new_service,
+                            "is_overridden": is_overridden,
+                            "result": outcome,
+                        },
+                    )
+                results.append(outcome)
+        else:
+            results = await run_testcases_parallel(
+                testcases,
+                db_config,
+                request_data["matching_type"],
+                rtlayer_cred=rtlayer_cred,
+                version_id=version_id,
+            )
         tools_call_data = []
         if results and isinstance(results[0], dict):
             tools_call_data = results[0].get("tools_call_data", [])
@@ -539,6 +603,7 @@ async def execute_testcases(
             "results": results,
             "model": db_config.get("configuration", {}).get("model"),
             "service": db_config.get("service"),
+            "is_overridden": is_overridden,
             "tools_call_data": tools_call_data,
             "total_tokens": total_tokens,
             "cost": total_cost,

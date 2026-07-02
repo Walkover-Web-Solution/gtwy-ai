@@ -60,6 +60,7 @@ Pillow>=10.0.0
 # Utilities
 pydash>=8.0.1,<9.0.0
 pytz
+json-repair>=0.30.0
 
 # Observability
 setuptools==68.0.0

@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 
@@ -25,3 +26,39 @@ class Timer:
 
 
 timer_obj = Timer()
+
+
+# Thresholds in seconds for slow-call warnings
+SLOW_CALL_THRESHOLDS = {
+    "redis": 0.3,        # 300ms
+    "mongo": 0.5,        # 500ms
+    "pg": 0.5,           # 500ms
+    "pre_function": 50.0, # 50s
+    "openai_batch": 10.0, # 10s
+    "batch_retrieve": 3.0, # 3s
+}
+
+
+def log_slow_call(label: str, elapsed: float, threshold: float) -> None:
+    """Prints a warning only when elapsed exceeds threshold (seconds)."""
+    if elapsed > threshold:
+        print(f"[SLOW] {label} took {elapsed * 1000:.1f}ms (threshold {threshold * 1000:.0f}ms)")
+
+
+# Hard maximum execution time per service (seconds)
+SERVICE_TIMEOUTS = {
+    "mongo": 60,
+    "redis": 10,
+    "pre_function": 60,
+}
+
+TIMEOUT_ERROR_MESSAGE = "Due to a technical issue we couldn't fulfil your request, please try again."
+
+
+async def with_timeout(coro, service: str = "mongo"):
+    """Await `coro` with the per-service ceiling; raises asyncio.TimeoutError on breach."""
+    try:
+        return await asyncio.wait_for(coro, SERVICE_TIMEOUTS[service])
+    except asyncio.TimeoutError:
+        print(f"[TIMEOUT] {service} call exceeded {SERVICE_TIMEOUTS[service]}s")
+        raise

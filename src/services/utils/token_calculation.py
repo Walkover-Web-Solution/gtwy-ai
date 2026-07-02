@@ -122,7 +122,22 @@ class TokenCalculator:
                 usage["audioDurationSeconds"] = audio_duration_seconds
 
             case _:
-                pass
+                # Unknown / newly-registered service. The service registry is DB-driven
+                # and designed so a new OpenAI-Chat-compatible service can be added with
+                # no code change. Without this fallback such a service would silently
+                # extract no usage and bill $0. Any service using the OpenAI Chat
+                # Completions wire format exposes the standard prompt/completion fields.
+                from src.configs.service_registry import has_openai_choices_shape  # lazy: avoid import cycle
+
+                if has_openai_choices_shape(self.service):
+                    _usage = model_response.get("usage") or {}
+                    usage["inputTokens"] = _usage.get("prompt_tokens", 0)
+                    usage["outputTokens"] = _usage.get("completion_tokens", 0)
+                    usage["totalTokens"] = _usage.get("total_tokens", 0)
+                    usage["cachedTokens"] = (_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+                    usage["reasoningTokens"] = (_usage.get("completion_tokens_details") or {}).get(
+                        "reasoning_tokens", 0
+                    )
 
         self._update_total_usage(usage)
         return usage
@@ -198,17 +213,39 @@ class TokenCalculator:
         }
 
         # Calculate costs per million tokens using total_usage
-        if self.total_usage["input_tokens"] and pricing.get("input_cost"):
-            cost["input_cost"] = (self.total_usage["input_tokens"] / 1_000_000) * pricing["input_cost"]
+        #
+        # Cached tokens semantics differ per provider:
+        #   - OpenAI/Gemini/DeepSeek/OpenRouter/Mistral/Grok/etc. report cached_tokens
+        #     as a SUBSET of input_tokens (prompt_tokens). Billing the full input at the
+        #     input rate AND the cached portion at the cached rate would double-charge the
+        #     cached tokens. So when a cached rate is configured, carve the cached tokens
+        #     out of the input base and bill them only at the cached rate.
+        #   - Anthropic reports input_tokens EXCLUDING cache (cached_tokens stays 0 and
+        #     cache read/creation are tracked separately), so the subtraction is a no-op.
+        # When no cached rate is configured, fall back to billing cached tokens at the
+        # standard input rate (i.e. don't carve them out) to preserve prior behaviour.
+        has_cached_pricing = bool(pricing.get("cached_cost"))
+        billable_input_tokens = self.total_usage["input_tokens"]
+        if has_cached_pricing:
+            billable_input_tokens = max(billable_input_tokens - self.total_usage["cached_tokens"], 0)
+
+        if billable_input_tokens and pricing.get("input_cost"):
+            cost["input_cost"] = (billable_input_tokens / 1_000_000) * pricing["input_cost"]
 
         if self.total_usage["output_tokens"] and pricing.get("output_cost"):
             cost["output_cost"] = (self.total_usage["output_tokens"] / 1_000_000) * pricing["output_cost"]
 
-        if self.total_usage["cached_tokens"] and pricing.get("cached_cost"):
+        if self.total_usage["cached_tokens"] and has_cached_pricing:
             cost["cached_cost"] = (self.total_usage["cached_tokens"] / 1_000_000) * pricing["cached_cost"]
 
-        if self.total_usage["reasoning_tokens"] and pricing.get("output_tokens"):
-            cost["reasoning_cost"] = (self.total_usage["reasoning_tokens"] / 1_000_000) * pricing["output_tokens"]
+        # Reasoning tokens: for most providers (OpenAI, Groq, DeepSeek, OpenRouter, Grok,
+        # etc.) reasoning tokens are already INCLUDED in output_tokens/completion_tokens
+        # and are therefore already billed via output_cost above. Gemini reports its
+        # reasoning ("thoughts") tokens SEPARATELY from candidates/output tokens, so they
+        # must be billed explicitly at the output rate. (Previously this referenced a
+        # non-existent "output_tokens" pricing key and was always 0.)
+        if service == "gemini" and self.total_usage["reasoning_tokens"] and pricing.get("output_cost"):
+            cost["reasoning_cost"] = (self.total_usage["reasoning_tokens"] / 1_000_000) * pricing["output_cost"]
 
         if self.total_usage["cache_read_input_tokens"] and pricing.get("caching_read_cost"):
             cost["cache_read_cost"] = (self.total_usage["cache_read_input_tokens"] / 1_000_000) * pricing[
@@ -223,16 +260,31 @@ class TokenCalculator:
         if self.total_usage["audio_duration_minutes"] and pricing.get("audio_cost_per_minute"):
             cost["audio_cost"] = self.total_usage["audio_duration_minutes"] * pricing["audio_cost_per_minute"]
 
-        # Calculate total cost
-        cost["total_cost"] = (
+        # Gemini long-context premium: models like gemini-2.5-pro / gemini-3-pro charge a
+        # higher (typically 2x) per-token rate once the prompt exceeds ~200K tokens. The
+        # config carries this as `cost_multiplier`. Apply it to the token-based costs only
+        # when the prompt crosses the threshold (short prompts pay the base rate). Audio
+        # cost is per-minute and unaffected.
+        GEMINI_LONG_CONTEXT_THRESHOLD = 200_000
+        context_multiplier = 1
+        if (
+            service == "gemini"
+            and pricing.get("cost_multiplier")
+            and self.total_usage["input_tokens"] > GEMINI_LONG_CONTEXT_THRESHOLD
+        ):
+            context_multiplier = pricing["cost_multiplier"]
+
+        token_cost = (
             cost["input_cost"]
             + cost["output_cost"]
             + cost["cached_cost"]
             + cost["reasoning_cost"]
             + cost["cache_read_cost"]
             + cost["cache_creation_cost"]
-            + cost["audio_cost"]
-        ) * priority_multiplier
+        )
+
+        # Calculate total cost
+        cost["total_cost"] = (token_cost * context_multiplier + cost["audio_cost"]) * priority_multiplier
 
         return cost
     

@@ -85,6 +85,19 @@ class StreamingService:
             payload["fallback_error"] = fallback_error
         await self._emit(payload)
 
+    async def emit_fallback(self, from_model: str, from_service: str,
+                            to_model: str, to_service: str, error: str = None):
+        payload = {
+            "event": "fallback",
+            "from_model": from_model,
+            "from_service": from_service,
+            "to_model": to_model,
+            "to_service": to_service,
+        }
+        if error is not None:
+            payload["error"] = error
+        await self._emit(payload)
+
     async def emit_task_delta(self, task_id: str, content: str):
         await self._emit({"event": "task_delta", "task_id": task_id, "content": content})
 
