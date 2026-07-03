@@ -57,7 +57,8 @@ from src.services.utils.maximum_iterations_utils import (
 
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
-from .baseService.utils import fix_json_string, sendResponse, unknown_error_handler_alert
+from .baseService.utils import sendResponse, unknown_error_handler_alert
+from json_repair import repair_json
 from .response_caching_service import handle_response_caching
 from .reviewer_service import run_review_loop
 from src.services.todo.todo_handler import handle_todo_mode
@@ -388,7 +389,7 @@ async def chat(request_body):
                         json.loads(_content)
                     except (json.JSONDecodeError, ValueError):
                         try:
-                            _repaired = fix_json_string(_content)
+                            _repaired = repair_json(_content)
                             result["response"]["data"]["content"] = _repaired
                         except Exception as _json_err:
                             asyncio.create_task(unknown_error_handler_alert({
