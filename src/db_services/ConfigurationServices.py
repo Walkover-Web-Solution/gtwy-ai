@@ -197,9 +197,12 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             {
                 "$lookup": {
                     "from": "apicalls",
-                    "let": {"fids": "$function_ids"},
+                    "let": {"fids": {"$ifNull": ["$function_ids", []]}},
                     "pipeline": [
-                        {"$match": {"$expr": {"$in": [{"$toString": "$_id"}, "$$fids"]}}}
+                        {"$match": {"$expr": {"$and": [
+                            {"$gt": [{"$size": "$$fids"}, 0]},
+                            {"$in": [{"$toString": "$_id"}, "$$fids"]}
+                        ]}}}
                     ],
                     "as": "apiCalls",
                 }
