@@ -28,7 +28,6 @@ from src.services.commonServices.queueService.queueLogService import sub_queue_o
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
 from src.send_alert import send_alert
-from src.services.utils.apiservice import fetch
 from src.services.utils.time import Timer, log_slow_call, SLOW_CALL_THRESHOLDS
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
