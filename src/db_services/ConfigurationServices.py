@@ -194,12 +194,20 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     }
                 }
             }] if use_env_resolution else []),
-            {"$lookup": {"from": "apicalls", "localField": "function_ids", "foreignField": "_id", "as": "apiCalls"}},
+            {
+                "$lookup": {
+                    "from": "apicalls",
+                    "let": {"fids": "$function_ids"},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$in": [{"$toString": "$_id"}, "$$fids"]}}}
+                    ],
+                    "as": "apiCalls",
+                }
+            },
             # Stage 2: Restructure fields for _id, function_ids and apiCalls
             {
                 "$addFields": {
                     "_id": {"$toString": "$_id"},
-                    "function_ids": {"$map": {"input": "$function_ids", "as": "fid", "in": {"$toString": "$$fid"}}},
                     "apiCalls": {
                         "$arrayToObject": {
                             "$map": {
