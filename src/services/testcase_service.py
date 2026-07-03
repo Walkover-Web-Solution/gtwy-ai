@@ -13,6 +13,7 @@ import copy
 import json
 import logging
 import time
+import uuid
 from typing import Any
 
 from bson import ObjectId
@@ -298,6 +299,7 @@ async def process_single_testcase(
         # Create request data for this testcase
         testcase_request_data = {
             "body": {
+                "message_id": str(uuid.uuid1()),
                 "user": testcase.get("conversation", [])[-1].get("content", "") if testcase.get("conversation") else "",
                 "testcase_data": {
                     "matching_type": override_matching_type or testcase.get("matching_type") or "cosine",
