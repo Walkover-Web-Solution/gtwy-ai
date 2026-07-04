@@ -72,18 +72,28 @@ opentelemetry-sdk==1.43.0
 opentelemetry-distro==0.64b0
 opentelemetry-exporter-otlp==1.43.0
 
-# Instrumentations
+# Core Instrumentation
 opentelemetry-instrumentation==0.64b0
+opentelemetry-semantic-conventions==0.64b0
+opentelemetry-util-http==0.64b0
+
+# Framework
 opentelemetry-instrumentation-fastapi==0.64b0
 opentelemetry-instrumentation-asgi==0.64b0
-opentelemetry-instrumentation-httpx==0.64b0
-opentelemetry-instrumentation-requests==0.64b0
-opentelemetry-instrumentation-redis==0.64b0
+
+# Database
 opentelemetry-instrumentation-sqlalchemy==0.64b0
+
+# Cache
+opentelemetry-instrumentation-redis==0.64b0
+
+# Async Tasks
 opentelemetry-instrumentation-celery==0.64b0
 
-# Semantic Conventions
-opentelemetry-semantic-conventions==0.64b0
+# HTTP Clients
+opentelemetry-instrumentation-httpx==0.64b0
+opentelemetry-instrumentation-requests==0.64b0
+opentelemetry-instrumentation-pymongo==0.64b0
 
 # Dev tools
 pre-commit>=3.5.0
