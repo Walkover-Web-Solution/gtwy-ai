@@ -6,7 +6,7 @@ from src.services.utils.ai_call_util import call_ai_middleware
 from src.services.utils.nlp import compute_cosine_similarity
 
 
-async def compare_result(expected, actual, matching_type, response_type, ai_matching_custom_prompt=None):
+async def compare_result(expected, actual, matching_type, response_type, ai_matching_custom_prompt=None, bridge_summary=None):
     if response_type == "function":
         expected = {case["name"]: case.get("arguments", {}) for case in expected}
         actual = {case["name"]: case["args"] for case in actual or []}
@@ -21,6 +21,8 @@ async def compare_result(expected, actual, matching_type, response_type, ai_matc
             variables = {"expected": str(expected)}
             if ai_matching_custom_prompt:
                 variables["ai_matching_custom_prompt"] = ai_matching_custom_prompt
+            if bridge_summary:
+                variables["bridge_summary"] = str(bridge_summary)
             response = await call_ai_middleware(
                 str(actual), bridge_ids["compare_result"], variables=variables
             )
@@ -50,7 +52,11 @@ async def process_single_testcase_result(testcase_data, model_result, parsed_dat
         testcase_type = testcase_data.get("type", "response")
 
         ai_matching_custom_prompt = parsed_data.get("ai_matching_custom_prompt") if isinstance(parsed_data, dict) else None
-        score, reason = await compare_result(expected_result, actual_result, matching_type, testcase_type, ai_matching_custom_prompt)
+        bridge_summary = parsed_data.get("bridge_summary") if isinstance(parsed_data, dict) else None
+        score, reason = await compare_result(
+            expected_result, actual_result, matching_type, testcase_type,
+            ai_matching_custom_prompt, bridge_summary,
+        )
         tools_call_data = (
             (model_result or {}).get("historyParams", {}).get("tools_call_data", [])
             if isinstance(model_result, dict) else []

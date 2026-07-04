@@ -635,6 +635,9 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "agent_info.ai_matching_custom_prompt":{
                         "$ifNull": ["$agent_info.ai_matching_custom_prompt", {"$arrayElemAt": ["$parent_bridge_docs.agent_info.ai_matching_custom_prompt", 0]}]
                     },
+                    "bridge_summary": {
+                        "$ifNull": ["$bridge_summary", {"$arrayElemAt": ["$parent_bridge_docs.bridge_summary", 0]}]
+                    },
                 }
             }] if version_id or use_env_resolution else []),
             # Stage 10: Remove temporary fields to clean up the output
