@@ -15,7 +15,3 @@ try:
     print("connected to Mongo...")
 except errors.ConnectionFailure as e:  # Use 'ConnectionFailure' instead of 'ConnectionError'
     logger.error(f"Could not connect to MongoDB: {str(e)}")
-
-
-
-
