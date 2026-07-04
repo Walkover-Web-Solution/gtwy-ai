@@ -988,14 +988,27 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             else:
                 bridge_data["folder_apikeys"] = {}
 
-            # Merge folder_tools into bridge's apiCalls object
             if folder_result and folder_result[0].get("folder_tools"):
                 folder_tools = folder_result[0]["folder_tools"]
-                # Ensure apiCalls exists
                 if "apiCalls" not in bridge_data:
                     bridge_data["apiCalls"] = {}
-                # Merge folder tools into apiCalls
-                bridge_data["apiCalls"].update(folder_tools)
+                embed_override = bridge_data.get("embed_override")
+                filtered_folder_tools = {}
+                
+                if isinstance(embed_override, dict):
+                    override_tools = embed_override.get("tools")
+                    if isinstance(override_tools, dict):
+                        for tool_id, tool_data in folder_tools.items():
+                            if override_tools.get(tool_id) is False:
+                                continue
+                            filtered_folder_tools[tool_id] = tool_data
+                    elif override_tools is False:
+                        filtered_folder_tools = {}
+                    else:
+                        filtered_folder_tools = folder_tools
+                else:
+                    filtered_folder_tools = folder_tools
+                bridge_data["apiCalls"].update(filtered_folder_tools)
 
             # Merge folder_pre_tool into bridge's pre_tools_data array
             if folder_result and folder_result[0].get("folder_pre_tool"):
