@@ -13,6 +13,7 @@ import copy
 import json
 import logging
 import time
+import uuid
 from typing import Any
 
 from bson import ObjectId
@@ -177,6 +178,7 @@ async def fetch_testcases_from_request(
             "expected": testcase_data.get("expected", {}),
             "matching_type": testcase_data.get("matching_type", "cosine"),
             "type": "response",
+            "user_urls": testcase_data.get("user_urls", []),
         }
 
         return [testcase]
@@ -279,6 +281,7 @@ async def process_single_testcase(
     Returns:
         Dictionary containing testcase result
     """
+    message_id = str(uuid.uuid1())
     try:
         # Merge testcase-stored variables (higher priority) with config/request variables
         merged_variables = {**db_config.get("variables", {}), **testcase.get("variables", {})}
@@ -295,9 +298,19 @@ async def process_single_testcase(
         if isinstance(settings.get("fall_back"), dict):
             settings["fall_back"]["is_enable"] = False
 
+        # Forward stored attachment URLs the same way a live chat request does:
+        # user_urls covers images/audios (parse_request_body derives them), and
+        # PDFs must be passed explicitly via the files key.
+        user_urls = testcase.get("user_urls") or []
+        pdf_files = [
+            u.get("url") for u in user_urls
+            if isinstance(u, dict) and u.get("type") in ("pdf", "file") and u.get("url")
+        ]
+
         # Create request data for this testcase
         testcase_request_data = {
             "body": {
+                "message_id": message_id,
                 "user": testcase.get("conversation", [])[-1].get("content", "") if testcase.get("conversation") else "",
                 "testcase_data": {
                     "matching_type": override_matching_type or testcase.get("matching_type") or "cosine",
@@ -309,6 +322,9 @@ async def process_single_testcase(
                     "is_overridden": bool(db_config.get("_testcase_model_overridden")),
                 },
                 **db_config,
+                # Placed after **db_config so attachment keys are not clobbered.
+                "user_urls": user_urls,
+                "files": pdf_files,
             },
             "state": {"version": 2, "timer": [time.time()]},
         }
@@ -341,11 +357,12 @@ async def process_single_testcase(
                 "model": model_name,
                 "service": service_name,
                 "is_overridden": is_overridden,
+                "message_id": message_id,
             }
             await _publish_event(
                 rtlayer_cred,
                 "testcase_result",
-                {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "result": outcome},
+                {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "message_id": message_id, "result": outcome},
             )
             return outcome
 
@@ -378,11 +395,12 @@ async def process_single_testcase(
             "model": model_name,
             "service": service_name,
             "is_overridden": is_overridden,
+            "message_id": message_id,
         }
         await _publish_event(
             rtlayer_cred,
             "testcase_result",
-            {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "result": outcome},
+            {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "message_id": message_id, "result": outcome},
         )
         return outcome
 
@@ -393,6 +411,7 @@ async def process_single_testcase(
         err_args = getattr(e, "args", None)
         if err_args and isinstance(err_args[0], dict):
             error_message = err_args[0].get("error") or error_message
+            message_id = err_args[0].get("message_id") or message_id
         logger.error(f"Error processing testcase {testcase.get('_id')}: {error_message}")
         outcome = {
             "testcase_id": str(testcase.get("_id")) if testcase.get("_id") != "direct_testcase" else "direct_testcase",
@@ -406,11 +425,12 @@ async def process_single_testcase(
             "model": model_name,
             "service": service_name,
             "is_overridden": is_overridden,
+            "message_id": message_id,
         }
         await _publish_event(
             rtlayer_cred,
             "testcase_result",
-            {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "result": outcome},
+            {"version_id": version_id, "model": model_name, "service": service_name, "is_overridden": is_overridden, "message_id": message_id, "result": outcome},
         )
         return outcome
 
