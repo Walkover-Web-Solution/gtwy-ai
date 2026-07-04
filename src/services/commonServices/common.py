@@ -635,8 +635,19 @@ async def chat(request_body):
             testcase_result = await process_single_testcase_result(
                 parsed_data.get("testcase_data", {}), result, parsed_data
             )
-            # Attach latency so it can be forwarded over RTLayer to the client
-            testcase_result["latency"] = latency
+            # Attach latency so it can be forwarded over RTLayer to the client.
+            # over_all_time is wall-clock from a start captured when the testcase
+            # coroutine was dispatched via asyncio.gather; concurrently-dispatched
+            # but serialized testcases share ~that start, so later ones accumulate
+            # earlier testcases' time. model_execution_time is measured tightly
+            # around this testcase's own model call(s), so it is the true per-hit
+            # latency — surface it as over_allDSXCVBN.
+            # _time too to avoid the accumulation.
+            testcase_latency = {
+                **latency,
+                "over_all_time": latency.get("model_execution_time") or latency.get("over_all_time"),
+            }
+            testcase_result["latency"] = testcase_latency
             result["response"]["testcase_result"] = testcase_result
 
             # Stamp the testcase fields onto historyParams so the log queue
