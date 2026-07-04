@@ -66,14 +66,34 @@ json-repair>=0.30.0
 setuptools==68.0.0
 pyroscope-io==1.0.1
 
-# OpenTelemetry Core
+ #OpenTelemetry Core
+opentelemetry-api==1.43.0
 opentelemetry-sdk==1.43.0
 opentelemetry-distro==0.64b0
 opentelemetry-exporter-otlp==1.43.0
-opentelemetry-instrumentation-fastapi==0.64b0
-opentelemetry-instrumentation-celery==0.64b0
-opentelemetry-instrumentation-requests==0.64b0
 
+# Core Instrumentation
+opentelemetry-instrumentation==0.64b0
+opentelemetry-semantic-conventions==0.64b0
+opentelemetry-util-http==0.64b0
+
+# Framework
+opentelemetry-instrumentation-fastapi==0.64b0
+opentelemetry-instrumentation-asgi==0.64b0
+
+# Database
+opentelemetry-instrumentation-sqlalchemy==0.64b0
+
+# Cache
+opentelemetry-instrumentation-redis==0.64b0
+
+# Async Tasks
+opentelemetry-instrumentation-celery==0.64b0
+
+# HTTP Clients
+opentelemetry-instrumentation-httpx==0.64b0
+opentelemetry-instrumentation-requests==0.64b0
+opentelemetry-instrumentation-pymongo==0.64b0
 
 # Dev tools
 pre-commit>=3.5.0
