@@ -63,9 +63,7 @@ async def save_conversations_to_redis(conversations, version_id, thread_id, sub_
             # Remove first 2 conversations
             conversation_list = conversation_list[2:]
 
-        # Save to Redis with 30 days TTL (30 * 24 * 60 * 60 = 2592000 seconds)
-        ttl_30_days = 2592000
-        await store_in_cache(redis_key, conversation_list, ttl_30_days)
+        await store_in_cache(redis_key, conversation_list)
 
         logger.info(f"Saved conversations to Redis with key: {redis_key}")
 
