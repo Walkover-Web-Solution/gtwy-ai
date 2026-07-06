@@ -181,26 +181,33 @@ async def chat(request_body):
 
         # Reviewer agent toggle and configuration. If disabled, review is skipped.
         reviewer_settings = bridge_configurations.get(parsed_data["bridge_id"], {}).get("settings", {})
+        review_agent_settings = reviewer_settings.get("review_agent") or {}
+
+        reviewer_agent_val = review_agent_settings.get("reviewer_agent")
+        reviewer_prompt_val = review_agent_settings.get("reviewer_prompt")
+        reviewer_tools_val = review_agent_settings.get("reviewer_tools")
+
         has_reviewer_configured = bool(
-            reviewer_settings.get("reviewer_agent") 
-            or reviewer_settings.get("reviewer_prompt") 
-            or reviewer_settings.get("reviewer_tools")
+            reviewer_agent_val
+            or reviewer_prompt_val
+            or reviewer_tools_val
         )
-        reviewer_enabled = reviewer_settings.get("reviewer_enabled", has_reviewer_configured)
+        reviewer_enabled = review_agent_settings.get("reviewer_enabled", has_reviewer_configured)
+
         if reviewer_enabled:
-            reviewer_bridge_id = reviewer_settings.get("reviewer_agent") or ""
+            reviewer_bridge_id = reviewer_agent_val or ""
             if reviewer_bridge_id and reviewer_bridge_id in bridge_configurations:
                 parsed_data["_reviewer_bridge_id"] = reviewer_bridge_id
             reviewer_prompt = (
                 parsed_data.get("body", {}).get("reviewer_prompt")
-                or parsed_data.get("body", {}).get("settings", {}).get("reviewer_prompt")
-                or reviewer_settings.get("reviewer_prompt")
+                or parsed_data.get("body", {}).get("settings", {}).get("review_agent", {}).get("reviewer_prompt")
+                or reviewer_prompt_val
                 or ""
             )
             if reviewer_prompt:
                 parsed_data["_reviewer_prompt"] = reviewer_prompt
 
-            reviewer_tools = reviewer_settings.get("reviewer_tools") or []
+            reviewer_tools = reviewer_tools_val or []
             if reviewer_tools:
                 parsed_data["_reviewer_tools"] = reviewer_tools
 

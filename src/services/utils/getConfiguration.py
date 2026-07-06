@@ -282,8 +282,8 @@ async def _prepare_configuration_response(
         "cache_on": cache_on,
         "richui_templates": bridges.get("richui_templates"),
         "meta": bridges.get("meta"),
-        "reviewer_agent": str(bridges.get("settings", {}).get("reviewer_agent") or ""),
-        "reviewer_prompt": str(bridges.get("settings", {}).get("reviewer_prompt") or ""),
+        "reviewer_agent": str(bridges.get("settings", {}).get("review_agent", {}).get("reviewer_agent") or ""),
+        "reviewer_prompt": str(bridges.get("settings", {}).get("review_agent", {}).get("reviewer_prompt") or ""),
         "reviewer_tools": reviewer_tools_resolved,
         "api_collection": apikey_src,
         "limit": {
@@ -397,7 +397,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited, environm
             nested = await _collect_connected_agent_configs(child_agent_data, org_id, visited, environment=resolved_env)
             aggregated_configs.update(nested)
 
-    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("reviewer_agent")
+    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("review_agent", {}).get("reviewer_agent")
     reviewer_bridge_id = str(reviewer_bridge_id_raw) if reviewer_bridge_id_raw else ""
     if reviewer_bridge_id and reviewer_bridge_id not in visited:
         try:

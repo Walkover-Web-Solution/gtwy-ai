@@ -391,7 +391,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "let": {
                         "reviewer_tools_ids": {
                             "$map": {
-                                "input": {"$ifNull": ["$settings.reviewer_tools", []]},
+                                "input": {"$ifNull": ["$settings.review_agent.reviewer_tools", []]},
                                 "as": "id",
                                 "in": {
                                     "$convert": {"input": "$$id", "to": "objectId", "onError": None, "onNull": None}
