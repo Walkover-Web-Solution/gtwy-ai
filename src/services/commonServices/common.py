@@ -179,17 +179,30 @@ async def chat(request_body):
                 from src.services.mcp_gateway.prefetch import prefetch_mcp_tools
                 await prefetch_mcp_tools(mcp_cfg)
 
-        # Reviewer agent: if this bridge has a configured reviewer, stash its
-        # bridge_id on parsed_data. The review loop runs after the main agent
-        # fully resolves — both the streaming finalizer and the non-streaming
-        # path invoke run_review_loop just before history publish. Streaming is
-        # preserved when requested; the reviewer's tokens flow onto the same
-        # SSE connection so the user sees the verdict in real time.
-        reviewer_bridge_id = (
-            bridge_configurations.get(parsed_data["bridge_id"], {}).get("reviewer_agent") or ""
+        # Reviewer agent toggle and configuration. If disabled, review is skipped.
+        reviewer_settings = bridge_configurations.get(parsed_data["bridge_id"], {}).get("settings", {})
+        has_reviewer_configured = bool(
+            reviewer_settings.get("reviewer_agent") 
+            or reviewer_settings.get("reviewer_prompt") 
+            or reviewer_settings.get("reviewer_tools")
         )
-        if reviewer_bridge_id and reviewer_bridge_id in bridge_configurations:
-            parsed_data["_reviewer_bridge_id"] = reviewer_bridge_id
+        reviewer_enabled = reviewer_settings.get("reviewer_enabled", has_reviewer_configured)
+        if reviewer_enabled:
+            reviewer_bridge_id = reviewer_settings.get("reviewer_agent") or ""
+            if reviewer_bridge_id and reviewer_bridge_id in bridge_configurations:
+                parsed_data["_reviewer_bridge_id"] = reviewer_bridge_id
+            reviewer_prompt = (
+                parsed_data.get("body", {}).get("reviewer_prompt")
+                or parsed_data.get("body", {}).get("settings", {}).get("reviewer_prompt")
+                or reviewer_settings.get("reviewer_prompt")
+                or ""
+            )
+            if reviewer_prompt:
+                parsed_data["_reviewer_prompt"] = reviewer_prompt
+
+            reviewer_tools = reviewer_settings.get("reviewer_tools") or []
+            if reviewer_tools:
+                parsed_data["_reviewer_tools"] = reviewer_tools
 
         tool_count_key_for_cleanup = build_tool_count_key(
             parsed_data.get("bridge_id"),
@@ -590,7 +603,7 @@ async def chat(request_body):
         # so the main agent's conversation_log row reflects cumulative cost.
         # The reviewer publishes its own conversation_log row from inside
         # run_review_loop — independent of process_background_tasks below.
-        if parsed_data.get("_reviewer_bridge_id"):
+        if parsed_data.get("_reviewer_bridge_id") or parsed_data.get("_reviewer_prompt") or parsed_data.get("_reviewer_tools"):
             result, _reviewer_summary = await run_review_loop(
                 parsed_data=parsed_data,
                 params=params,

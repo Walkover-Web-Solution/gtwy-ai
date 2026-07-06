@@ -384,6 +384,25 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "as": "pre_tools_data",
                 }
             },
+            # Stage 6.1: Lookup 'reviewer_tools' data from 'apicalls' collection using the ObjectIds in 'settings.reviewer_tools'
+            {
+                "$lookup": {
+                    "from": "apicalls",
+                    "let": {
+                        "reviewer_tools_ids": {
+                            "$map": {
+                                "input": {"$ifNull": ["$settings.reviewer_tools", []]},
+                                "as": "id",
+                                "in": {
+                                    "$convert": {"input": "$$id", "to": "objectId", "onError": None, "onNull": None}
+                                }
+                            }
+                        }
+                    },
+                    "pipeline": [{"$match": {"$expr": {"$in": ["$_id", {"$ifNull": ["$$reviewer_tools_ids", []]}]}}}],
+                    "as": "reviewer_tools_data",
+                }
+            },
             # Stage 7: Extract bridge_ids from connected_agents if it exists
             {
                 "$addFields": {
