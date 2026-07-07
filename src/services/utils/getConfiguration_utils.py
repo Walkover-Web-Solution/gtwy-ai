@@ -178,18 +178,52 @@ def process_extra_tool(tool):
     return tool_format, tool_mapping, {tool_name: variable_path}
 
 
+def _build_api_calls_map(api_calls):
+    """Normalize apiCalls (dict or list) into a lookup map keyed by string id."""
+    api_calls_map = {}
+    if isinstance(api_calls, dict):
+        for key, val in api_calls.items():
+            api_calls_map[str(key)] = val
+            if isinstance(val, dict) and val.get("_id"):
+                api_calls_map[str(val["_id"])] = val
+    elif isinstance(api_calls, list):
+        for val in api_calls:
+            if isinstance(val, dict) and val.get("_id"):
+                api_calls_map[str(val["_id"])] = val
+    return api_calls_map
+
+
 def setup_tools(bridges, variables_path_bridge, extra_tools):
-    """Setup tools and tool mappings"""
+    """Setup tools by iterating connected_tools (type='tools') and looking up
+    tool metadata from the joined apiCalls data."""
     tools = []
     tool_id_and_name_mapping = {}
     variable_path = {}
-    # Process API calls
-    for _, api_data in bridges.get("apiCalls", {}).items():
-        tool_format, tool_mapping = process_api_call_tool(api_data, variables_path_bridge)
+
+    # Iterate connected_tools where type="tools" — uses variable_path from each entry
+    connected_tools = bridges.get("connected_tools", [])
+    tool_entries = [ct for ct in connected_tools if ct.get("type") == "tools"]
+    api_calls_map = _build_api_calls_map(bridges.get("apiCalls", {}))
+
+    # Build variables_path from per-entry variable_path in connected_tools
+    merged_variables_path = {}
+    for tool_entry in tool_entries:
+        tool_id = str(tool_entry.get("id", ""))
+        api_data = api_calls_map.get(tool_id)
+        if not api_data:
+            continue
+        entry_variable_path = tool_entry.get("variable_path", {}) or {}
+        script_id = api_data.get("script_id")
+        if entry_variable_path and script_id:
+            existing = merged_variables_path.get(script_id, {}) or {}
+            merged_variables_path[script_id] = {**existing, **entry_variable_path}
+
+        tool_format, tool_mapping = process_api_call_tool(api_data, merged_variables_path)
         if tool_format:
             name_of_function = tool_format["name"]
             tools.append(tool_format)
             tool_id_and_name_mapping[name_of_function] = tool_mapping
+
     # Process extra tools
     for tool in extra_tools:
         tool_format, tool_mapping, path = process_extra_tool(tool)
@@ -198,7 +232,7 @@ def setup_tools(bridges, variables_path_bridge, extra_tools):
             name_of_function = tool_format["name"]
             tools.append(tool_format)
             tool_id_and_name_mapping[name_of_function] = tool_mapping
-    return tools, tool_id_and_name_mapping, {**variables_path_bridge, **variable_path}
+    return tools, tool_id_and_name_mapping, {**merged_variables_path, **variable_path}
 
 
 def setup_api_key(service, bridges, apikey, chatbot):
@@ -248,21 +282,32 @@ def setup_api_key(service, bridges, apikey, chatbot):
 
 
 def setup_pre_tools(bridge, agent_data, variables):
-    """Setup pre-tools configuration"""
-    pre_tools = bridge.get("pre_tools", [])
-    if not pre_tools:
+    """Setup pre-tools configuration - reads from connected_tools type='pre_tool'"""
+    connected_tools = bridge.get("connected_tools", [])
+    pre_tool_entries = [ct for ct in connected_tools if ct.get("type") == "pre_tool"]
+    if not pre_tool_entries:
         return None, None
 
-    api_data = agent_data.get("bridges", {}).get("pre_tools_data", [{}])[0]
-    if api_data is None:
+    pre_tools_data = agent_data.get("bridges", {}).get("pre_tools_data", [])
+    pre_tools_data_map = {pt.get("_id"): pt for pt in pre_tools_data}
+
+    # Get the first pre_tool entry
+    tool_entry = pre_tool_entries[0]
+    tool_id = tool_entry.get("id")
+    api_data = pre_tools_data_map.get(tool_id, {})
+    if not api_data:
         raise Exception("Didn't find the pre_function")
 
     name = api_data.get("title") or makeFunctionName(api_data["endpoint_name"] or api_data["function_name"])
     required = api_data.get("required", [])
 
+    # variable_path is embedded in the tool_entry
+    variable_path = tool_entry.get("variable_path", {})
     args = {}
     for param in required:
-        if param in variables:
+        if param in variable_path:
+            args[param] = variable_path[param]
+        elif param in variables:
             args[param] = variables[param]
 
     return name, args
@@ -359,39 +404,38 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
 
 
 def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag):
-    """Add connected agents as tools"""
-    connected_agents = bridges.get("connected_agents", {})
+    """Add connected agents as tools - reads from connected_tools type='agent'"""
+    connected_tools = bridges.get("connected_tools", [])
+    agent_entries = [ct for ct in connected_tools if ct.get("type") == "agent"]
     connected_agent_details = bridges.get("connected_agent_details", {})
     agent_name_info = bridges.get("agent_name_info", {})
 
-    if not connected_agents:
+    if not agent_entries:
         return
 
     # Check if type is orchestrator
     is_orchestrator = orchestrator_flag or bridges.get("orchestrator", False)
 
-    for _, bridge_info in connected_agents.items():
-        bridge_id_value = bridge_info.get("bridge_id", "")
-        environment_value = bridge_info.get("environment", "")
-        # If environment is present, use connected_agents data, otherwise use connected_agent_details
+    for agent_entry in agent_entries:
+        bridge_id_value = agent_entry.get("id", "")
+        environment_value = agent_entry.get("environment", "")
+        # If environment is present, use agent_entry data, otherwise use connected_agent_details
         if environment_value:
-            # Use data from connected_agents when environment is present
-            description = bridge_info.get("description", "")
-            variables = bridge_info.get("variables", {})
+            description = agent_entry.get("description", "")
+            variables = agent_entry.get("variables", {})
             fields = variables.get("fields", {})
             required = variables.get("required", [])
         else:
-            # Use data from connected_agent_details when environment is not present
-            agent_details = connected_agent_details.get(bridge_id_value)
-            if agent_details and agent_details is not None:
-                description = agent_details.get("description", bridge_info.get("description", ""))
+            agent_details = connected_agent_details.get(bridge_id_value) or {}
+            if agent_details:
+                description = agent_details.get("description", agent_entry.get("description", ""))
                 variables = agent_details.get("agent_variables", {})
                 fields = variables.get("fields", {})
                 required = variables.get("required", [])
             else:
-                # Final fallback to connected_agents data
-                description = bridge_info.get("description", "")
-                variables = bridge_info.get("variables", {})
+                # Final fallback to agent_entry data
+                description = agent_entry.get("description", "")
+                variables = agent_entry.get("variables", {})
                 fields = variables.get("fields", {})
                 required = variables.get("required", [])
 
@@ -437,5 +481,5 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
         tool_id_and_name_mapping[name] = {
             "type": "AGENT",
             "bridge_id": bridge_id_value,
-            "requires_thread_id": bridge_info.get("thread_id", False),
+            "requires_thread_id": agent_entry.get("thread_id", False),
         }

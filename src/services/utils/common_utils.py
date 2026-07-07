@@ -63,37 +63,26 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
                 resolved[param] = agent_variables[param]
         return resolved
 
-    resolved_tools = []
+    # pre_tools: list with single tool at index 0 — resolve args if they contain variable references
     if isinstance(tool_data, list):
         tool = tool_data[0]
-    else:
-        tool_config = tool_data.get("config", {})
-        tool_args_mapping = tool_data.get("args", {})
-        resolved_args = resolve_args(tool_config, tool_args_mapping)
-        return {
-            **tool_data,
-            "args": resolved_args,
-            "config": tool_config
-        }
-    tool_type = tool.get("_type")
-    tool_config = tool.get("config", {})
-    tool_args_mapping = tool.get("args", {})
-    is_custom = tool_type == "custom_function"
-    resolved_args = resolve_args(tool_config, tool_args_mapping, is_custom)
-    if is_custom:
-        resolved_tools.append({
-            "type": "custom_function",
-            "name": tool_config.get("script_id"),
-            "args": resolved_args,
-        })
-    else:
-        resolved_tools.append({
-            "type": tool_type,
-            "args": resolved_args,
-            "config": tool_config,
-        })
-    
-    return resolved_tools
+        tool_args_mapping = tool.get("args", {})
+        # Only resolve if args contain variable references (strings that look like paths)
+        if any(isinstance(v, str) and ("." in v or v in agent_variables) for v in tool_args_mapping.values()):
+            resolved_args = resolve_args({}, tool_args_mapping)
+        else:
+            resolved_args = tool_args_mapping
+        return [{**tool, "args": resolved_args}]
+
+    # post_tool: single dict, may still need variable resolution
+    tool_config = tool_data.get("config", {})
+    tool_args_mapping = tool_data.get("args", {})
+    resolved_args = resolve_args(tool_config, tool_args_mapping)
+    return {
+        **tool_data,
+        "args": resolved_args,
+        "config": tool_config,
+    }
     
 async def handle_agent_transfer(
     result, request_body, bridge_configurations, chat_function, current_bridge_id=None, transfer_request_id=None
@@ -466,17 +455,23 @@ async def handle_pre_tools(parsed_data, custom_config, timer = None):
         if timer:
             timer.start()
 
-        tool_type = tool.get("type")
+        tool_type = tool.get("pre_tool_type")
+        tool_id = tool.get("id") or tool.get("name")
         args = dict(tool.get("args", {}))
         args["user"] = parsed_data["user"]
         args["_response_type"] = parsed_data["configuration"]["response_type"]
 
+        # Initialize entry with id for all tool types
+        entry = {"id": tool_id, "type": "pre_tool"}
+
         if tool_type == "custom_function":
             try:
                 _pre_t = _time.time()
+                # Use script_id for URL, fallback to name if script_id not available
+                script_id = tool.get("script_id")
                 pre_tool_response = await axios_work(
                     args,
-                    {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
+                    {"url": f"https://flow.sokt.io/func/{script_id}"},
                 )
                 log_slow_call(f"pre_function {tool.get('name')}", _time.time() - _pre_t, SLOW_CALL_THRESHOLDS["pre_function"])
                 if pre_tool_response.get("status") == 0:

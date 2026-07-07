@@ -166,32 +166,35 @@ async def _prepare_configuration_response(
     # Tool choice
     configuration["tool_choice"] = setup_tool_choice(configuration, bridges, service)
 
-    variables_path_bridge = bridges.get("variables_path", {})
-
-    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(bridges, variables_path_bridge, extra_tools)
+    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(bridges, {}, extra_tools)
     configuration.pop("tools", None)
     configuration["tools"] = tools
 
     RTLayer = True if configuration and "RTLayer" in configuration else False
 
     template_content = await ConfigurationService.get_template_by_id(template_id) if template_id else None
+    
+    connected_tools = bridges.get("connected_tools", [])
+    pre_tools_data_map = {
+        str(pt.get("_id")): pt for pt in bridges.get("pre_tools_data", [])
+    }
 
-    # Pre-tools — build list for later processing in chat_multiple_agents
     pre_tools_data_for_later = []
-    raw_pre_tools = bridges.get("pre_tools", [])
-
-    if raw_pre_tools:
-        for tool_entry in raw_pre_tools:
-            if not isinstance(tool_entry, dict):
-                continue
-            tool_type = tool_entry.get("type")
-            tool_config = tool_entry.get("config", {})
-            tool_args = tool_entry.get("args", {})
-            pre_tools_data_for_later.append({
-                "_type": tool_type,
-                "config": tool_config,
-                "args": tool_args,
-            })
+    for tool_entry in connected_tools:
+        if not isinstance(tool_entry, dict) or tool_entry.get("type") != "pre_tool":
+            continue
+        tool_id = tool_entry.get("id")
+        if not tool_id:
+            continue
+        api_data = pre_tools_data_map.get(str(tool_id), {})
+        pre_tools_data_for_later.append({
+            "id": tool_id,
+            "pre_tool_type": tool_entry.get("pre_tool_type"),
+            "name": api_data.get("title") or api_data.get("script_id") or tool_id,
+            "script_id": api_data.get("script_id"),
+            "description": api_data.get("description", ""),
+            "args": tool_entry.get("variable_path", {}),
+        })
     raw_post_tool = bridges.get("folder_post_tool") or {}
     raw_post_tool_script_id = raw_post_tool.get('script_id', {}) if raw_post_tool else {}
     post_tool_data = None
@@ -203,7 +206,15 @@ async def _prepare_configuration_response(
             "config": raw_post_tool.get("config", {}),
         }
 
-    rag_data = bridges.get("doc_ids")
+    # Docs — read directly from connected_tools where type="docs"
+    rag_data = []
+    for entry in connected_tools:
+        if not isinstance(entry, dict) or entry.get("type") != "docs":
+            continue
+        eid = str(entry.get("id", ""))
+        doc = {**entry}
+        doc.setdefault("resource_id", eid)
+        rag_data.append(doc)
     gpt_memory_context = bridges.get("gpt_memory_context")
     gpt_memory = bridges.get("gpt_memory")
 
@@ -215,11 +226,18 @@ async def _prepare_configuration_response(
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
 
-    gtwy_web_search_filters = web_search_filters or bridges.get("gtwy_web_search_filters") or {}
+    # Built-in tools — read directly from connected_tools where type="built_in_tools"
+    built_in_entry = next((ct for ct in connected_tools if ct.get("type") == "built_in_tools"), {}) or {}
+    built_in_from_connected = built_in_entry.get("built_in_tools") or []
+    if isinstance(built_in_from_connected, str):
+        built_in_from_connected = [built_in_from_connected]
+    effective_built_in_tools = built_in_tools or built_in_from_connected
+
+    gtwy_web_search_filters = web_search_filters or built_in_entry.get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
         tools,
         tool_id_and_name_mapping,
-        built_in_tools or bridges.get("built_in_tools"),
+        effective_built_in_tools,
         gtwy_web_search_filters,
     )
     if rag_data:
@@ -228,7 +246,7 @@ async def _prepare_configuration_response(
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
     add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag)
-    web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
+    web_search_filters_value = web_search_filters or built_in_entry.get("web_search_filters") or {}
 
     base_config = {
         "configuration": configuration,
@@ -259,7 +277,7 @@ async def _prepare_configuration_response(
         "bridge_id": bridges.get("parent_id", bridges.get("_id")),
         "variables_state": bridges.get("agent_info", {}).get("variables_state", {}),
         "ai_matching_custom_prompt": bridges.get("agent_info", {}).get("ai_matching_custom_prompt", ""),
-        "built_in_tools": built_in_tools or bridges.get("built_in_tools"),
+        "built_in_tools": effective_built_in_tools,
         "is_embed": bridges.get("folder_type") == "embed",
         "user_id": bridges.get("user_id"),
         "folder_id": bridges.get("folder_id"),

@@ -194,12 +194,30 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     }
                 }
             }] if use_env_resolution else []),
+            # Stage 2: Lookup apiCalls directly from connected_tools where type="tools"
             {
                 "$lookup": {
                     "from": "apicalls",
-                    "let": {"fids": "$function_ids"},
+                    "let": {
+                        "fids": {
+                            "$map": {
+                                "input": {
+                                    "$filter": {
+                                        "input": {"$ifNull": ["$connected_tools", []]},
+                                        "as": "ct",
+                                        "cond": {"$eq": ["$$ct.type", "tools"]}
+                                    }
+                                },
+                                "as": "tool",
+                                "in": "$$tool.id"
+                            }
+                        }
+                    },
                     "pipeline": [
-                        {"$match": {"$expr": {"$in": [{"$toString": "$_id"}, "$$fids"]}}}
+                        {"$match": {"$expr": {"$and": [
+                            {"$gt": [{"$size": "$$fids"}, 0]},
+                            {"$in": [{"$toString": "$_id"}, "$$fids"]}
+                        ]}}}
                     ],
                     "as": "apiCalls",
                 }
@@ -362,53 +380,48 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     },
                 }
             },
-            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in 'pre_tools'
+            # Stage 6: Lookup pre_tools_data directly from connected_tools where type="pre_tool"
             {
                 "$lookup": {
                     "from": "apicalls",
                     "let": {
                         "pre_tools_ids": {
                             "$map": {
-                                "input": "$pre_tools",
-                                "as": "id",
-                                "in": {
-                                    "$convert": {"input": "$$id", "to": "objectId", "onError": None, "onNull": None}
+                                "input": {
+                                    "$filter": {
+                                        "input": {"$ifNull": ["$connected_tools", []]},
+                                        "as": "ct",
+                                        "cond": {"$eq": ["$$ct.type", "pre_tool"]}
+                                    }
                                 },
+                                "as": "pt",
+                                "in": {
+                                    "$convert": {"input": "$$pt.id", "to": "objectId", "onError": None, "onNull": None}
+                                }
                             }
                         }
                     },
-                    "pipeline": [{"$match": {"$expr": {"$in": ["$_id", {"$ifNull": ["$$pre_tools_ids", []]}]}}}],
+                    "pipeline": [{"$match": {"$expr": {"$in": ["$_id", "$$pre_tools_ids"]}}}],
                     "as": "pre_tools_data",
                 }
             },
-            # Stage 7: Extract bridge_ids from connected_agents if it exists
+            # Stage 7: Extract agent IDs from connected_tools where type="agent" (temp field, projected out at end)
             {
                 "$addFields": {
-                    "connected_agents_bridge_ids": {
-                        "$cond": [
-                            {
-                                "$and": [
-                                    {"$ne": ["$connected_agents", None]},
-                                    {"$ne": ["$connected_agents", {}]},
-                                    {"$eq": [{"$type": "$connected_agents"}, "object"]},
-                                ]
-                            },
-                            {
-                                "$map": {
-                                    "input": {"$objectToArray": "$connected_agents"},
-                                    "as": "agent",
-                                    "in": {
-                                        "$convert": {
-                                            "input": "$$agent.v.bridge_id",
-                                            "to": "objectId",
-                                            "onError": None,
-                                            "onNull": None,
-                                        }
-                                    },
+                    "_connected_agent_ids": {
+                        "$map": {
+                            "input": {
+                                "$filter": {
+                                    "input": {"$ifNull": ["$connected_tools", []]},
+                                    "as": "ct",
+                                    "cond": {"$eq": ["$$ct.type", "agent"]}
                                 }
                             },
-                            [],
-                        ]
+                            "as": "agent",
+                            "in": {
+                                "$convert": {"input": "$$agent.id", "to": "objectId", "onError": None, "onNull": None}
+                            }
+                        }
                     }
                 }
             },
@@ -417,13 +430,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                 "$lookup": {
                     "from": "configurations",
                     "let": {
-                        "bridge_ids": {
-                            "$filter": {
-                                "input": "$connected_agents_bridge_ids",
-                                "as": "id",
-                                "cond": {"$ne": ["$$id", None]},
-                            }
-                        }
+                        "bridge_ids": {"$ifNull": ["$_connected_agent_ids", []]}
                     },
                     "pipeline": [
                         {
@@ -468,13 +475,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                 "$lookup": {
                     "from": "configurations",
                     "let": {
-                        "bridge_ids": {
-                            "$filter": {
-                                "input": "$connected_agents_bridge_ids",
-                                "as": "id",
-                                "cond": {"$ne": ["$$id", None]},
-                            }
-                        }
+                        "bridge_ids": {"$ifNull": ["$_connected_agent_ids", []]}
                     },
                     "pipeline": [
                         {"$match": {"$expr": {"$in": ["$_id", "$$bridge_ids"]}}},
@@ -652,7 +653,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "apikeys_docs": 0,
                     "apikey_object_id_safe": 0,
                     "has_apikeys": 0,
-                    "connected_agents_bridge_ids": 0,
+                    "_connected_agent_ids": 0,
                     "agent_details_docs": 0,
                     "template_ids_to_fetch": 0,
                     "templates_docs": 0,
