@@ -862,7 +862,16 @@ def build_service_params(
 
 def _attach_sub_thread_extras(conversation_log_data, parsed_data):
     conversation_log_data["thread_flag"] = parsed_data.get("thread_flag")
-    conversation_log_data["response_format"] = parsed_data.get("response_format")
+    if parsed_data.get("response_format").get('type',{}) == 'default' and parsed_data.get('thread_flag') == True:
+        chatbotId = parsed_data.get('body',{}).get('chatBotId','')
+        threadId  = parsed_data.get('body',{}).get('threadId','')
+        subThreadId = parsed_data.get('body',{}).get('subThreadId','')
+        userId = parsed_data.get('body',{}).get('userId','')
+        channelId = f"{chatbotId}{threadId.strip() if threadId and threadId.strip() else userId}{subThreadId.strip() if subThreadId and subThreadId.strip() else userId}"
+        channelId = channelId.replace(" ", "_")
+        conversation_log_data["response_format"] = {"type": "RTLayer", "cred": {"channel": channelId, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
+    else:
+        conversation_log_data["response_format"] = parsed_data.get("response_format")
 
 
 def _build_orchestrator_sub_thread_data(parsed_data, thread_info=None):
