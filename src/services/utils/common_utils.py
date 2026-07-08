@@ -753,24 +753,34 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             memory = parse_memory(raw_memory)
             parsed_data["memory"] = memory
-        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-            configuration.get("prompt") or "", variables
-        )
+        raw_prompt = configuration.get("prompt") or ""
+        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(raw_prompt, variables)
 
         if template:
-            system_prompt = template
+            raw_prompt = template
             configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-                system_prompt, {"system_prompt": configuration["prompt"], **variables}
+                raw_prompt, {"system_prompt": configuration["prompt"], **variables}
             )
 
         if bridge_type and model_config.get("response_type") and suggest:
             template_content = (await ConfigurationServices.get_template_by_id(Config.CHATBOT_OPTIONS_TEMPLATE_ID)).get(
                 "template", ""
             )
+            raw_prompt = template_content
             configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
                 template_content, {"system_prompt": configuration["prompt"]}
             )
             custom_config["response_type"] = {"type": "json_object"}
+
+        # Everything before the first {{variable}} in the raw prompt survives substitution
+        # byte-for-byte, so it is a prefix shared by all requests to this bridge — split it
+        # out so the Anthropic handler can cache it independently of variable values.
+        split_at = raw_prompt.find("{{")
+        if split_at > 0:
+            static_part = configuration["prompt"][:split_at]
+            dynamic_part = configuration["prompt"][split_at:]
+            if static_part and dynamic_part:
+                configuration["prompt_blocks"] = [static_part, dynamic_part]
 
         if bridge_type is None and model_config.get("response_type"):
             res = parsed_data["body"].get("response_type") or parsed_data["body"].get("configuration", {}).get(

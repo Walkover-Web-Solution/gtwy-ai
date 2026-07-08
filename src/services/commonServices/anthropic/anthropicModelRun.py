@@ -8,13 +8,17 @@ from globals import logger
 from src.exceptions import ApiCallError
 
 from ..api_executor import execute_api_call
+from .anthropic_cache import apply_anthropic_cache_control
 
 
 async def anthropic_stream(configuration, apikey):
     """Async generator yielding normalised delta dicts for Anthropic messages streaming."""
+    print("configuratin before stream\n\n\n", configuration, "\n\n\n\n")
+    configuration = apply_anthropic_cache_control(configuration)
+    print("configuratin after stream\n\n\n", configuration, "\n\n\n\n")
     anthropic_client = AsyncAnthropic(api_key=apikey)
     content_blocks = {}
-    usage = {"input_tokens": 0, "output_tokens": 0}
+    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
     finish_reason = None
     try:
         async with anthropic_client.messages.stream(**configuration) as stream:
@@ -22,6 +26,10 @@ async def anthropic_stream(configuration, apikey):
                 if event.type == "message_start":
                     message_data = event.message
                     usage["input_tokens"] = message_data.usage.input_tokens
+                    usage["cache_read_input_tokens"] = getattr(message_data.usage, "cache_read_input_tokens", 0) or 0
+                    usage["cache_creation_input_tokens"] = (
+                        getattr(message_data.usage, "cache_creation_input_tokens", 0) or 0
+                    )
 
                 elif event.type == "content_block_start":
                     index = event.index
@@ -105,6 +113,7 @@ async def anthropic_stream(configuration, apikey):
         tool_calls = [
             b for b in content_blocks.values() if b.get("type") in {"tool_use", "mcp_tool_use", "mcp_tool_result"}
         ] or None
+        print(f"[anthropic usage] stream: {json.dumps(usage)}", flush=True)
         yield {"content": None, "tool_calls": tool_calls, "usage": usage, "finish_reason": finish_reason, "reasoning": None}
     except Exception as error:
         yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
@@ -127,6 +136,8 @@ async def anthropic_runmodel(
         # model_name = configuration.get('model')
         # validate_anthropic_token_limit(configuration, model_name, service, apikey)
 
+        configuration = apply_anthropic_cache_control(configuration)
+
         # Initialize async client
         anthropic_client = AsyncAnthropic(api_key=apikey)
 
@@ -142,7 +153,12 @@ async def anthropic_runmodel(
                     "model": config.get("model", ""),
                     "stop_reason": None,
                     "stop_sequence": None,
-                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                    },
                 }
 
                 # Track content blocks
@@ -157,6 +173,12 @@ async def anthropic_runmodel(
                             accumulated_response["id"] = message_data.id
                             accumulated_response["model"] = message_data.model
                             accumulated_response["usage"]["input_tokens"] = message_data.usage.input_tokens
+                            accumulated_response["usage"]["cache_read_input_tokens"] = (
+                                getattr(message_data.usage, "cache_read_input_tokens", 0) or 0
+                            )
+                            accumulated_response["usage"]["cache_creation_input_tokens"] = (
+                                getattr(message_data.usage, "cache_creation_input_tokens", 0) or 0
+                            )
 
                         elif event.type == "content_block_start":
                             # Initialize content block
@@ -293,6 +315,7 @@ async def anthropic_runmodel(
                     merged_content.append(current_text_block)
 
                 accumulated_response["content"] = merged_content
+                print(f"[anthropic usage] runmodel: {json.dumps(accumulated_response['usage'])}", flush=True)
                 return {"success": True, "response": accumulated_response}
 
             except Exception as error:
