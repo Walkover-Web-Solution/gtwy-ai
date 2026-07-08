@@ -1,9 +1,14 @@
 from src.configs.service_registry import prompt_role
 from src.services.utils.ai_middleware_format import Response_formatter
 from src.services.utils.apiservice import fetch_images_b64
-
 from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService
+from .openai_compatible_utils import (
+    append_moonshot_web_search_tool_results,
+    apply_openai_compatible_builtin_tools,
+    get_openai_compatible_tool_calls,
+    has_moonshot_web_search_tool_calls,
+)
 
 
 class OpenAICompatibleHandler(BaseService):
@@ -21,6 +26,7 @@ class OpenAICompatibleHandler(BaseService):
         historyParams = {}
         tools = {}
         functionCallRes = {}
+        total_web_searches = 0
         service = self.service
         role = prompt_role(service)
         conversation = ConversationService.createOpenAICompatibleConversation(
@@ -57,6 +63,11 @@ class OpenAICompatibleHandler(BaseService):
             self.customConfig = self.service_formatter(self.customConfig, service)
             if "tools" not in self.customConfig and "parallel_tool_calls" in self.customConfig:
                 del self.customConfig["parallel_tool_calls"]
+
+            self.customConfig = apply_openai_compatible_builtin_tools(
+                self.customConfig, service, self.model, self.built_in_tools
+            )
+
         if self.stream_mode:
             providerResponse = await self.stream(self.customConfig, self.apikey, service)
         else:
@@ -65,7 +76,23 @@ class OpenAICompatibleHandler(BaseService):
         if not providerResponse.get("success"):
             await self.handle_failure(providerResponse)
             raise ValueError(providerResponse.get("error"))
-        if len(modelResponse.get("choices", [])[0].get("message", {}).get("tool_calls", [])) > 0:
+        while has_moonshot_web_search_tool_calls(service, modelResponse):
+            result_tools, web_search_count = append_moonshot_web_search_tool_results(self.customConfig, modelResponse)
+            tools.update(result_tools)
+            total_web_searches += web_search_count
+            if self.stream_mode:
+                providerResponse = await self.stream(self.customConfig, self.apikey, service)
+            else:
+                providerResponse = await self.chats(self.customConfig, self.apikey, service)
+            modelResponse = providerResponse.get("modelResponse", {})
+            if not providerResponse.get("success"):
+                await self.handle_failure(providerResponse)
+                raise ValueError(providerResponse.get("error"))
+
+        if total_web_searches:
+            self.token_calculator.add_web_search_calls(total_web_searches)
+
+        if len(get_openai_compatible_tool_calls(modelResponse)) > 0:
             functionCallRes = await self.function_call(
                 self.customConfig, service, providerResponse, 0, {}
             )
@@ -73,7 +100,7 @@ class OpenAICompatibleHandler(BaseService):
                 await self.handle_failure(functionCallRes)
                 raise ValueError(functionCallRes.get("error"))
             self.update_model_response(modelResponse, functionCallRes)
-            tools = functionCallRes.get("tools", {})
+            tools.update(functionCallRes.get("tools", {}))
         response = await Response_formatter(
             modelResponse, service, tools, self.type, self.image_data
         )
