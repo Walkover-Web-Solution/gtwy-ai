@@ -669,7 +669,7 @@ async def manage_threads(parsed_data):
 
         # Check Redis cache first for conversations
         version_id = parsed_data.get("version_id", "")
-        redis_key = f"conversation_{version_id}_{thread_id}_{sub_thread_id}"
+        redis_key = f"{redis_keys['conversation_']}{version_id}_{thread_id}_{sub_thread_id}"
         cached_conversations = await find_in_cache(redis_key)
 
         if cached_conversations:
