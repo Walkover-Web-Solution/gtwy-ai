@@ -19,7 +19,11 @@ class Anthropic(BaseService):
                 self.configuration.get("conversation"), self.memory, self.files
             )
         ).get("messages", [])
-        self.customConfig["system"] = self.configuration.get("prompt")
+        prompt_blocks = self.configuration.get("prompt_blocks")
+        if prompt_blocks:
+            self.customConfig["system"] = [{"type": "text", "text": part} for part in prompt_blocks if part]
+        else:
+            self.customConfig["system"] = self.configuration.get("prompt")
         if self.image_data:
             images_data = await fetch_images_b64(self.image_data)
             images_input = [

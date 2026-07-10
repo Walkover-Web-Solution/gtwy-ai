@@ -753,9 +753,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             memory = parse_memory(raw_memory)
             parsed_data["memory"] = memory
-        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-            configuration.get("prompt") or "", variables
-        )
+        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(configuration.get("prompt") or "", variables, parsed_data["service"], configuration)
 
         if template:
             system_prompt = template
