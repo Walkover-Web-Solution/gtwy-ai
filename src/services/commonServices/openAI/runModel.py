@@ -74,6 +74,7 @@ async def openai_response_stream(configuration, apiKey):
     finish_reason = None
     service_tier = None
     incomplete_details = None
+    response_id = None
     try:
         async for line in fetch_stream(url=OPENAI_RESPONSES_URL, headers=headers, json_body=payload):
             if line.startswith("event:"):
@@ -115,6 +116,8 @@ async def openai_response_stream(configuration, apiKey):
                     accumulated_output = response_output
                 if resp_snapshot.get("service_tier"):
                     service_tier = resp_snapshot["service_tier"]
+                if resp_snapshot.get("id"):
+                    response_id = resp_snapshot["id"]
 
             if event_type == "response.output_text.delta":
                 yield {"content": event.get("delta"), "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
@@ -240,7 +243,7 @@ async def openai_response_stream(configuration, apiKey):
             {"id": k, "call_id": v["call_id"], "type": "function", "function": {"name": v["name"], "arguments": v["arguments"]}}
             for k, v in accumulated_tool_calls.items()
         ] if accumulated_tool_calls else None
-        yield {"content": None, "tool_calls": tool_calls_list, "usage": usage, "finish_reason": finish_reason, "reasoning": None, "output": accumulated_output, "service_tier": service_tier, "incomplete_details": incomplete_details}
+        yield {"content": None, "tool_calls": tool_calls_list, "usage": usage, "finish_reason": finish_reason, "reasoning": None, "output": accumulated_output, "service_tier": service_tier, "incomplete_details": incomplete_details, "id": response_id}
     except Exception as error:
         yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
 

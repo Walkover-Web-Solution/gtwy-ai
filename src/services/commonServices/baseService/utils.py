@@ -824,7 +824,13 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
                     "name": tc.get("function", {}).get("name", ""),
                     "arguments": tc.get("function", {}).get("arguments", ""),
                 })
-        resp = {"output": output, "model": configuration.get("model", ""), "usage": final_usage, "status": final_finish_reason}
+        resp = {
+            "id": (last_delta or {}).get("id"),
+            "output": output,
+            "model": configuration.get("model", ""),
+            "usage": final_usage,
+            "status": final_finish_reason,
+        }
         if service_tier:
             resp["service_tier"] = service_tier
         # Carry incomplete_details so the formatter maps finish_reason for incomplete

@@ -16,7 +16,7 @@ def _format_memory(memory):
 
 class ConversationService:
     @staticmethod
-    def createOpenAiConversation(conversation, memory, files):
+    def createOpenAiConversation(conversation, memory, files, include_history=True):
         try:
             threads = []
             # Track distinct PDF URLs across the entire conversation
@@ -30,38 +30,39 @@ class ConversationService:
                     }
                 )
                 threads.append({"role": "assistant", "content": f"Summary of previous conversations :  {_format_memory(memory)}"})
-            for message in conversation or []:
-                if message['role'] not in ["tools_call", "tool"]:
-                    has_media = 'user_urls' in message and isinstance(message['user_urls'], list) and len(message['user_urls']) > 0
-                    content_text = message.get('content') or ""
-                    
-                    if not content_text.strip() and not has_media:
-                        continue
-                    
-                    if message['role'] == "assistant":
-                        content = [{"type": "output_text", "text": content_text if content_text else " "}]
-                    else:
-                        if has_media:
-                            content = []
-                            if content_text.strip():
-                                content.append({"type": "input_text", "text": content_text})
-                            
-                            for url in message['user_urls']:
-                                if url.get('type') == 'image':
-                                    content.append({
-                                        "type": "input_image",
-                                        "image_url": url.get('url')
-                                    })
-                                elif url.get('url') not in files and url.get('url') not in seen_pdf_urls:
-                                    content.append({
-                                        "type": "input_file",
-                                        "file_url": url.get('url')
-                                    })
-                                    seen_pdf_urls.add(url.get('url'))
+            if include_history:
+                for message in conversation or []:
+                    if message['role'] not in ["tools_call", "tool"]:
+                        has_media = 'user_urls' in message and isinstance(message['user_urls'], list) and len(message['user_urls']) > 0
+                        content_text = message.get('content') or ""
+                        
+                        if not content_text.strip() and not has_media:
+                            continue
+                        
+                        if message['role'] == "assistant":
+                            content = [{"type": "output_text", "text": content_text if content_text else " "}]
                         else:
-                            content = content_text if content_text else " "
-                    
-                    threads.append({'role': message['role'], 'content': content})
+                            if has_media:
+                                content = []
+                                if content_text.strip():
+                                    content.append({"type": "input_text", "text": content_text})
+                                
+                                for url in message['user_urls']:
+                                    if url.get('type') == 'image':
+                                        content.append({
+                                            "type": "input_image",
+                                            "image_url": url.get('url')
+                                        })
+                                    elif url.get('url') not in files and url.get('url') not in seen_pdf_urls:
+                                        content.append({
+                                            "type": "input_file",
+                                            "file_url": url.get('url')
+                                        })
+                                        seen_pdf_urls.add(url.get('url'))
+                            else:
+                                content = content_text if content_text else " "
+                        
+                        threads.append({'role': message['role'], 'content': content})
             
             return {
                 'success': True, 

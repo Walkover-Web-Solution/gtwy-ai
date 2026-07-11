@@ -182,15 +182,20 @@ class BaseService:
                     configuration['messages'].append(mapping_response_data[tool_calls_id])
                 case 'openai':
                     should_sanitize_openai_items = bool(self.stream_mode)
+                    is_chained = bool(configuration.get("previous_response_id"))
 
-                    # First, add all reasoning outputs to the configuration
-                    for output in response["output"]:
-                        if output.get("type") == "reasoning":
-                            configuration["input"].append(
-                                sanitize_openai_response_item(output)
-                                if should_sanitize_openai_items
-                                else output
-                            )
+                    # When chaining via previous_response_id, reasoning and
+                    # function_call items are already part of the linked response,
+                    # so only new function_call_output items should be appended.
+                    if not is_chained:
+                        # First, add all reasoning outputs to the configuration
+                        for output in response["output"]:
+                            if output.get("type") == "reasoning":
+                                configuration["input"].append(
+                                    sanitize_openai_response_item(output)
+                                    if should_sanitize_openai_items
+                                    else output
+                                )
 
                     # Then handle function calls using the index parameter
                     function_call_outputs = [
@@ -202,7 +207,8 @@ class BaseService:
                             if should_sanitize_openai_items
                             else function_call_outputs[index]
                         )
-                        configuration['input'].append(output)
+                        if not is_chained:
+                            configuration['input'].append(output)
                         tool_calls_id = output['id']
                         configuration['input'].append({                           
                             "type": "function_call_output",
