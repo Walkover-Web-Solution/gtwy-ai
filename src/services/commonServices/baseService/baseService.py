@@ -56,6 +56,47 @@ executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
 STREAM_SAME_MODEL_MAX_RETRIES = 1
 
 
+def extract_web_search_calls(service: str, model_response: dict) -> dict:
+    """
+    Pull built-in web_search tool invocations performed by the LLM provider
+    out of the raw model response and return a {call_id: entry} dict shaped
+    like the client-side tool_call_logs entries.
+    """
+    if not isinstance(model_response, dict):
+        return {}
+
+    if service != service_name["openai"]:
+        return {}
+
+    entries: dict = {}
+    for item in model_response.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type not in ("web_search_call", "web_search"):
+            continue
+        call_id = item.get("id") or f"web_search_{len(entries)}"
+        action = item.get("action") or {}
+        status = item.get("status")
+        entries[call_id] = {
+            "name": "web_search",
+            "id": "web_search",
+            "type": "web_search",
+            "source": "server_side",
+            "args": action,
+            "data": {
+                "response": None,
+                "metadata": {
+                    "type": "web_search",
+                    "source": "server_side",
+                    "status": status,
+                },
+                "status": 1 if status == "completed" else 0,
+            },
+        }
+    return entries
+
+
 class BaseService:
     def __init__(self, params):
         self.customConfig = params.get("customConfig")
@@ -383,9 +424,12 @@ class BaseService:
             original_message = f"Query is successfully transferred to agent {agent_name}"
 
         server_side_mcp = extract_server_side_mcp_calls(self.service, model_response)
+        web_search_calls = extract_web_search_calls(self.service, model_response)
         tools_call_data = list(self.func_tool_call_data or [])
         if server_side_mcp:
             tools_call_data.append(server_side_mcp)
+        if web_search_calls:
+            tools_call_data.append(web_search_calls)
 
         return {
             "thread_id": self.thread_id,
