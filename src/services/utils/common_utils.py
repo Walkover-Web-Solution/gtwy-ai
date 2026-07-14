@@ -1882,7 +1882,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         result.setdefault("response", {}).setdefault("usage", {})
         result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
 
-        if parsed_data.get("_reviewer_bridge_id"):
+        if parsed_data.get("_reviewer_bridge_id") or parsed_data.get("_reviewer_prompt") or parsed_data.get("_reviewer_tools"):
             from src.services.commonServices.reviewer_service import run_review_loop
 
             result, _reviewer_summary = await run_review_loop(

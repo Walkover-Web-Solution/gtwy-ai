@@ -230,6 +230,19 @@ async def _prepare_configuration_response(
     add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag)
     web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
 
+    # Fetch reviewer tools definitions if configured
+    reviewer_tools_data = bridges.get("reviewer_tools_data") or []
+    reviewer_tools_resolved = []
+    if reviewer_tools_data:
+        tool_doc = reviewer_tools_data[0]
+        script_id = tool_doc.get("script_id")
+        if script_id:
+            reviewer_tools_resolved.append({
+                "script_id": script_id,
+                "title": tool_doc.get("title") or script_id,
+                "_id": str(tool_doc.get("_id", "")),
+            })
+
     base_config = {
         "configuration": configuration,
         "pre_tools_data": pre_tools_data_for_later,
@@ -269,7 +282,9 @@ async def _prepare_configuration_response(
         "cache_on": cache_on,
         "richui_templates": bridges.get("richui_templates"),
         "meta": bridges.get("meta"),
-        "reviewer_agent": str(bridges.get("settings", {}).get("reviewer_agent") or ""),
+        "reviewer_agent": str(bridges.get("settings", {}).get("review_agent", {}).get("reviewer_agent") or ""),
+        "reviewer_prompt": str(bridges.get("settings", {}).get("review_agent", {}).get("reviewer_prompt") or ""),
+        "reviewer_tools": reviewer_tools_resolved,
         "api_collection": apikey_src,
         "limit": {
             "bridge": {
@@ -382,7 +397,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited, environm
             nested = await _collect_connected_agent_configs(child_agent_data, org_id, visited, environment=resolved_env)
             aggregated_configs.update(nested)
 
-    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("reviewer_agent")
+    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("review_agent", {}).get("reviewer_agent")
     reviewer_bridge_id = str(reviewer_bridge_id_raw) if reviewer_bridge_id_raw else ""
     if reviewer_bridge_id and reviewer_bridge_id not in visited:
         try:
