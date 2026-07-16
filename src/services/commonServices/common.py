@@ -918,6 +918,8 @@ async def batch(request_body):
 async def image(request_body):
     result = {}
     class_obj = {}
+    params = None
+    timer = None
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
