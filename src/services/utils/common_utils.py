@@ -439,7 +439,7 @@ async def load_model_configuration(model, configuration, service):
         ):
             if config.get("level") == 0 and key not in configuration:
                 continue
-            if configuration.get(key):
+            if key in configuration and configuration[key] is not None:
                 custom_config[key] = configuration[key]
 
     return model_obj, custom_config, model_output_config
