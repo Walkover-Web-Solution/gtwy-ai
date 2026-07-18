@@ -403,6 +403,22 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "as": "reviewer_tools_data",
                 }
             },
+            # Stage 6.5: Extract bridge-level post_tool if configured
+            # Structure: {id: "ObjectId", script_id: "actual-script-id", args: {...}}
+            {
+                "$addFields": {
+                    "bridge_post_tool": {
+                        "$cond": [
+                            {"$and": [
+                                {"$ne": ["$post_tool", None]},
+                                {"$eq": [{"$type": "$post_tool"}, "object"]}
+                            ]},
+                            "$post_tool",
+                            None
+                        ]
+                    }
+                }
+            },
             # Stage 7: Extract bridge_ids from connected_agents if it exists
             {
                 "$addFields": {
@@ -924,52 +940,18 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                         }
                     }
                 },
-                # Stage 8b: Lookup folder post_tool from apicalls collection
-                {
-                    "$lookup": {
-                        "from": "apicalls",
-                        "let": {
-                            "post_tool_id_obj": {
-                                "$cond": [
-                                    {"$ne": ["$config.post_tool_id", None]},
-                                    {
-                                        "$convert": {
-                                            "input": "$config.post_tool_id",
-                                            "to": "objectId",
-                                            "onError": None,
-                                            "onNull": None,
-                                        }
-                                    },
-                                    None,
-                                ]
-                            }
-                        },
-                        "pipeline": [
-                            {"$match": {"$expr": {"$eq": ["$_id", "$$post_tool_id_obj"]}}},
-                            {
-                                "$addFields": {
-                                    "_id": {"$toString": "$_id"},
-                                    "bridge_ids": {
-                                        "$map": {
-                                            "input": "$bridge_ids",
-                                            "as": "bid",
-                                            "in": {"$toString": "$$bid"},
-                                        }
-                                    },
-                                }
-                            },
-                        ],
-                        "as": "folder_post_tool_docs",
-                    }
-                },
-                # Stage 8c: Extract folder_post_tool
+                # Stage 8b: Extract folder post_tool object directly from config.post_tool
                 {
                     "$addFields": {
                         "folder_post_tool": {
                             "$cond": [
-                                {"$gt": [{"$size": "$folder_post_tool_docs"}, 0]},
-                                {"$arrayElemAt": ["$folder_post_tool_docs", 0]},
-                                None,
+                                {"$and": [
+                                    {"$ne": ["$config.post_tool", None]},
+                                    {"$eq": [{"$type": "$config.post_tool"}, "object"]},
+                                    {"$ne": ["$config.post_tool.id", None]}
+                                ]},
+                                "$config.post_tool",
+                                None
                             ]
                         }
                     }
@@ -1059,17 +1041,15 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     bridge_data["pre_tools_data"].append(folder_pre_tool)
                     bridge_data["pre_tools"].append(pre_tool_data_entry)
 
-            # Merge folder_post_tool into bridge_data
+            # Merge folder_post_tool into bridge_data (will be overridden by bridge_post_tool if present)
             if folder_result and folder_result[0].get("folder_post_tool"):
                 bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
 
-            # Merge folder_post_tool into bridge_data
-            if folder_result and folder_result[0].get("folder_post_tool"):
-                bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
-
-            # Merge folder_post_tool into bridge_data
-            if folder_result and folder_result[0].get("folder_post_tool"):
-                bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
+            # Bridge-level post_tool takes precedence - merge into single "post_tool" field
+            if bridge_data.get("bridge_post_tool"):
+                bridge_data["post_tool"] = bridge_data.pop("bridge_post_tool")
+            elif bridge_data.get("folder_post_tool"):
+                bridge_data["post_tool"] = bridge_data.pop("folder_post_tool")
 
             # Merge folder variables_path into bridge's variables_path
             if folder_result and folder_result[0].get("variables_path"):

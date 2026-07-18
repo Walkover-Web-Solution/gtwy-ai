@@ -192,15 +192,17 @@ async def _prepare_configuration_response(
                 "config": tool_config,
                 "args": tool_args,
             })
-    raw_post_tool = bridges.get("folder_post_tool") or {}
-    raw_post_tool_script_id = raw_post_tool.get('script_id', {}) if raw_post_tool else {}
+    
+    # Handle post_tool: single field with bridge-level taking precedence over folder-level
+    # The merge is handled in ConfigurationServices pipeline
+    raw_post_tool = bridges.get("post_tool") or {}
+    
     post_tool_data = None
     if raw_post_tool:
-        variables_path_post_tool = bridges.get("variables_path", {}).get(raw_post_tool_script_id, {})
         post_tool_data = {
-            **raw_post_tool,
-            "args": variables_path_post_tool,
-            "config": raw_post_tool.get("config", {}),
+            "script_id": raw_post_tool.get("script_id"),
+            "args": raw_post_tool.get("args", {}),
+            "_id": raw_post_tool.get("id") or raw_post_tool.get("_id"),
         }
 
     rag_data = bridges.get("doc_ids")

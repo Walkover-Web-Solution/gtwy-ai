@@ -49,9 +49,10 @@ def extract_cache_tags(bridge_response: dict, environment: str | None = None) ->
             if isinstance(pre, dict):
                 _add(tag_keys["tool"], pre.get("_id"))
 
-    folder_post_tool = bridge.get("folder_post_tool")
-    if isinstance(folder_post_tool, dict):
-        _add(tag_keys["tool"], folder_post_tool.get("_id"))
+    # Handle post_tool (merged from bridge or folder level in pipeline)
+    post_tool = bridge.get("post_tool")
+    if isinstance(post_tool, dict):
+        _add(tag_keys["tool"], post_tool.get("id") or post_tool.get("_id"))
 
     apikey_object_id = bridge.get("apikey_object_id")
     if isinstance(apikey_object_id, dict):
