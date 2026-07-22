@@ -1920,6 +1920,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         await process_background_tasks(
             parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
         )
+        asyncio.create_task(update_cost_and_last_used(parsed_data))
 
         if class_obj.streamer:
             if isinstance(result, dict) and result.get("error"):
