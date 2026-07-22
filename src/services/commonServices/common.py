@@ -364,6 +364,7 @@ async def chat(request_body):
             sync_injected_stream_call = bool(
                 (request_body.get("body", {}) if isinstance(request_body, dict) else {}).get("_sync_injected_stream_call")
             )
+            completion_success = False
             if injected_streamer:
                 if sync_injected_stream_call:
                     return await sse_stream_and_finalize(
