@@ -296,6 +296,7 @@ async def process_single_testcase(
             settings["fall_back"]["is_enable"] = False
 
         # Create request data for this testcase
+        primary_bridge_id = db_config.get("bridge_id")
         testcase_request_data = {
             "body": {
                 "user": testcase.get("conversation", [])[-1].get("content", "") if testcase.get("conversation") else "",
@@ -309,6 +310,7 @@ async def process_single_testcase(
                     "is_overridden": bool(db_config.get("_testcase_model_overridden")),
                 },
                 **db_config,
+                "bridge_configurations": {primary_bridge_id: db_config} if primary_bridge_id else {},
             },
             "state": {"version": 2, "timer": [time.time()]},
         }
