@@ -308,6 +308,7 @@ async def process_single_testcase(
         ]
 
         # Create request data for this testcase
+        primary_bridge_id = db_config.get("bridge_id")
         testcase_request_data = {
             "body": {
                 "message_id": message_id,
@@ -322,6 +323,7 @@ async def process_single_testcase(
                     "is_overridden": bool(db_config.get("_testcase_model_overridden")),
                 },
                 **db_config,
+                "bridge_configurations": {primary_bridge_id: db_config} if primary_bridge_id else {},
                 # Placed after **db_config so attachment keys are not clobbered.
                 "user_urls": user_urls,
                 "files": pdf_files,
