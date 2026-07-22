@@ -233,7 +233,11 @@ def parse_request_body(request_body):
         "variables_state": body.get("agent_info", {}).get("variables_state"),
         "built_in_tools": body.get("built_in_tools") or [],
         "thread_flag": body.get("thread_flag") or False,
-        "files": body.get("files") or [],
+        "files":[
+            url.get("url")
+            for url in body.get("user_urls", [])
+            if isinstance(url, dict) and url.get("url")
+        ],
         "fall_back": body.get("settings", {}).get("fall_back") or {},
         "skip_history": body.get("skip_history", False),
         "guardrails": body.get("settings", {}).get("guardrails") or {},
