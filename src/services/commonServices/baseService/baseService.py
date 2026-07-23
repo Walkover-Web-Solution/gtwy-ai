@@ -7,7 +7,7 @@ import pydash as _
 
 from config import Config
 from globals import logger
-from src.configs.serviceKeys import ServiceKeys
+from src.configs.serviceKeys import get_service_keys
 from src.configs.service_registry import has_openai_choices_shape, supports_tool_calls, uses_openai_sdk
 
 from ....configs.constant import service_name
@@ -364,6 +364,7 @@ class BaseService:
                     service_name["open_router"],
                     service_name["neev_cloud"],
                     service_name["moonshot"],
+                    service_name["minimax"],
                     service_name["gemini"],
                 ]:
                     _.set_(
@@ -448,8 +449,9 @@ class BaseService:
 
     def service_formatter(self, configuration: object, service: str):  # changes
         try:
+            service_keys = get_service_keys(service)
             new_config = {
-                ServiceKeys[service].get(self.type, ServiceKeys[service]["default"]).get(key, key): value
+                service_keys.get(self.type, service_keys["default"]).get(key, key): value
                 for key, value in configuration.items()
             }
 
