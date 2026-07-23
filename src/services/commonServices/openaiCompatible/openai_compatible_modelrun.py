@@ -31,6 +31,7 @@ async def openai_compatible_stream(configuration, apiKey, service):
     accumulated_tool_calls = {}
     usage = {}
     finish_reason = None
+    in_thinking_block = False  # Track if we're inside a thinking block
     try:
         stream = await client.chat.completions.create(**config)
         async for chunk in stream:
@@ -46,7 +47,17 @@ async def openai_compatible_stream(configuration, apiKey, service):
                 if reasoning_delta:
                     yield {"content": None, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": reasoning_delta}
             if delta.content:
-                yield {"content": delta.content, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
+                content = delta.content
+                # Filter out content within <thinking> tags for all services
+                if "</think>" in content:
+                    in_thinking_block = True
+                    content = content.replace("</think>", "")
+                if "</think>" in content:
+                    in_thinking_block = False
+                    content = content.replace("</think>", "")
+                # Only yield content if we're not in a thinking block
+                if not in_thinking_block and content:
+                    yield {"content": content, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     idx = tc.index

@@ -33,7 +33,7 @@ class TokenCalculator:
     def calculate_usage(self, model_response):
         usage = {}
         match self.service:
-            case "open_router" | "mistral" | "openai_completion" | "neev_cloud" | "moonshot":
+            case "open_router" | "mistral" | "openai_completion" | "neev_cloud" | "moonshot" | "minimax":
                 usage["inputTokens"] = (model_response.get("usage") or {}).get("prompt_tokens", 0)
                 usage["outputTokens"] = (model_response.get("usage") or {}).get("completion_tokens", 0)
                 usage["totalTokens"] = (model_response.get("usage") or {}).get("total_tokens", 0)
