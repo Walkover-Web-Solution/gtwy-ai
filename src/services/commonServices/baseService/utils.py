@@ -342,7 +342,7 @@ def reasoning_formatter(service: str, new_config: dict) -> None:
         new_config["reasoning_effort"] = effort
         new_config.pop("reasoning", None)
 
-    elif service == service_name["deepseek"]:
+    elif service in (service_name["deepseek"], service_name["minimax"]):
         effort = new_config["reasoning"].get("effort", "medium")
         new_config["reasoning_effort"] = effort
         new_config["extra_body"] = {"thinking": {"type": "enabled"}}

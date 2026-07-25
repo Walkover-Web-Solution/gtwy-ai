@@ -48,10 +48,10 @@ async def openai_compatible_stream(configuration, apiKey, service):
                     yield {"content": None, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": reasoning_delta}
             if delta.content:
                 content = delta.content
-                # Filter out content within <thinking> tags for all services
-                if "</think>" in content:
+                # Filter out content within <think> tags for all services
+                if "<think>" in content:
                     in_thinking_block = True
-                    content = content.replace("</think>", "")
+                    content = content.replace("<think>", "")
                 if "</think>" in content:
                     in_thinking_block = False
                     content = content.replace("</think>", "")
