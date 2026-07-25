@@ -96,7 +96,10 @@ tag_keys = {
 
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
 
-inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
+inbuild_tools = {
+    "Gtwy_Web_Search": "Gtwy_Web_Search",
+    "get_gpt_memory": "get_gpt_memory",
+}
 
 VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
 

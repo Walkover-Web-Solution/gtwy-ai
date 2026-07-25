@@ -656,6 +656,31 @@ async def handle_post_tool(parsed_data, result):
         if isinstance(result, dict) and result.get("response", {}).get("data") is not None:
             result["response"]["data"]["content"] = post_tool_response.get("response")
 
+
+def take_last_conversation_turn(messages):
+    """
+    Keep only the last conversation turn for the LLM.
+
+    A turn starts at the last message with role "user" and includes everything
+    after it (optional tools_call, assistant, etc.).
+    """
+    if not messages:
+        return []
+    if not isinstance(messages, list):
+        return messages
+
+    last_user_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], dict) and messages[i].get("role") == "user":
+            last_user_idx = i
+            break
+
+    if last_user_idx is None:
+        return messages[-1:] if messages else []
+
+    return messages[last_user_idx:]
+
+
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
     sub_thread_id = parsed_data["sub_thread_id"]
@@ -677,15 +702,18 @@ async def manage_threads(parsed_data):
         cached_conversations = await find_in_cache(redis_key)
 
         if cached_conversations:
-            # Use cached conversations from Redis
-            parsed_data["configuration"]["conversation"] = json.loads(cached_conversations)
-            result = json.loads(cached_conversations)
+            # Use cached conversations from Redis (may hold more than one turn)
+            result = take_last_conversation_turn(json.loads(cached_conversations))
+            parsed_data["configuration"]["conversation"] = result
             logger.info(f"Retrieved conversations from Redis cache: {redis_key}")
         else:
-            # Fallback to database if not in cache
+            # Fallback to database if not in cache (DB already limited to last 1 turn)
             result = await try_catch(getThread, thread_id, sub_thread_id, org_id, bridge_id)
             if result:
+                result = take_last_conversation_turn(result)
                 parsed_data["configuration"]["conversation"] = result or []
+            else:
+                result = []
     else:
         thread_id = str(uuid.uuid1())
         sub_thread_id = thread_id
@@ -749,7 +777,8 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
         id = f"{thread_info['thread_id']}_{thread_info['sub_thread_id']}_{parsed_data.get('version_id') or parsed_data.get('bridge_id')}"
         parsed_data["id"] = id
         if gpt_memory:
-            _memory_id, raw_memory = await get_gpt_memory(
+            # Every request: load GPT memory from cache / Sokt plug, then normalize to pages
+            memory_id, raw_memory = await get_gpt_memory(
                 bridge_id=parsed_data.get("bridge_id"),
                 thread_id=thread_info["thread_id"],
                 sub_thread_id=thread_info["sub_thread_id"],
@@ -757,6 +786,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             memory = parse_memory(raw_memory)
             parsed_data["memory"] = memory
+            parsed_data["memory_id"] = memory_id
         configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
             configuration.get("prompt") or "", variables
         )

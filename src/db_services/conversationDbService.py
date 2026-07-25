@@ -43,7 +43,7 @@ async def find_conversation_logs(org_id, thread_id, sub_thread_id, bridge_id):
                 )
             )
             .order_by(ConversationLog.created_at.desc())
-            .limit(3)
+            .limit(1)
             .all()
         )
         log_slow_call("PG query find_conversation_logs", _time.time() - _t, SLOW_CALL_THRESHOLDS["pg"])

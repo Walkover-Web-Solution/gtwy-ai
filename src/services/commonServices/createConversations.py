@@ -1,4 +1,3 @@
-import json
 import mimetypes
 import traceback
 from urllib.parse import urlparse
@@ -6,12 +5,6 @@ from urllib.parse import urlparse
 from globals import logger
 
 from ..utils.apiservice import fetch_images_b64
-
-
-def _format_memory(memory):
-    if isinstance(memory, dict):
-        return json.dumps(memory, ensure_ascii=False)
-    return memory
 
 
 class ConversationService:
@@ -22,14 +15,9 @@ class ConversationService:
             # Track distinct PDF URLs across the entire conversation
             seen_pdf_urls = set()
 
-            if memory is not None:
-                threads.append(
-                    {
-                        "role": "user",
-                        "content": "provide the summary of the previous conversation stored in the memory?",
-                    }
-                )
-                threads.append({"role": "assistant", "content": f"Summary of previous conversations :  {_format_memory(memory)}"})
+            # GPT memory is no longer injected into history; it will be exposed via tool later.
+            # `memory` is kept in the signature for call-site compatibility.
+            _ = memory
             for message in conversation or []:
                 if message['role'] not in ["tools_call", "tool"]:
                     has_media = 'user_urls' in message and isinstance(message['user_urls'], list) and len(message['user_urls']) > 0
@@ -79,10 +67,8 @@ class ConversationService:
                 conversation = []
             threads = []
             # Track distinct PDF URLs across the entire conversation
-
-            if memory is not None:
-                threads.append({"role": "user", "content": [{"type": "text", "text": f"GPT-Memory Data:- {_format_memory(memory)}"}]})
-                threads.append({"role": "assistant", "content": [{"type": "text", "text": "memory updated."}]})
+            # GPT memory is no longer injected into history; kept for call-site compatibility.
+            _ = memory
 
             # Process image URLs if present
             image_urls = [url.get("url") for message in conversation for url in message.get("user_urls", [])]
@@ -147,9 +133,8 @@ class ConversationService:
         try:
             threads = []
 
-            # If memory is provided, add it as the first message
-            if memory is not None:
-                threads.append({"role": "user", "content": _format_memory(memory)})
+            # GPT memory is no longer injected into history; kept for call-site compatibility.
+            _ = memory
 
             # Loop through the conversation to build the message threads
             for message in conversation or []:
@@ -185,14 +170,8 @@ class ConversationService:
         """
         try:
             threads = []
-            if memory is not None:
-                threads.append(
-                    {
-                        "role": "user",
-                        "content": "provide the summary of the previous conversation stored in the memory?",
-                    }
-                )
-                threads.append({"role": "assistant", "content": f"Summary of previous conversations :  {_format_memory(memory)}"})
+            # GPT memory is no longer injected into history; kept for call-site compatibility.
+            _ = memory
             for message in conversation or []:
                 if message["role"] != "tools_call" and message["role"] != "tool":
                     content = [{"type": "text", "text": message["content"]}]
@@ -216,10 +195,9 @@ class ConversationService:
         from google.genai import types
         try:
             contents = []
-            if memory is not None:
-                contents.append(types.Content(role='user', parts=[types.Part(text='Please Provide the summary of the previous conversation stored in the memory.')]))
-                contents.append(types.Content(role='model', parts=[types.Part(text=f'Summary of previous conversations: {_format_memory(memory)}')]))
-            
+            # GPT memory is no longer injected into history; kept for call-site compatibility.
+            _ = memory
+
             for message in conversation or []:
                 role = message.get('role')
                 if role not in {'tools_calls', "tools"}:
