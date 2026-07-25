@@ -345,7 +345,10 @@ def reasoning_formatter(service: str, new_config: dict) -> None:
     elif service in (service_name["deepseek"], service_name["minimax"]):
         effort = new_config["reasoning"].get("effort", "medium")
         new_config["reasoning_effort"] = effort
-        new_config["extra_body"] = {"thinking": {"type": "enabled"}}
+        extra_body = {"thinking": {"type": "enabled"}}
+        if service == service_name["minimax"]:
+            extra_body["reasoning_split"] = True
+        new_config["extra_body"] = extra_body
         new_config.pop("reasoning", None)
 
     # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
