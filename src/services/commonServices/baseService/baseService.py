@@ -458,6 +458,11 @@ class BaseService:
             if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
 
+            if service == service_name["minimax"]:
+                extra_body = dict(new_config.get("extra_body") or {})
+                extra_body["reasoning_split"] = True
+                new_config["extra_body"] = extra_body
+
             mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
             mcp_active = bool(mcp_config and mcp_config.get("servers"))
             mcp_type = resolve_mcp_type(service, self.model) if mcp_active else None
