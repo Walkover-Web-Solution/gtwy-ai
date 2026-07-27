@@ -1,7 +1,8 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config import Config
@@ -15,6 +16,8 @@ from src.services.utils.helper import queue_rerun_messages
 from ...middlewares.getDataUsingBridgeId import add_configuration_data_to_body
 from ...middlewares.middleware import jwt_middleware
 from src.middlewares.openai_sdk_middleware import openai_sdk_middleware
+from src.schemas.batch_schemas import BatchChatCompletionRequest
+from src.schemas.completion_schemas import CompletionRequest
 from src.services.utils.openai_sdk_utils import run_openai_chat_and_format
 
 router = APIRouter()
@@ -29,7 +32,7 @@ async def auth_and_rate_limit(request: Request):
 
 
 @router.post("/chat/completion", dependencies=[Depends(auth_and_rate_limit)])
-async def chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+async def chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body(CompletionRequest))):
     request.state.version = 2
     data_to_send = await make_request_data(request)
     is_playground = data_to_send.get("body", {}).get("is_playground", False)
@@ -74,12 +77,12 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         return result
 
 @router.post('/openai/responses', dependencies=[Depends(openai_sdk_middleware)])
-async def openai_sdk_responses(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+async def openai_sdk_responses(request: Request, db_config: dict = Depends(add_configuration_data_to_body(CompletionRequest))):
     return await run_openai_chat_and_format(request, db_config, chat_completion)
 
 
 @router.post("/batch/chat/completion", dependencies=[Depends(auth_and_rate_limit)])
-async def batch_chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+async def batch_chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body(BatchChatCompletionRequest))):
     data_to_send = await make_request_data(request)
     result = await batch(data_to_send)
     return result
@@ -147,7 +150,7 @@ async def run_testcases_route(request: Request):
 
 
 @router.post("/rerun", dependencies=[Depends(auth_and_rate_limit)])
-async def rerun_messages_route(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+async def rerun_messages_route(request: Request, db_config: dict = Depends(add_configuration_data_to_body(schema_class=None))):
     """
     Rerun previous messages with current bridge configuration.
     Each message is pushed to the queue for async processing.

@@ -77,7 +77,7 @@ async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMe
                 **json.loads(profile.get("variables", "{}")),
             },
             "settings": {
-                **body.configuration.get("settings", {}),
+                **(body.configuration.settings.model_dump(exclude_none=True) if body.configuration and body.configuration.settings else {}),
                 "response_format": {"type": "default", "cred": {}}
                 if flag
                 else {"type": "RTLayer", "cred": {"channel": channelId, "ttl": 1, "apikey": Config.RTLAYER_AUTH}},
@@ -88,7 +88,7 @@ async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMe
             "actions": actions,
             "bridge_summary": bridges.get("bridge_summary"),
         }
-        db_config = await add_configuration_data_to_body(request=request)
+        db_config = await add_configuration_data_to_body(schema_class=None)(request=request)
 
         return await chat_completion(request=request, db_config=db_config)
     except HTTPException as http_error:
