@@ -233,7 +233,7 @@ def parse_request_body(request_body):
         "variables_state": body.get("agent_info", {}).get("variables_state"),
         "built_in_tools": body.get("built_in_tools") or [],
         "thread_flag": body.get("thread_flag") or False,
-        "files":[
+        "files": body.get("files") or [
             url.get("url")
             for url in body.get("user_urls", [])
             if isinstance(url, dict) and url.get("url")
