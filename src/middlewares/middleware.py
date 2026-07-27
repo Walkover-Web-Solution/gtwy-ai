@@ -5,6 +5,7 @@ from fastapi import HTTPException, Request
 
 from config import Config
 from globals import logger
+from src.configs.blocked_orgs import is_org_blocked
 from src.services.proxy.Proxyservice import (
     get_proxy_details_by_token,
     validate_proxy_pauthkey,
@@ -88,6 +89,8 @@ async def jwt_middleware(request: Request):
             check_token['org']['id'] = str(check_token['org']['id'])
             request.state.profile = check_token
             request.state.org_id = str(check_token.get('org', {}).get('id'))
+            if await is_org_blocked(request.state.org_id):
+                raise HTTPException(status_code=403, detail="Organization is disabled")
             meta = check_token['user'].get('meta', {})
             if isinstance(meta, dict):
                 request.state.embed = meta.get('type', False) == 'embed' or False
@@ -98,6 +101,8 @@ async def jwt_middleware(request: Request):
             return 
         
         raise HTTPException(status_code=404, detail="unauthorized user")        
+    except HTTPException:
+            raise
     except Exception as err:
             traceback.print_exc()
             logger.error(f"middleware error => {str(err)}")
