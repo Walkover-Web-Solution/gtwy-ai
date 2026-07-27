@@ -373,6 +373,19 @@ class BaseService:
                         _.get(funcModelResponse, self.modelOutputConfig["tools"]),
                     )
 
+            if has_openai_choices_shape(self.service):
+                final_reason = _.get(funcModelResponse, "choices.0.finish_reason")
+                if final_reason is not None:
+                    _.set_(model_response, "choices.0.finish_reason", final_reason)
+            elif self.service == service_name["anthropic"]:
+                final_reason = funcModelResponse.get("stop_reason")
+                if final_reason is not None:
+                    model_response["stop_reason"] = final_reason
+            elif self.service == service_name["gemini"]:
+                final_reason = _.get(funcModelResponse, "candidates.0.finish_reason")
+                if final_reason is not None:
+                    _.set_(model_response, "candidates.0.finish_reason", final_reason)
+
     def prepare_history_params(self, response, model_response, tools, transfer_agent_config=None, is_cached=False):
         # Get the original message content
         original_message = response.get("data", {}).get("content") or ""

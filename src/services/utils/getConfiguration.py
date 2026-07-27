@@ -177,6 +177,7 @@ async def _prepare_configuration_response(
     template_content = await ConfigurationService.get_template_by_id(template_id) if template_id else None
 
     # Pre-tools — build list for later processing in chat_multiple_agents
+    # Title is already merged into pre_tools entries by the MongoDB pipeline
     pre_tools_data_for_later = []
     raw_pre_tools = bridges.get("pre_tools", [])
 
@@ -187,22 +188,25 @@ async def _prepare_configuration_response(
             tool_type = tool_entry.get("type")
             tool_config = tool_entry.get("config", {})
             tool_args = tool_entry.get("args", {})
+            entry_title = tool_entry.get("title")
             pre_tools_data_for_later.append({
                 "_type": tool_type,
                 "config": tool_config,
                 "args": tool_args,
+                "title": entry_title,
             })
     
     # Handle post_tool: single field with bridge-level taking precedence over folder-level
     # The merge is handled in ConfigurationServices pipeline
     raw_post_tool = bridges.get("post_tool") or {}
-    
+
     post_tool_data = None
     if raw_post_tool:
         post_tool_data = {
             "script_id": raw_post_tool.get("script_id"),
             "args": raw_post_tool.get("args", {}),
             "_id": raw_post_tool.get("id") or raw_post_tool.get("_id"),
+            "title": raw_post_tool.get("title"),
         }
 
     rag_data = bridges.get("doc_ids")

@@ -18,6 +18,7 @@ class StreamingService:
         self.rtlayer_cred = rtlayer_cred or {}
         self.queue = asyncio.Queue() if mode == "sse" else None
         self._started = False
+        self.redirect_delta_to_reasoning = False
 
     async def _emit(self, payload: dict):
         if self.mode == "sse":
@@ -41,6 +42,9 @@ class StreamingService:
         })
 
     async def emit_delta(self, content: str):
+        if self.redirect_delta_to_reasoning:
+            await self._emit({"event": "reasoning", "content": content})
+            return
         await self._emit({"event": "delta", "content": content})
 
     async def emit_reasoning(self, content: str):

@@ -84,6 +84,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
         resolved_tools.append({
             "type": "custom_function",
             "name": tool_config.get("script_id"),
+            "title": tool.get("title"),
             "args": resolved_args,
         })
     else:
@@ -91,6 +92,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
             "type": tool_type,
             "args": resolved_args,
             "config": tool_config,
+            "title": tool.get("title"),
         })
     
     return resolved_tools
@@ -497,7 +499,7 @@ async def handle_pre_tools(parsed_data, custom_config, timer = None):
                     "data": pre_tool_response,
                     "type": "pre_tool",
                     "error": pre_tool_response.get("status", 0) != 1,
-                    "name": tool.get('name', "")
+                    "name": tool.get("title")
                 }
             except Exception as pre_func_err:
                 error_msg = f"Error while calling prefunction. Error message: {str(pre_func_err)}"
@@ -517,7 +519,7 @@ async def handle_pre_tools(parsed_data, custom_config, timer = None):
                     "data": {"response": str(pre_func_err), "status": 0},
                     "type": "pre_tool",
                     "error": True,
-                    "name": tool.get('name', "")
+                    "name": tool.get("title")
                 }
         
         elif tool_type == "query_refiner":
@@ -655,6 +657,7 @@ async def handle_post_tool(parsed_data, result):
     if post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
         if isinstance(result, dict) and result.get("response", {}).get("data") is not None:
             result["response"]["data"]["content"] = post_tool_response.get("response")
+    return post_tool_response
 
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
@@ -1672,6 +1675,11 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
     try:
         from src.services.commonServices.response_caching_service import handle_response_caching
 
+        # If post_tool is configured, route LLM delta content to reasoning during streaming
+        # so only the post_tool response is visible as delta content in the UI.
+        if parsed_data.get("post_tool_data") and class_obj.streamer:
+            class_obj.streamer.redirect_delta_to_reasoning = True
+
         try:
             result = await handle_response_caching(parsed_data=parsed_data, class_obj=class_obj)
                     # Validate JSON content when model was configured for JSON output.
@@ -1905,7 +1913,10 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
         formatted_response = result.get("response", {}) if isinstance(result, dict) else {}
 
-        await handle_post_tool(parsed_data, result)
+        # Only call handle_post_tool for non-streaming case here.
+        # For streaming, it's handled later so the post_tool response can be emitted as delta.
+        if not class_obj.streamer:
+            await handle_post_tool(parsed_data, result)
 
         await sendResponse(
             parsed_data.get("response_format"),
@@ -1916,6 +1927,12 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         )
         if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
             result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
+
+        # Handle post_tool before process_background_tasks so it's included in history
+        if class_obj.streamer:
+            post_tool_response = await handle_post_tool(parsed_data, result)
+        else:
+            post_tool_response = None
 
         await process_background_tasks(
             parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
@@ -1936,12 +1953,17 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 or (formatted_response.get("data") or {}).get("finish_reason")
                 or ""
             )
-            post_tool_response = await handle_post_tool(parsed_data, result)
+            # Emit post_tool response as delta if available
             if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                post_tool_content = post_tool_response.get("response")
+                # Disable redirect so post_tool response emits as delta (main UI content)
+                class_obj.streamer.redirect_delta_to_reasoning = False
+                await class_obj.streamer.emit_delta(str(post_tool_content))
+                # Update the response data for the final done event
                 if formatted_response.get("data") is not None:
-                    formatted_response["data"]["content"] = post_tool_response.get("response")
+                    formatted_response["data"]["content"] = post_tool_content
                 if result.get("response", {}).get("data") is not None:
-                    result["response"]["data"]["content"] = post_tool_response.get("response")
+                    result["response"]["data"]["content"] = post_tool_content
 
             if not is_nested_stream_call:
                 accumulated_payload = None if template_data else formatted_response
