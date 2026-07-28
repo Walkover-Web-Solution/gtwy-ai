@@ -1143,8 +1143,16 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             # Replace bridge response_type with folder response_type if present
             folder_response_type = folder_result[0].get("folder_response_type") if folder_result else None
             if folder_response_type and isinstance(folder_response_type, dict) and folder_response_type.get("type") == "json_schema":
-                bridge_data["configuration"]["response_type"]["mode"] = "custom"
-                bridge_data["configuration"]["response_type"]["value"] = folder_response_type
+                bridge_response_type = bridge_data.get("configuration", {}).get("response_type")
+                if isinstance(bridge_response_type, dict):
+                    bridge_data["configuration"]["response_type"]["mode"] = "custom"
+                    bridge_data["configuration"]["response_type"]["value"] = folder_response_type
+                else:
+                    # If bridge response_type is a string (e.g., "default"), replace it entirely
+                    bridge_data["configuration"]["response_type"] = {
+                        "mode": "custom",
+                        "value": folder_response_type
+                    }
             
             # Extract folder metadata
             if folder_result and folder_result[0].get("type"):
