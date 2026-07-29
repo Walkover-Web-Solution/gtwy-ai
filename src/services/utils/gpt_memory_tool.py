@@ -79,51 +79,24 @@ def build_gpt_memory_tool_prompt(memory: dict) -> str:
     )
 
 
-def _strip_previous_memory_prompt(prompt: str) -> str:
-    if not prompt:
-        return ""
-    start = prompt.find(GPT_MEMORY_PROMPT_START)
-    if start == -1:
-        legacy = "Long-term memory is available via the tool"
-        idx = prompt.find(legacy)
-        if idx == -1 or GPT_MEMORY_TOOL_NAME not in prompt[idx:]:
-            return prompt
-        return prompt[:idx].rstrip()
-
-    end = prompt.find(GPT_MEMORY_PROMPT_END)
-    if end == -1:
-        return prompt[:start].rstrip()
-    end += len(GPT_MEMORY_PROMPT_END)
-    return (prompt[:start] + prompt[end:]).strip()
-
-
-def _remove_existing_tool(tools: list, mapping: dict) -> None:
-    tools[:] = [
-        t for t in tools if not (isinstance(t, dict) and t.get("name") == GPT_MEMORY_TOOL_NAME)
-    ]
-    mapping.pop(GPT_MEMORY_TOOL_NAME, None)
-
-
 def attach_gpt_memory_tool(parsed_data: dict, memory: dict | None) -> None:
     """
     After memory is loaded for this request:
-      - pages/keys exist → register get_gpt_memory + refresh prompt inventory
+      - pages/keys exist → register get_gpt_memory + prompt inventory
       - no memory / empty pages → do not add tool or prompt text
     """
     if not parsed_data.get("gpt_memory"):
+        return
+
+    page_keys = get_memory_page_keys(memory)
+    if not page_keys:
         return
 
     configuration = parsed_data.setdefault("configuration", {})
     tools = configuration.setdefault("tools", [])
     mapping = parsed_data.setdefault("tool_id_and_name_mapping", {})
 
-    # Always clear previous registration (keys can change between turns)
-    _remove_existing_tool(tools, mapping)
-    configuration["prompt"] = _strip_previous_memory_prompt(configuration.get("prompt") or "")
-
-    page_keys = get_memory_page_keys(memory)
-    if not page_keys:
-        # No GPT memory for this thread — do not expose the tool or extra prompt text
+    if any(isinstance(t, dict) and t.get("name") == GPT_MEMORY_TOOL_NAME for t in tools):
         return
 
     tools.append(build_get_gpt_memory_tool(page_keys))

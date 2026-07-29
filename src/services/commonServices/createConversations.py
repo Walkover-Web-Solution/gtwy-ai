@@ -15,9 +15,6 @@ class ConversationService:
             # Track distinct PDF URLs across the entire conversation
             seen_pdf_urls = set()
 
-            # GPT memory is no longer injected into history; it will be exposed via tool later.
-            # `memory` is kept in the signature for call-site compatibility.
-            _ = memory
             for message in conversation or []:
                 if message['role'] not in ["tools_call", "tool"]:
                     has_media = 'user_urls' in message and isinstance(message['user_urls'], list) and len(message['user_urls']) > 0
@@ -67,8 +64,6 @@ class ConversationService:
                 conversation = []
             threads = []
             # Track distinct PDF URLs across the entire conversation
-            # GPT memory is no longer injected into history; kept for call-site compatibility.
-            _ = memory
 
             # Process image URLs if present
             image_urls = [url.get("url") for message in conversation for url in message.get("user_urls", [])]
@@ -133,9 +128,6 @@ class ConversationService:
         try:
             threads = []
 
-            # GPT memory is no longer injected into history; kept for call-site compatibility.
-            _ = memory
-
             # Loop through the conversation to build the message threads
             for message in conversation or []:
                 if message["role"] not in ["tools_call", "tool"]:  # Skip tool-related roles
@@ -170,8 +162,6 @@ class ConversationService:
         """
         try:
             threads = []
-            # GPT memory is no longer injected into history; kept for call-site compatibility.
-            _ = memory
             for message in conversation or []:
                 if message["role"] != "tools_call" and message["role"] != "tool":
                     content = [{"type": "text", "text": message["content"]}]
@@ -195,8 +185,6 @@ class ConversationService:
         from google.genai import types
         try:
             contents = []
-            # GPT memory is no longer injected into history; kept for call-site compatibility.
-            _ = memory
 
             for message in conversation or []:
                 role = message.get('role')
