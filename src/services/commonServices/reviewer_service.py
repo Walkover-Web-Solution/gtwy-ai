@@ -120,6 +120,9 @@ async def run_review_loop(
     reviewer_tokens_accum = _zero_tokens()  # only used for the returned summary
 
     main_response_text = _extract_response_text(main_result)
+    accumulated_tools_call_data = list(
+        (main_result.get("historyParams") or {}).get("tools_call_data") or []
+    )
     last_verdict = {"passed": False, "reason": ""}
     rounds_run = 0
     # Per-round records collected during the loop and published after it. Each
@@ -345,6 +348,9 @@ async def run_review_loop(
         parsed_data["usage"]["total_tokens"] = summed_main_tokens["total"]
         parsed_data["usage"]["expectedCost"] = summed_main_tokens["expected_cost"]
 
+        accumulated_tools_call_data.extend(
+            (new_main_result.get("historyParams") or {}).get("tools_call_data") or []
+        )
         main_result = new_main_result
         main_response_text = _extract_response_text(main_result)
 
@@ -360,6 +366,7 @@ async def run_review_loop(
             "passed": bool(last_verdict.get("passed")),
         }
         history_params["AiConfig"] = ai_config
+    history_params["tools_call_data"] = accumulated_tools_call_data
     main_result["historyParams"] = history_params
 
     if not reviewer_rounds:
