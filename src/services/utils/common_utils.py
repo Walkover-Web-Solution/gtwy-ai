@@ -632,7 +632,7 @@ async def handle_post_tool(parsed_data, result):
         }
         response_data = (result or {}).get("response", {}).get("data") if isinstance(result, dict) else None
         if response_data:
-            args["ai_response"] = response_data.get("content") or response_data
+            args["ai_response"] = response_data
 
         post_tool_response = await axios_work(
             args,
