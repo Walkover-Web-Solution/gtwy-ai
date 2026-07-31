@@ -136,6 +136,20 @@ async def send_usage_alert_email(mail_type: str, scope: str, parsed_data: dict, 
         return False
 
 
+async def _avg_daily_spend(scope: str, identifier: str, window_days: int) -> float:
+    """Average of the trailing ``window_days`` daily spend buckets (today excluded).
+
+    Returns 0.0 when there is no prior-day history yet.
+    """
+    today = _today()
+    date_strs = [_date_str(today - timedelta(days=i)) for i in range(1, int(window_days) + 1)]
+    values = await asyncio.gather(*(_read_bucket(_daily_key(scope, identifier, ds)) for ds in date_strs))
+    values = [v for v in values if v > 0]
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
 async def _check_threshold_and_limit(
     scope: str,
     identifier: str,
@@ -144,16 +158,20 @@ async def _check_threshold_and_limit(
     limit_value: float,
     reset_period: str,
     setup_date,
+    today_total: float
 ) -> None:
     """Send a threshold (e.g. 80%) email, then a limit-reached (100%) email."""
     percent = (usage_value / limit_value) if limit_value > 0 else 0.0
     # Markers re-arm each new period: TTL = time until the limit resets.
     ttl = calculate_limit_ttl(reset_period, setup_date)
+    avg_daily_spend = await _avg_daily_spend(scope, identifier, usage_alert_config["spike_window_days"])
     details = {
         "current_usage": round(usage_value, 6),
         "limit_value": limit_value,
         "percent_used": round(percent * 100, 2),
         "reset_period": reset_period,
+        "today_spend": today_total,
+        "avg_daily_spend": round(avg_daily_spend, 6),
     }
 
     if usage_value >= limit_value:
@@ -265,7 +283,7 @@ async def evaluate_usage_alerts(parsed_data: dict, redis_usage: dict | None = No
 
             await _check_spike(scope, identifier, parsed_data, today_total, usage_value, limit_value, reset_period)
             await _check_threshold_and_limit(
-                scope, identifier, parsed_data, usage_value, limit_value, reset_period, setup_date
+                scope, identifier, parsed_data, usage_value, limit_value, reset_period, setup_date, today_total
             )
 
     except Exception as e:

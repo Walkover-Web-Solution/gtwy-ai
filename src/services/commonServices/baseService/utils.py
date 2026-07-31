@@ -342,10 +342,12 @@ def reasoning_formatter(service: str, new_config: dict) -> None:
         new_config["reasoning_effort"] = effort
         new_config.pop("reasoning", None)
 
-    elif service == service_name["deepseek"]:
+    elif service in (service_name["deepseek"], service_name["minimax"]):
         effort = new_config["reasoning"].get("effort", "medium")
         new_config["reasoning_effort"] = effort
-        new_config["extra_body"] = {"thinking": {"type": "enabled"}}
+        extra_body = dict(new_config.get("extra_body") or {})
+        extra_body["thinking"] = {"type": "enabled"}
+        new_config["extra_body"] = extra_body
         new_config.pop("reasoning", None)
 
     # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
@@ -776,7 +778,8 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
     full_text = "".join(accumulated_content)
     if service in [service_name["groq"], service_name["grok"], service_name["deepseek"], 
                    service_name["open_router"], service_name["mistral"],
-                   service_name["neev_cloud"], service_name["moonshot"]]:
+                   service_name["neev_cloud"], service_name["moonshot"],
+                   service_name["minimax"]]:
         message = {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls or []}
         if accumulated_reasoning:
             message["reasoning_content"] = "".join(accumulated_reasoning)

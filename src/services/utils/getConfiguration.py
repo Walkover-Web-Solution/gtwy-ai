@@ -177,6 +177,7 @@ async def _prepare_configuration_response(
     template_content = await ConfigurationService.get_template_by_id(template_id) if template_id else None
 
     # Pre-tools — build list for later processing in chat_multiple_agents
+    # Title is already merged into pre_tools entries by the MongoDB pipeline
     pre_tools_data_for_later = []
     raw_pre_tools = bridges.get("pre_tools", [])
 
@@ -187,20 +188,25 @@ async def _prepare_configuration_response(
             tool_type = tool_entry.get("type")
             tool_config = tool_entry.get("config", {})
             tool_args = tool_entry.get("args", {})
+            entry_title = tool_entry.get("title")
             pre_tools_data_for_later.append({
                 "_type": tool_type,
                 "config": tool_config,
                 "args": tool_args,
+                "title": entry_title,
             })
-    raw_post_tool = bridges.get("folder_post_tool") or {}
-    raw_post_tool_script_id = raw_post_tool.get('script_id', {}) if raw_post_tool else {}
+    
+    # Handle post_tool: single field with bridge-level taking precedence over folder-level
+    # The merge is handled in ConfigurationServices pipeline
+    raw_post_tool = bridges.get("post_tool") or {}
+
     post_tool_data = None
     if raw_post_tool:
-        variables_path_post_tool = bridges.get("variables_path", {}).get(raw_post_tool_script_id, {})
         post_tool_data = {
-            **raw_post_tool,
-            "args": variables_path_post_tool,
-            "config": raw_post_tool.get("config", {}),
+            "script_id": raw_post_tool.get("script_id"),
+            "args": raw_post_tool.get("args", {}),
+            "_id": raw_post_tool.get("id") or raw_post_tool.get("_id"),
+            "title": raw_post_tool.get("title"),
         }
 
     rag_data = bridges.get("doc_ids")
@@ -229,6 +235,19 @@ async def _prepare_configuration_response(
 
     add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag)
     web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
+
+    # Fetch reviewer tools definitions if configured
+    reviewer_tools_data = bridges.get("reviewer_tools_data") or []
+    reviewer_tools_resolved = []
+    if reviewer_tools_data:
+        tool_doc = reviewer_tools_data[0]
+        script_id = tool_doc.get("script_id")
+        if script_id:
+            reviewer_tools_resolved.append({
+                "script_id": script_id,
+                "title": tool_doc.get("title") or script_id,
+                "_id": str(tool_doc.get("_id", "")),
+            })
 
     base_config = {
         "configuration": configuration,
@@ -269,7 +288,9 @@ async def _prepare_configuration_response(
         "cache_on": cache_on,
         "richui_templates": bridges.get("richui_templates"),
         "meta": bridges.get("meta"),
-        "reviewer_agent": str(bridges.get("settings", {}).get("reviewer_agent") or ""),
+        "reviewer_agent": str(bridges.get("settings", {}).get("review_agent", {}).get("reviewer_agent") or ""),
+        "reviewer_prompt": str(bridges.get("settings", {}).get("review_agent", {}).get("reviewer_prompt") or ""),
+        "reviewer_tools": reviewer_tools_resolved,
         "api_collection": apikey_src,
         "limit": {
             "bridge": {
@@ -382,7 +403,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited, environm
             nested = await _collect_connected_agent_configs(child_agent_data, org_id, visited, environment=resolved_env)
             aggregated_configs.update(nested)
 
-    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("reviewer_agent")
+    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("review_agent", {}).get("reviewer_agent")
     reviewer_bridge_id = str(reviewer_bridge_id_raw) if reviewer_bridge_id_raw else ""
     if reviewer_bridge_id and reviewer_bridge_id not in visited:
         try:

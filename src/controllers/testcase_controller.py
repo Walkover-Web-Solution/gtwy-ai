@@ -70,6 +70,14 @@ async def handle_playground_testcase(result, parsed_data, Flag):
         expected_response = result.get("response", {}).get("data", {}).get("content", "")
         user = parsed_data["user"]
 
+        # Capture attachment URLs used in this run, mirroring the Postgres
+        # conversation_logs user_urls shape, so the testcase can replay them.
+        user_urls = (
+            [{"url": u, "type": "image"} for u in parsed_data.get("images", [])]
+            + [{"url": u, "type": "pdf"} for u in parsed_data.get("files", [])]
+            + [{"url": u, "type": "audio"} for u in parsed_data.get("audios", [])]
+        )
+
         # Check if testcase_id is present for update
         if testcase_data.get("testcase_id") and not Flag:
             # Update existing testcase
@@ -94,6 +102,11 @@ async def handle_playground_testcase(result, parsed_data, Flag):
             update_data["expected"] = {"response": expected_response}
             update_data["conversation"].append({"role": "user", "content": user})
 
+            # Only overwrite stored attachments when this run actually had some,
+            # so a text-only re-save doesn't wipe previously stored user_urls.
+            if user_urls:
+                update_data["user_urls"] = user_urls
+
             # Update the testcase
             await update_testcase_by_id(testcase_id, update_data)
 
@@ -110,6 +123,7 @@ async def handle_playground_testcase(result, parsed_data, Flag):
                 "type": testcase_data.get("type", "response"),
                 "expected": {"response": expected_response},
                 "matching_type": testcase_data.get("matching_type", "exact"),
+                "user_urls": user_urls,
             }
 
             # If testcase_id is provided in testcase_data (for pre-generated IDs), use it
