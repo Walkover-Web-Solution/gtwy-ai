@@ -91,7 +91,11 @@ async def add_configuration_data_to_body(request: Request):
         service = body.get("service")
         model = body.get("configuration").get("model")
         user = body.get("user")
-        images = body.get("images") or []
+        images = body.get("images") or [
+            url.get("url")
+            for url in body.get("user_urls", [])
+            if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
+        ]
         audios = [
             url.get("url")
             for url in body.get("user_urls", [])
