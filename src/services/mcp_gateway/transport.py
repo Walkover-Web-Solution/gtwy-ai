@@ -2,7 +2,10 @@ from contextlib import asynccontextmanager
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from mcp.client.streamable_http import streamablehttp_client
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:  # renamed in mcp 2.0
+    from mcp.client.streamable_http import streamable_http_client as streamablehttp_client
 
 from globals import logger
 
