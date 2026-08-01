@@ -7,7 +7,7 @@ import pydash as _
 
 from config import Config
 from globals import logger
-from src.configs.serviceKeys import ServiceKeys
+from src.configs.serviceKeys import get_service_keys
 from src.configs.service_registry import has_openai_choices_shape, supports_tool_calls, uses_openai_sdk
 
 from ....configs.constant import service_name
@@ -364,6 +364,7 @@ class BaseService:
                     service_name["open_router"],
                     service_name["neev_cloud"],
                     service_name["moonshot"],
+                    service_name["minimax"],
                     service_name["gemini"],
                 ]:
                     _.set_(
@@ -371,6 +372,19 @@ class BaseService:
                         self.modelOutputConfig["tools"],
                         _.get(funcModelResponse, self.modelOutputConfig["tools"]),
                     )
+
+            if has_openai_choices_shape(self.service):
+                final_reason = _.get(funcModelResponse, "choices.0.finish_reason")
+                if final_reason is not None:
+                    _.set_(model_response, "choices.0.finish_reason", final_reason)
+            elif self.service == service_name["anthropic"]:
+                final_reason = funcModelResponse.get("stop_reason")
+                if final_reason is not None:
+                    model_response["stop_reason"] = final_reason
+            elif self.service == service_name["gemini"]:
+                final_reason = _.get(funcModelResponse, "candidates.0.finish_reason")
+                if final_reason is not None:
+                    _.set_(model_response, "candidates.0.finish_reason", final_reason)
 
     def prepare_history_params(self, response, model_response, tools, transfer_agent_config=None, is_cached=False):
         # Get the original message content
@@ -448,13 +462,19 @@ class BaseService:
 
     def service_formatter(self, configuration: object, service: str):  # changes
         try:
+            service_keys = get_service_keys(service)
             new_config = {
-                ServiceKeys[service].get(self.type, ServiceKeys[service]["default"]).get(key, key): value
+                service_keys.get(self.type, service_keys["default"]).get(key, key): value
                 for key, value in configuration.items()
             }
 
             if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
+
+            if service == service_name["minimax"]:
+                extra_body = dict(new_config.get("extra_body") or {})
+                extra_body["reasoning_split"] = True
+                new_config["extra_body"] = extra_body
 
             mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
             mcp_active = bool(mcp_config and mcp_config.get("servers"))

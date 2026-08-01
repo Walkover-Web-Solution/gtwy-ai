@@ -125,15 +125,23 @@ def _build_review_user_message(original_user_query, main_response_text):
 def _extract_response_text(result):
     if not isinstance(result, dict):
         return ""
-    response_data = (result.get("response") or {}).get("data") or {}
-    content = response_data.get("content")
-    if isinstance(content, list):
-        # Some providers return content as list of parts
-        return "\n".join(
-            part.get("text", "") if isinstance(part, dict) else str(part)
-            for part in content
-        )
-    return content or ""
+    response = result.get("response")
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        # Webhook flat dict case
+        if "reason" in response:
+            return response.get("reason") or ""
+        # LLM nested dict case
+        response_data = response.get("data") or {}
+        content = response_data.get("content")
+        if isinstance(content, list):
+            return "\n".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        return content or ""
+    return ""
 
 
 def _zero_tokens():
@@ -264,20 +272,51 @@ async def _call_reviewer(
     real time. We DO NOT call emit_done on the streamer here; the parent finalizer
     owns the single emit_done at the end of the whole review flow.
     """
-    reviewer_cfg = bridge_configurations.get(reviewer_bridge_id) or {}
-    if not reviewer_cfg:
-        raise ValueError(f"Reviewer bridge {reviewer_bridge_id} config not loaded")
+    reviewer_prompt = parsed_data.get("_reviewer_prompt") or ""
+    if reviewer_prompt:
+        reviewer_cfg = bridge_configurations.get(parsed_data.get("bridge_id")) or {}
+        if not reviewer_cfg:
+            raise ValueError(f"Main bridge {parsed_data.get('bridge_id')} config not loaded")
 
-    reviewer_configuration = deepcopy(reviewer_cfg.get("configuration") or {})
-    reviewer_service = reviewer_cfg.get("service") or ""
-    reviewer_apikey = reviewer_cfg.get("apikey")
-    reviewer_model = reviewer_configuration.get("model") or ""
+        reviewer_configuration = deepcopy(reviewer_cfg.get("configuration") or {})
+        reviewer_service = reviewer_cfg.get("service") or ""
+        reviewer_apikey = reviewer_cfg.get("apikey")
+        reviewer_model = reviewer_configuration.get("model") or ""
+
+        # Remove tools and response type from the configuration
+        reviewer_configuration.pop("tools", None)
+        reviewer_configuration.pop("response_type", None)
+        reviewer_configuration.pop("response_format", None)
+
+        base_prompt = reviewer_prompt
+        built_in_tools_val = []
+        api_collection_val = {}
+    else:
+        reviewer_cfg = bridge_configurations.get(reviewer_bridge_id) or {}
+        if not reviewer_cfg:
+            raise ValueError(f"Reviewer bridge {reviewer_bridge_id} config not loaded")
+
+        reviewer_configuration = deepcopy(reviewer_cfg.get("configuration") or {})
+        reviewer_service = reviewer_cfg.get("service") or ""
+        reviewer_apikey = reviewer_cfg.get("apikey")
+        reviewer_model = reviewer_configuration.get("model") or ""
+
+        base_prompt = reviewer_configuration.get("prompt") or ""
+        built_in_tools_val = reviewer_cfg.get("built_in_tools") or []
+        api_collection_val = reviewer_cfg.get("api_collection") or {}
 
     # Append the JSON-output template to the reviewer's prompt at runtime. The user
     # who authored the reviewer bridge doesn't need to know about the JSON contract;
     # we enforce it here so parse_reviewer_json can reliably extract the verdict.
-    base_prompt = reviewer_configuration.get("prompt") or ""
     reviewer_configuration["prompt"] = base_prompt + REVIEWER_JSON_TEMPLATE
+
+    # Check if parent agent has configured reviewer tools override
+    parent_cfg = bridge_configurations.get(parsed_data.get("bridge_id")) or {}
+    parent_reviewer_tools = parent_cfg.get("reviewer_tools") or []
+    parent_reviewer_tools_mapping = parent_cfg.get("reviewer_tools_mapping") or {}
+
+    if parent_reviewer_tools:
+        reviewer_configuration["tools"] = parent_reviewer_tools
 
     # Streaming: if a parent streamer is supplied, let the reviewer stream its
     # tokens onto the same SSE connection. Otherwise force non-streaming so we
@@ -320,7 +359,7 @@ async def _call_reviewer(
         "variables_path": reviewer_cfg.get("variables_path") or {},
         "message_id": str(uuid.uuid4()),
         "bridgeType": reviewer_cfg.get("bridgeType"),
-        "tool_id_and_name_mapping": reviewer_cfg.get("tool_id_and_name_mapping") or {},
+        "tool_id_and_name_mapping": parent_reviewer_tools_mapping if parent_reviewer_tools else (reviewer_cfg.get("tool_id_and_name_mapping") or {}),
         "reasoning_model": reviewer_cfg.get("reasoning_model", False),
         "apikey_object_id": reviewer_cfg.get("apikey_object_id"),
         "images": [],
@@ -329,7 +368,7 @@ async def _call_reviewer(
         "rag_data": reviewer_cfg.get("rag_data"),
         "name": reviewer_cfg.get("name") or "",
         "org_name": reviewer_cfg.get("org_name") or "",
-        "built_in_tools": reviewer_cfg.get("built_in_tools") or [],
+        "built_in_tools": built_in_tools_val,
         "files": [],
         "file_data": None,
         "youtube_url": None,
@@ -339,7 +378,7 @@ async def _call_reviewer(
         "limit": reviewer_cfg.get("limit"),
         "is_embed": reviewer_cfg.get("is_embed", False),
         "user_id": reviewer_cfg.get("user_id"),
-        "api_collection": reviewer_cfg.get("api_collection") or {},
+        "api_collection": api_collection_val,
         "tools_call_data": [],
         "tokens": {},
         "usage": {},
@@ -510,10 +549,19 @@ def _build_reviewer_history_params_for_round(
     round_num = record["round_num"]
     review_user_message = record["review_user_message"]
 
-    if reviewer_result is not None:
+    if reviewer_result is not None and reviewer_result.get("historyParams"):
         history_params = dict(reviewer_result.get("historyParams") or {})
     else:
-        # Hard-exception path: no reviewer call returned. Synthesize from cfg.
+        # Synthesis path: webhook tool or hard-exception.
+        import json
+        resp_val = ""
+        if reviewer_result:
+            raw_resp = reviewer_result.get("response")
+            if isinstance(raw_resp, dict):
+                resp_val = json.dumps(raw_resp)
+            elif raw_resp is not None:
+                resp_val = str(raw_resp)
+                
         reviewer_cfg_configuration = reviewer_cfg.get("configuration") or {}
         history_params = {
             "thread_id": parsed_data.get("thread_id"),
@@ -579,14 +627,14 @@ def _build_reviewer_dataset_entry_for_round(
     reviewer_parsed_data = record["parsed_data"]
     reviewer_error = record["error"]
 
-    if reviewer_parsed_data is not None:
+    if reviewer_parsed_data is not None and reviewer_parsed_data.get("usage"):
         entry = dict(reviewer_parsed_data.get("usage") or {})
     else:
         entry = {
             "orgId": parsed_data.get("org_id"),
-            "service": history_params.get("service", ""),
-            "model": history_params.get("model", ""),
-            "apikey_object_id": reviewer_cfg.get("apikey_object_id"),
+            "service": history_params.get("service", "") or "webhook",
+            "model": history_params.get("model", "") or "WebhookTool",
+            "apikey_object_id": reviewer_cfg.get("apikey_object_id") if reviewer_cfg else None,
             "variables": {},
             "latency": "{}",
         }
@@ -605,3 +653,81 @@ def _build_reviewer_dataset_entry_for_round(
         entry["error"] = reviewer_error
 
     return entry
+
+
+async def _call_tool_reviewer(
+    bridge_configurations,
+    original_user_query,
+    main_response_text,
+    parsed_data,
+    thread_info,
+    timer,
+):
+    """
+    Execute the reviewer tool directly via a webhook/axios_work call.
+    The tool configured in settings.reviewer_tools is looked up from the pre-built
+    reviewer_tools_mapping (populated by getConfiguration.py) and called with the
+    main agent's response as payload. It is expected to return JSON with
+    {"passed": bool, "reason": str}.
+    """
+    import time as _time_module
+    from src.services.commonServices.baseService.utils import axios_work
+
+    main_bridge_id = parsed_data.get("bridge_id")
+    main_cfg = bridge_configurations.get(main_bridge_id) or {}
+
+    # reviewer_tools is a list of {script_id, title, _id} objects resolved in getConfiguration.
+    # Build the webhook URL on the fly — same pattern as handle_pre_tools and handle_post_tool.
+    reviewer_tools_list = main_cfg.get("reviewer_tools") or []
+    if not reviewer_tools_list:
+        raise ValueError(
+            f"No reviewer_tools configured for bridge '{main_bridge_id}'. "
+            "Make sure the reviewer tool is properly connected."
+        )
+
+    first_tool = reviewer_tools_list[0]
+    script_id = first_tool.get("script_id") if isinstance(first_tool, dict) else None
+    if not script_id:
+        raise ValueError(f"Reviewer tool has no script_id for bridge '{main_bridge_id}'")
+
+    tool_mapping = {
+        "url": f"https://flow.sokt.io/func/{script_id}",
+        "headers": {},
+        "method": "POST",
+    }
+
+    args = {
+        "user": original_user_query,
+        "ai_response": main_response_text,
+        "bridge_id": main_bridge_id,
+        "thread_id": parsed_data.get("thread_id"),
+        "org_id": parsed_data.get("org_id"),
+    }
+
+    _reviewer_call_start = _time_module.time()
+    result = await axios_work(args, tool_mapping)
+
+    passed = False
+    reason = "Validation failed"
+
+    if result.get("status") == 1:
+        result["success"] = True
+        resp_data = result.get("response")
+        if isinstance(resp_data, dict):
+            if "passed" in resp_data:
+                passed = resp_data.get("passed")
+                reason = resp_data.get("reason", "")
+            elif isinstance(resp_data.get("response"), dict) and "passed" in resp_data["response"]:
+                passed = resp_data["response"].get("passed")
+                reason = resp_data["response"].get("reason", "")
+        else:
+            reason = str(resp_data)
+    else:
+        result["success"] = False
+        reason = result.get("response") or "Tool call failed"
+
+    verdict = {"passed": bool(passed), "reason": str(reason)}
+
+    round_tokens = {"input": 0, "output": 0, "total": 0, "expected_cost": 0.0}
+    round_latency = {"over_all_time": round(_time_module.time() - _reviewer_call_start, 4)}
+    return result, {}, round_tokens, round_latency, {}, verdict

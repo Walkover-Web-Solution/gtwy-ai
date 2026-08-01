@@ -179,17 +179,37 @@ async def chat(request_body):
                 from src.services.mcp_gateway.prefetch import prefetch_mcp_tools
                 await prefetch_mcp_tools(mcp_cfg)
 
-        # Reviewer agent: if this bridge has a configured reviewer, stash its
-        # bridge_id on parsed_data. The review loop runs after the main agent
-        # fully resolves — both the streaming finalizer and the non-streaming
-        # path invoke run_review_loop just before history publish. Streaming is
-        # preserved when requested; the reviewer's tokens flow onto the same
-        # SSE connection so the user sees the verdict in real time.
-        reviewer_bridge_id = (
-            bridge_configurations.get(parsed_data["bridge_id"], {}).get("reviewer_agent") or ""
+        # Reviewer agent toggle and configuration. If disabled, review is skipped.
+        reviewer_settings = bridge_configurations.get(parsed_data["bridge_id"], {}).get("settings", {})
+        review_agent_settings = reviewer_settings.get("review_agent") or {}
+
+        reviewer_agent_val = review_agent_settings.get("reviewer_agent")
+        reviewer_prompt_val = review_agent_settings.get("reviewer_prompt")
+        reviewer_tools_val = review_agent_settings.get("reviewer_tools")
+
+        has_reviewer_configured = bool(
+            reviewer_agent_val
+            or reviewer_prompt_val
+            or reviewer_tools_val
         )
-        if reviewer_bridge_id and reviewer_bridge_id in bridge_configurations:
-            parsed_data["_reviewer_bridge_id"] = reviewer_bridge_id
+        reviewer_enabled = review_agent_settings.get("reviewer_enabled", has_reviewer_configured)
+
+        if reviewer_enabled:
+            reviewer_bridge_id = reviewer_agent_val or ""
+            if reviewer_bridge_id and reviewer_bridge_id in bridge_configurations:
+                parsed_data["_reviewer_bridge_id"] = reviewer_bridge_id
+            reviewer_prompt = (
+                parsed_data.get("body", {}).get("reviewer_prompt")
+                or parsed_data.get("body", {}).get("settings", {}).get("review_agent", {}).get("reviewer_prompt")
+                or reviewer_prompt_val
+                or ""
+            )
+            if reviewer_prompt:
+                parsed_data["_reviewer_prompt"] = reviewer_prompt
+
+            reviewer_tools = reviewer_tools_val or []
+            if reviewer_tools:
+                parsed_data["_reviewer_tools"] = reviewer_tools
 
         tool_count_key_for_cleanup = build_tool_count_key(
             parsed_data.get("bridge_id"),
@@ -344,6 +364,7 @@ async def chat(request_body):
             sync_injected_stream_call = bool(
                 (request_body.get("body", {}) if isinstance(request_body, dict) else {}).get("_sync_injected_stream_call")
             )
+            completion_success = False
             if injected_streamer:
                 if sync_injected_stream_call:
                     return await sse_stream_and_finalize(
@@ -590,7 +611,7 @@ async def chat(request_body):
         # so the main agent's conversation_log row reflects cumulative cost.
         # The reviewer publishes its own conversation_log row from inside
         # run_review_loop — independent of process_background_tasks below.
-        if parsed_data.get("_reviewer_bridge_id"):
+        if parsed_data.get("_reviewer_bridge_id") or parsed_data.get("_reviewer_prompt") or parsed_data.get("_reviewer_tools"):
             result, _reviewer_summary = await run_review_loop(
                 parsed_data=parsed_data,
                 params=params,
@@ -635,8 +656,19 @@ async def chat(request_body):
             testcase_result = await process_single_testcase_result(
                 parsed_data.get("testcase_data", {}), result, parsed_data
             )
-            # Attach latency so it can be forwarded over RTLayer to the client
-            testcase_result["latency"] = latency
+            # Attach latency so it can be forwarded over RTLayer to the client.
+            # over_all_time is wall-clock from a start captured when the testcase
+            # coroutine was dispatched via asyncio.gather; concurrently-dispatched
+            # but serialized testcases share ~that start, so later ones accumulate
+            # earlier testcases' time. model_execution_time is measured tightly
+            # around this testcase's own model call(s), so it is the true per-hit
+            # latency — surface it as over_allDSXCVBN.
+            # _time too to avoid the accumulation.
+            testcase_latency = {
+                **latency,
+                "over_all_time": latency.get("model_execution_time") or latency.get("over_all_time"),
+            }
+            testcase_result["latency"] = testcase_latency
             result["response"]["testcase_result"] = testcase_result
 
             # Stamp the testcase fields onto historyParams so the log queue
