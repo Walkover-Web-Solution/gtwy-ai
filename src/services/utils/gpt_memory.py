@@ -26,9 +26,11 @@ def _deserialize_cached_value(raw_value):
 
 def _is_empty_memory_response(value) -> bool:
     """Sokt flow returns {'success': True, 'message': 'No response'} when no memory exists for the thread."""
-    if not isinstance(value, dict):
-        return False
-    return value.get("success") is True and value.get("message") == "No response"
+    return (
+        isinstance(value, dict)
+        and value.get("success") is True
+        and value.get("message") == "No response"
+    )
 
 
 def _build_memory_document(pages: dict, updated_at: Any = None) -> dict:
@@ -89,12 +91,10 @@ def parse_memory(raw):
 
 def get_memory_page_keys(memory: dict | None) -> list[str]:
     """Return top-level page keys from a normalized memory document."""
-    if not isinstance(memory, dict):
-        return []
-    pages = memory.get("pages")
-    if not isinstance(pages, dict):
-        return []
-    return list(pages.keys())
+    pages = memory.get("pages") if isinstance(memory, dict) else None
+    if isinstance(pages, dict):
+        return list(pages.keys())
+    return []
 
 
 def _outline_page_value(value: Any, *, max_chars: int = 120) -> str:
@@ -128,15 +128,13 @@ def summarize_memory_for_prompt(memory: dict | None) -> list[dict[str, str]]:
     Per-page inventory for the system prompt: key + short data outline.
     Does not dump full page payloads — only enough for the agent to choose keys.
     """
-    if not isinstance(memory, dict):
-        return []
-    pages = memory.get("pages")
-    if not isinstance(pages, dict):
-        return []
-    return [
-        {"key": str(key), "outline": _outline_page_value(value)}
-        for key, value in pages.items()
-    ]
+    pages = memory.get("pages") if isinstance(memory, dict) else None
+    if isinstance(pages, dict):
+        return [
+            {"key": str(key), "outline": _outline_page_value(value)}
+            for key, value in pages.items()
+        ]
+    return []
 
 
 def get_memory_pages(memory: dict | None, keys: list[str] | None = None, include_all: bool = False) -> dict:
@@ -147,19 +145,13 @@ def get_memory_pages(memory: dict | None, keys: list[str] | None = None, include
     - keys=[...] → only those keys that exist
     - otherwise → {}
     """
-    if not isinstance(memory, dict):
-        return {}
-    pages = memory.get("pages")
-    if not isinstance(pages, dict):
-        return {}
-
-    if include_all:
-        return dict(pages)
-
-    if not keys:
-        return {}
-
-    return {key: pages[key] for key in keys if key in pages}
+    pages = memory.get("pages") if isinstance(memory, dict) else None
+    if isinstance(pages, dict):
+        if include_all:
+            return dict(pages)
+        if keys:
+            return {key: pages[key] for key in keys if key in pages}
+    return {}
 
 
 async def _fetch_memory_from_cache(memory_id: str):
