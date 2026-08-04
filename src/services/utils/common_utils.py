@@ -238,7 +238,7 @@ def parse_request_body(request_body):
         "files": body.get("files") or [
             url.get("url")
             for url in body.get("user_urls", [])
-            if isinstance(url, dict) and url.get("url")
+            if isinstance(url, dict) and url.get("type") != "image" and url.get("url")
         ],
         "fall_back": body.get("settings", {}).get("fall_back") or {},
         "skip_history": body.get("skip_history", False),
