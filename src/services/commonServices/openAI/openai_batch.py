@@ -2,6 +2,8 @@ import json
 import uuid
 
 from src.configs.constant import redis_keys
+from src.configs.model_configuration import model_config_document
+from src.configs.service_registry import web_search_tool_config
 from src.services.commonServices.openAI.openai_run_batch import create_batch_file, process_batch_file
 from src.db_services.conversationDbService import find_completed_batch_conversations
 from src.controllers.conversationController import add_tool_call_data_in_history
@@ -87,6 +89,16 @@ class OpenaiBatch(BaseService):
             )
             input_items = developer + (thread_history or []) + [{"role": "user", "content": message}]
             body_data["input"] = input_items
+
+            if self.built_in_tools and "web_search" in self.built_in_tools:
+                if "tools" in model_config_document[self.service][self.model]["configuration"]:
+                    web_search_cfg = web_search_tool_config(service_name["openai"]) or {}
+                    if self.web_search_filters and isinstance(self.web_search_filters, list):
+                        web_search_tool = dict(web_search_cfg.get("filtered"))
+                        web_search_tool["filters"] = {"allowed_domains": self.web_search_filters}
+                    else:
+                        web_search_tool = dict(web_search_cfg.get("unfiltered"))
+                    body_data.setdefault("tools", []).append(web_search_tool)
 
             # Construct one JSONL line for each message with message_id as custom_id
             request_obj = {

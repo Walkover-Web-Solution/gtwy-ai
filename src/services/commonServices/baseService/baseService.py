@@ -444,7 +444,11 @@ class BaseService:
             ],
             "AiConfig": self.customConfig,
             "firstAttemptError": model_response.get("firstAttemptError") or "",
-            "annotations": _.get(model_response, self.modelOutputConfig.get("annotations")) or [],
+            "annotations": (
+                response.get("data", {}).get("annotations")
+                or _.get(model_response, self.modelOutputConfig.get("annotations"))
+                or []
+            ),
             "fallback_model": (
                 self.bridge_configurations.get(self.bridge_id, {}).get("fall_back")
                 if self.bridge_configurations and self.bridge_id
