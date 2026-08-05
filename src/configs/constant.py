@@ -22,6 +22,7 @@ service_name = {
     "neev_cloud": "neev_cloud",
     "moonshot": "moonshot",
     "minimax": "minimax",
+    "huggingface": "huggingface",
 }
 
 bridge_ids = {
@@ -64,6 +65,7 @@ redis_keys = {
     "timezone_and_org_": "cd_timezone_and_org_",
     "conversation_": "cd_conversation_",
     "last_transffered_agent_": "cd_last_transffered_agent_",
+    "huggingface_model_price_": "cd_huggingface_model_price_",
     # Protected — source of truth or cost/metrics accumulators
     "bridgeusedcost_": "nd_bridgeusedcost_",
     "folderusedcost_": "nd_folderusedcost_",

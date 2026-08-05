@@ -33,6 +33,7 @@ SERVICE_MAPPERS = {
     service_name["neev_cloud"]:        _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
     service_name["moonshot"]:          _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
     service_name["minimax"]:           _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
+    service_name["huggingface"]:       _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(402, 429)),
 }
 
 

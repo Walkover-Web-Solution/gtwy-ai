@@ -33,6 +33,7 @@ google-genai>=1.56.0,<2.0.0
 google-auth>=2.30.0,<3.0.0
 google-cloud-storage>=2.17.0,<3.0.0
 deepgram-sdk>=3.0.0
+huggingface_hub>=0.26.0
 notdiamond
 mcp
 
