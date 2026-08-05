@@ -864,6 +864,8 @@ def build_service_params(
         "api_collection": parsed_data.get("api_collection"),
         "meta": parsed_data.get("meta"),
         "created_at": parsed_data.get("created_at"),
+        "run_testcase": parsed_data.get("testcase_data", {}).get("run_testcase", False),
+        "testcase_tools_response": parsed_data.get("testcase_data", {}).get("tools_response") or {},
     }
 
 
