@@ -15,6 +15,18 @@ _GATEWAY_ERROR_CODES = (502, 520)
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0  # seconds; doubles each attempt: 1s → 2s → 4s
 
+# Transient network-layer failures that are safe to retry with a fresh connection.
+# ClientPayloadError covers the "Response payload is not completed:
+# <TransferEncodingError ...>" case, where the upstream (or an intermediary
+# proxy/load balancer) closed the socket before the full body promised by the
+# Content-Length / Transfer-Encoding header arrived.
+_TRANSIENT_EXCEPTIONS = (
+    aiohttp.ClientPayloadError,
+    aiohttp.ClientConnectionError,  # includes ServerDisconnectedError
+    aiohttp.ClientOSError,
+    asyncio.TimeoutError,
+)
+
 # Lazy import to break the circular chain:
 #   apiservice → send_alert → alert_utils → apiservice
 async def _fire_gateway_alert(status_code, url, error_text):
@@ -33,38 +45,53 @@ async def fetch(url, method="GET", headers=None, params=None, json_body=None, im
     timeout = aiohttp.ClientTimeout(total=600, connect=15)
     last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
-        connector = aiohttp.TCPConnector(ssl=_ssl_context)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            body = None if method.upper() == "GET" else json_body
-            async with session.request(
-                method=method, url=url, headers=headers, params=params, json=body
-            ) as response:
-                if response.status >= 300:
-                    error_response = await response.text()
-                    if response.status in _GATEWAY_ERROR_CODES:
-                        asyncio.create_task(_fire_gateway_alert(response.status, url, error_response))
-                        if attempt < _MAX_RETRIES:
-                            delay = _RETRY_BASE_DELAY * (2 ** attempt)
-                            logger.warning(
-                                f"fetch: HTTP {response.status} from {url}, "
-                                f"retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_RETRIES})"
-                            )
-                            last_exc = ValueError({
-                                "error": error_response,
-                                "status_code": response.status,
-                            })
-                            await asyncio.sleep(delay)
-                            continue
-                    raise ValueError({
-                        "error": error_response,
-                        "status_code": response.status,
-                    })
-                if image:
-                    response_data = BytesIO(await response.read())
-                else:
-                    response_data = await response.json()
-                response_headers = dict(response.headers)
-                return response_data, response_headers
+        try:
+            connector = aiohttp.TCPConnector(ssl=_ssl_context)
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                body = None if method.upper() == "GET" else json_body
+                async with session.request(
+                    method=method, url=url, headers=headers, params=params, json=body
+                ) as response:
+                    if response.status >= 300:
+                        error_response = await response.text()
+                        if response.status in _GATEWAY_ERROR_CODES:
+                            asyncio.create_task(_fire_gateway_alert(response.status, url, error_response))
+                            if attempt < _MAX_RETRIES:
+                                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                                logger.warning(
+                                    f"fetch: HTTP {response.status} from {url}, "
+                                    f"retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_RETRIES})"
+                                )
+                                last_exc = ValueError({
+                                    "error": error_response,
+                                    "status_code": response.status,
+                                })
+                                await asyncio.sleep(delay)
+                                continue
+                        raise ValueError({
+                            "error": error_response,
+                            "status_code": response.status,
+                        })
+                    if image:
+                        response_data = BytesIO(await response.read())
+                    else:
+                        response_data = await response.json()
+                    response_headers = dict(response.headers)
+                    return response_data, response_headers
+        except _TRANSIENT_EXCEPTIONS as e:
+            # Truncated body / dropped connection / read timeout — safe to replay the
+            # whole (non-streaming) request on a fresh connection.
+            last_exc = e
+            if attempt < _MAX_RETRIES:
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"fetch: transient network error from {url} "
+                    f"({type(e).__name__}: {e}), retrying in {delay:.1f}s "
+                    f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+                )
+                await asyncio.sleep(delay)
+                continue
+            raise
     raise last_exc
 
 
@@ -96,8 +123,10 @@ async def fetch_stream(url, method="POST", headers=None, json_body=None):
     # exceed aiohttp's default ~128 KB per-line limit.
     last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
+        yielded_any = False
         try:
             async for line in _fetch_stream_once(url, method, headers, json_body):
+                yielded_any = True
                 yield line
             return
         except ValueError as e:
@@ -110,6 +139,22 @@ async def fetch_stream(url, method="POST", headers=None, json_body=None):
                     f"retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_RETRIES})"
                 )
                 last_exc = e
+                await asyncio.sleep(delay)
+                continue
+            raise
+        except _TRANSIENT_EXCEPTIONS as e:
+            # Truncated body / dropped connection / read timeout mid-stream. We can
+            # only replay the request if nothing has been yielded yet; otherwise the
+            # caller has already consumed partial SSE lines and a fresh stream would
+            # duplicate them and corrupt its accumulated state.
+            last_exc = e
+            if not yielded_any and attempt < _MAX_RETRIES:
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"fetch_stream: transient network error from {url} "
+                    f"({type(e).__name__}: {e}), retrying in {delay:.1f}s "
+                    f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+                )
                 await asyncio.sleep(delay)
                 continue
             raise
