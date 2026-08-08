@@ -6,6 +6,7 @@ future openai_sdk service. groq / grok / deepseek have their own formatters
 """
 
 from src.services.utils.formatters.finish_reason import finish_reason_mapping
+from src.services.utils.formatters.web_search_extractor import extract_web_search_annotations
 
 
 def format_openai_compatible(response, tools_data, images=None):
@@ -17,7 +18,8 @@ def format_openai_compatible(response, tools_data, images=None):
             "role": response.get("choices", [{}])[0].get("message", {}).get("role", None),
             "tools_data": tools_data or {},
             "images": images,
-            "annotations": response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
+            "annotations": extract_web_search_annotations(response, "openai_compatible")
+            or response.get("choices", [{}])[0].get("message", {}).get("annotations", None),
             "fallback": response.get("fallback") or False,
             "firstAttemptError": response.get("firstAttemptError") or "",
             "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),

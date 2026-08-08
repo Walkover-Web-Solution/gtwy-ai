@@ -125,6 +125,15 @@ def apikey_status_codes(name):
     return _field(name, "apikey_status_codes", {})
 
 
+def web_search_tool_config(name):
+    if wire_format(name) in ("openai_chat", "openai_responses"):
+        return {
+            "unfiltered": {"type": "web_search_preview"},
+            "filtered": {"type": "web_search"},
+        }
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle: init + change-stream listener (mirrors model_configuration.py)
 # ---------------------------------------------------------------------------

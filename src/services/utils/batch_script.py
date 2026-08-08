@@ -164,6 +164,7 @@ async def check_batch_status():
                                 'status': is_success,
                                 'error': error_message,
                                 'finish_reason': data.get('finish_reason'),
+                                'annotations': data.get('annotations') or [],
                                 'tokens': {
                                     'input_tokens': input_tokens,
                                     'output_tokens': output_tokens,

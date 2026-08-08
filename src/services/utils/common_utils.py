@@ -1311,6 +1311,8 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "files": parsed_data.get("files", []),
         "version_id": parsed_data.get("version_id", ""),
         "meta": parsed_data.get("meta"),
+        "built_in_tools": parsed_data.get("built_in_tools") or [],
+        "web_search_filters": parsed_data.get("web_search_filters")
     }
 
 
