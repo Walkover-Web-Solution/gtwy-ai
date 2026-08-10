@@ -1,5 +1,6 @@
 from src.configs.constant import service_name
 from src.configs.model_configuration import model_config_document
+from src.configs.service_registry import web_search_tool_config
 from src.services.utils.ai_middleware_format import Response_formatter
 
 from ....services.utils.apiservice import fetch_images_b64
@@ -28,7 +29,16 @@ class Anthropic(BaseService):
             ]
         elif self.files and len(self.files) > 0:
             # Handle files (documents) when no images
-            file_content = [{"type": "document", "source": {"type": "url", "url": file_url}} for file_url in self.files]
+            await self.resolve_provider_files()
+            file_content = []
+            for file_url in self.files:
+                ref = self.provider_file_map.get(file_url)
+                if ref:
+                    file_content.append(
+                        {"type": "document", "source": {"type": "file", "file_id": ref["file_id"]}}
+                    )
+                else:
+                    file_content.append({"type": "document", "source": {"type": "url", "url": file_url}})
             content = file_content + [{"type": "text", "text": self.user}] if self.user else file_content
             self.customConfig["messages"] = conversation + [{"role": "user", "content": content}]
 
@@ -60,7 +70,9 @@ class Anthropic(BaseService):
                     self.customConfig["tools"] = []
 
                 # Use Anthropic's official web search format
-                web_search_tool = {"type": "web_search_20250305", "name": "web_search"}
+                web_search_tool = dict(
+                    web_search_tool_config(service_name["anthropic"])
+                )
 
                 # Add allowed domains filtering if provided
                 if self.web_search_filters and isinstance(self.web_search_filters, list):

@@ -7,6 +7,7 @@ import pydash as _
 
 from config import Config
 from globals import logger
+from src.configs.constant import file_lifecycle_config
 from src.configs.serviceKeys import ServiceKeys
 from src.configs.service_registry import has_openai_choices_shape, supports_tool_calls, uses_openai_sdk
 
@@ -113,6 +114,8 @@ class BaseService:
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
         self.created_at = params.get("created_at")
+        self.user_urls = params.get("user_urls") or []
+        self.provider_file_map = {}
         self.tool_call_limit_error = None
         self.maximum_iteration_limit_reached = False
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
@@ -129,6 +132,43 @@ class BaseService:
 
     def aiconfig(self):
         return self.customConfig
+
+    def _file_credential_id(self):
+        """apikey_object_id is a {service: credential_id} map on the bridge; pick ours."""
+        if isinstance(self.apikey_object_id, dict):
+            return self.apikey_object_id.get(self.service)
+        return self.apikey_object_id
+
+    async def resolve_provider_files(self):
+        """Map opted-in URLs to provider Files-API file_ids.
+
+        Opt-in is per file at runtime: user_urls entries sent with
+        use_provider_files=true. Populates self.provider_file_map
+        ({url: {"file_id", "mime_type"}}). Any failure leaves URLs unmapped —
+        callers fall back to URL pass-through.
+        """
+        self.provider_file_map = {}
+        provider_file_urls = [
+            entry.get("url")
+            for entry in self.user_urls
+            if isinstance(entry, dict) and entry.get("url")
+        ]
+        if not (file_lifecycle_config["enabled"] and provider_file_urls):
+            return
+        try:
+            from src.services.utils.file_lifecycle_service import resolve_files
+
+            self.provider_file_map = await resolve_files(
+                provider_file_urls,
+                provider=self.service,
+                apikey=self.apikey,
+                apikey_object_id=self._file_credential_id(),
+                org_id=self.org_id,
+                thread_id=self.thread_id,
+            )
+        except Exception as e:
+            logger.error(f"resolve_provider_files failed, falling back to URLs: {e}")
+            self.provider_file_map = {}
 
     async def run_tool(self, responses, service):
         codes_mapping, function_list = make_code_mapping_by_service(responses, service)
@@ -420,6 +460,11 @@ class BaseService:
                     if isinstance(item, dict)
                     and item.get("type") == "image_generation_call"
                     and (item.get("image_url") or item.get("permanent_url") or item.get("url"))
+                ]
+                + [
+                    {"revised_prompt": None, "permanent_url": f.get("gcp_url"), "filename": f.get("filename"), "type": "file"}
+                    for f in model_response.get("generated_files", []) or []
+                    if f.get("gcp_url")
                 ]
             ),
             "revised_prompt": model_response.get("data", [{}])[0].get("revised_prompt", None),

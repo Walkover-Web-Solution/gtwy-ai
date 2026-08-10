@@ -60,6 +60,12 @@ _FALLBACK_REGISTRY = {
         "supports_reasoning": True,
         "default_model": "gpt-4o",
         "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
+        "web_search_tool": {
+            "unfiltered": {"type": "web_search_preview"},
+            "filtered": {"type": "web_search", "filters": {"allowed_domains": None}},
+        },
+        "image_generation_tool": {"type": "image_generation"},
+        "code_interpreter_tool": {"type": "code_interpreter"},
     },
     "openai_completion": {
         "service_name": "openai_completion",
@@ -97,6 +103,7 @@ _FALLBACK_REGISTRY = {
         "supports_reasoning": True,
         "default_model": "claude-3-7-sonnet-latest",
         "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
+        "web_search_tool": {"type": "web_search_20250305", "name": "web_search"},
     },
     "groq": {
         "service_name": "groq",
@@ -251,6 +258,18 @@ def prompt_role(name):
     """Role used for the system prompt message. Defaults to "system";
     open_router uses "developer"."""
     return _field(name, "prompt_role", "system")
+
+
+def web_search_tool_config(name):
+    return _field(name, "web_search_tool", None)
+
+
+def image_generation_tool_config(name):
+    return _field(name, "image_generation_tool", None)
+
+
+def code_interpreter_tool_config(name):
+    return _field(name, "code_interpreter_tool", None)
 
 
 # ---------------------------------------------------------------------------
