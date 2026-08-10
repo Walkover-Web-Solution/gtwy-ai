@@ -1,7 +1,10 @@
 import base64
+import json
 
+from globals import logger
 from src.configs.constant import service_name
 from src.configs.model_configuration import model_config_document
+from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.ai_middleware_format import Response_formatter
 from src.services.utils.gcp_upload_service import uploadDoc
 
@@ -11,6 +14,43 @@ from ..createConversations import ConversationService
 
 
 class OpenaiResponse(BaseService):
+    _PREV_RESP_KEY_PREFIX = "openai_prev_resp"
+    _PREV_RESP_TTL = 2592000  # 30 days, mirrors OpenAI response retention
+
+    def _previous_response_key(self):
+        return (
+            f"{self._PREV_RESP_KEY_PREFIX}_"
+            f"{self.org_id}_{self.bridge_id}_"
+            f"{self.thread_id}_{self.sub_thread_id}"
+        )
+
+    async def _get_previous_response_id(self):
+        try:
+            cached = await find_in_cache(self._previous_response_key())
+            if cached is None:
+                return None
+            # Cache values are JSON-encoded, so a plain string id is stored as
+            # '"resp_..."'. Decode it to return the bare id.
+            if isinstance(cached, str):
+                try:
+                    return json.loads(cached)
+                except json.JSONDecodeError:
+                    return cached
+            return cached
+        except Exception as error:
+            logger.error(f"Error fetching previous_response_id: {error}")
+            return None
+
+    async def _set_previous_response_id(self, response_id):
+        if not response_id:
+            return
+        try:
+            await store_in_cache(
+                self._previous_response_key(), response_id, ttl=self._PREV_RESP_TTL
+            )
+        except Exception as error:
+            logger.error(f"Failed to cache OpenAI previous_response_id: {error}")
+
     async def execute(self):
         historyParams = {}
         tools = {}
@@ -29,8 +69,20 @@ class OpenaiResponse(BaseService):
             historyParams["message"] = "image generated successfully"
             historyParams["type"] = "assistant"
         else:
+            previous_response_id = await self._get_previous_response_id()
+            if previous_response_id:
+                self.customConfig["previous_response_id"] = previous_response_id
+
+            # When chaining via previous_response_id, the prior context is stored
+            # on OpenAI's side, so we only need to send the current turn. We also
+            # skip our custom memory injection to test OpenAI's native context
+            # management. Fallback to a different service still uses the full
+            # DB-built conversation and memory.
             conversation = ConversationService.createOpenAiConversation(
-                self.configuration.get("conversation"), self.memory, self.files
+                None if previous_response_id else self.configuration.get("conversation"),
+                None if previous_response_id else self.memory,
+                self.files,
+                include_history=not bool(previous_response_id),
             ).get("messages", [])
             developer = (
                 [{"role": "developer", "content": self.configuration["prompt"]}] if not self.reasoning_model else []
@@ -146,6 +198,18 @@ class OpenaiResponse(BaseService):
                 functionCallRes.get("transfer_agent_config") if has_function_call and functionCallRes else None
             )
             historyParams = self.prepare_history_params(response, modelResponse, tools, transfer_config)
+
+            # Persist the OpenAI response id so the next turn can chain via
+            # previous_response_id instead of resending the full conversation.
+            # After tool calls, use the final recursive response, not the
+            # initial function-call response.
+            final_response_id = (
+                functionCallRes.get("modelResponse", {}).get("id")
+                if has_function_call and functionCallRes
+                else modelResponse.get("id")
+            )
+            if final_response_id:
+                await self._set_previous_response_id(final_response_id)
 
         # Add transfer_agent_config to return if transfer was detected
         result = {"success": True, "modelResponse": modelResponse, "historyParams": historyParams, "response": response}
