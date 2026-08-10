@@ -20,6 +20,7 @@ from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
 from src.services.utils.time import SERVICE_TIMEOUTS
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
+from src.services.utils.built_in_tools.gpt_memory import call_get_gpt_memory
 
 
 def clean_json(data):
@@ -461,6 +462,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
                     task = call_firecrawl_scrape(tool_data.get("args"))
+                elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["get_gpt_memory"]:
+                    task = call_get_gpt_memory(tool_data.get("args"), self.memory)
                 elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
                     task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 else:

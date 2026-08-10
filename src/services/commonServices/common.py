@@ -16,6 +16,7 @@ from src.services.auto_router_service import apply_auto_model_selection
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.todo.planner_service import prepare_planner_request
 from src.services.todo.todo_handler import handle_todo_mode
+from src.services.utils.gpt_memory_tool import attach_gpt_memory_tool
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
@@ -278,7 +279,14 @@ async def chat(request_body):
 
 
         # Step 7: Prepare Prompt, Variables and Memory
+        # prepare_prompt loads GPT memory via get_gpt_memory (cache/plug) when enabled.
+        # attach_gpt_memory_tool then registers get_gpt_memory + prompt from live page keys
+        # (or adds nothing when there is no memory).
         memory, missing_vars = await prepare_prompt(parsed_data, thread_info, model_config, custom_config)
+        attach_gpt_memory_tool(parsed_data, memory)
+        # custom_config was built before memory tool registration — keep tools in sync
+        if parsed_data.get("configuration", {}).get("tools") is not None:
+            custom_config["tools"] = parsed_data["configuration"]["tools"]
 
         missing_vars = filter_missing_vars(missing_vars, parsed_data["variables_state"])
 
