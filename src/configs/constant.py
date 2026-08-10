@@ -21,6 +21,7 @@ service_name = {
     "openai_completion": "openai_completion",
     "neev_cloud": "neev_cloud",
     "moonshot": "moonshot",
+    "minimax": "minimax",
 }
 
 bridge_ids = {
@@ -95,20 +96,6 @@ tag_keys = {
 }
 
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
-
-new_agent_service = {
-    "openai": "gpt-4o",
-    "anthropic": "claude-3-7-sonnet-latest",
-    "groq": "llama-3.3-70b-versatile",
-    "open_router": "deepseek/deepseek-chat-v3-0324:free",
-    "mistral": "mistral-medium-latest",
-    "gemini": "gemini-2.5-flash",
-    "grok": "grok-4-fast",
-    "deepseek": "deepseek-v4-flash",
-    "deepgram": "nova-3",
-    "neev_cloud": "gpt-oss-120b",
-    "moonshot": "kimi-k2.6",
-}
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
 

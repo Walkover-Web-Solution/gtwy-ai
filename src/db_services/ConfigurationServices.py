@@ -365,7 +365,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     },
                 }
             },
-            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in 'pre_tools'
+            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using function_id from config
             {
                 "$lookup": {
                     "from": "apicalls",
@@ -373,10 +373,15 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                         "pre_tools_ids": {
                             "$map": {
                                 "input": "$pre_tools",
-                                "as": "id",
+                                "as": "entry",
                                 "in": {
-                                    "$convert": {"input": "$$id", "to": "objectId", "onError": None, "onNull": None}
-                                },
+                                    "$convert": {
+                                        "input": "$$entry.config.function_id",
+                                        "to": "objectId",
+                                        "onError": None,
+                                        "onNull": None,
+                                    }
+                                }
                             }
                         }
                     },
@@ -384,7 +389,49 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "as": "pre_tools_data",
                 }
             },
-            # Stage 6.1: Lookup 'reviewer_tools' data from 'apicalls' collection using the ObjectIds in 'settings.reviewer_tools'
+            # Stage 6.1: Merge title from pre_tools_data into pre_tools entries
+            {
+                "$addFields": {
+                    "pre_tools": {
+                        "$map": {
+                            "input": "$pre_tools",
+                            "as": "entry",
+                            "in": {
+                                "$mergeObjects": [
+                                    "$$entry",
+                                    {
+                                        "title": {
+                                            "$let": {
+                                                "vars": {
+                                                    "matched_data": {
+                                                        "$arrayElemAt": [
+                                                            {
+                                                                "$filter": {
+                                                                    "input": "$pre_tools_data",
+                                                                    "as": "data",
+                                                                    "cond": {
+                                                                        "$eq": [
+                                                                            "$$data._id",
+                                                                            {"$convert": {"input": "$$entry.config.function_id", "to": "objectId", "onError": None, "onNull": None}}
+                                                                        ]
+                                                                    }
+                                                                }
+                                                            },
+                                                            0
+                                                        ]
+                                                    }
+                                                },
+                                                "in": "$$matched_data.title"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+            # Stage 6.2: Lookup 'reviewer_tools' data from 'apicalls' collection using the ObjectIds in 'settings.reviewer_tools'
             {
                 "$lookup": {
                     "from": "apicalls",
@@ -403,18 +450,46 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "as": "reviewer_tools_data",
                 }
             },
-            # Stage 6.5: Extract bridge-level post_tool if configured
-            # Structure: {id: "ObjectId", script_id: "actual-script-id", args: {...}}
+            # Stage 6.6: Lookup title from apicalls collection for post_tool.
+            # Match by _id using post_tool.id converted to ObjectId.
+            {
+                "$lookup": {
+                    "from": "apicalls",
+                    "let": {
+                        "post_tool_id_obj": {
+                            "$convert": {
+                                "input": "$post_tool.id",
+                                "to": "objectId",
+                                "onError": None,
+                                "onNull": None,
+                            }
+                        }
+                    },
+                    "pipeline": [
+                        {"$match": {"$expr": {"$and": [
+                            {"$ne": ["$$post_tool_id_obj", None]},
+                            {"$eq": ["$_id", "$$post_tool_id_obj"]},
+                        ]}}},
+                        {"$project": {"_id": 0, "title": 1}},
+                        {"$limit": 1},
+                    ],
+                    "as": "post_tool_meta",
+                }
+            },
+            # Stage 6.7: Merge title into post_tool
             {
                 "$addFields": {
-                    "bridge_post_tool": {
+                    "post_tool": {
                         "$cond": [
                             {"$and": [
                                 {"$ne": ["$post_tool", None]},
-                                {"$eq": [{"$type": "$post_tool"}, "object"]}
+                                {"$gt": [{"$size": "$post_tool_meta"}, 0]}
                             ]},
-                            "$post_tool",
-                            None
+                            {"$mergeObjects": [
+                                "$post_tool",
+                                {"title": {"$arrayElemAt": ["$post_tool_meta.title", 0]}}
+                            ]},
+                            "$post_tool"
                         ]
                     }
                 }
@@ -1041,15 +1116,9 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     bridge_data["pre_tools_data"].append(folder_pre_tool)
                     bridge_data["pre_tools"].append(pre_tool_data_entry)
 
-            # Merge folder_post_tool into bridge_data (will be overridden by bridge_post_tool if present)
+            # Merge folder_post_tool into bridge_data
             if folder_result and folder_result[0].get("folder_post_tool"):
-                bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
-
-            # Bridge-level post_tool takes precedence - merge into single "post_tool" field
-            if bridge_data.get("bridge_post_tool"):
-                bridge_data["post_tool"] = bridge_data.pop("bridge_post_tool")
-            elif bridge_data.get("folder_post_tool"):
-                bridge_data["post_tool"] = bridge_data.pop("folder_post_tool")
+                bridge_data["post_tool"] = folder_result[0]["folder_post_tool"]
 
             # Merge folder variables_path into bridge's variables_path
             if folder_result and folder_result[0].get("variables_path"):
@@ -1074,8 +1143,16 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             # Replace bridge response_type with folder response_type if present
             folder_response_type = folder_result[0].get("folder_response_type") if folder_result else None
             if folder_response_type and isinstance(folder_response_type, dict) and folder_response_type.get("type") == "json_schema":
-                bridge_data["configuration"]["response_type"]["mode"] = "custom"
-                bridge_data["configuration"]["response_type"]["value"] = folder_response_type
+                bridge_response_type = bridge_data.get("configuration", {}).get("response_type")
+                if isinstance(bridge_response_type, dict):
+                    bridge_data["configuration"]["response_type"]["mode"] = "custom"
+                    bridge_data["configuration"]["response_type"]["value"] = folder_response_type
+                else:
+                    # If bridge response_type is a string (e.g., "default"), replace it entirely
+                    bridge_data["configuration"]["response_type"] = {
+                        "mode": "custom",
+                        "value": folder_response_type
+                    }
             
             # Extract folder metadata
             if folder_result and folder_result[0].get("type"):
@@ -1115,7 +1192,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             bridge_data["folder_limit"] = 0
             bridge_data["folder_usage"] = 0
             bridge_data["folder_type"] = None
-            
+
 
         # Structure the final response
         response = {"success": True, "bridges": bridge_data}

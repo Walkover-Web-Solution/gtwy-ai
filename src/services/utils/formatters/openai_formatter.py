@@ -5,6 +5,15 @@ and reasoning), embeddings, and image generation.
 """
 
 from src.services.utils.formatters.finish_reason import finish_reason_mapping
+from src.services.utils.formatters.web_search_extractor import extract_web_search_annotations
+
+
+def _last_message_item(output):
+    result = None
+    for item in output:
+        if isinstance(item, dict) and item.get("type") == "message":
+            result = item
+    return result
 
 
 def _last_message_item(output):
@@ -98,7 +107,8 @@ def _format_chat(response, tools_data, images):
             else finish_reason_mapping(response.get("incomplete_details", {}).get("reason", None)),
             "tools_data": tools_data or {},
             "images": images,
-            "annotations": (last_message.get("content") or [{}])[0].get("annotations") if last_message else None,
+            "annotations": extract_web_search_annotations(response, "openai")
+            or (last_message.get("content") or [{}])[0].get("annotations") if last_message else None,
             "fallback": response.get("fallback") or False,
             "firstAttemptError": response.get("firstAttemptError") or "",
         },
