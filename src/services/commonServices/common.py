@@ -234,7 +234,6 @@ async def chat(request_body):
         pre_tools = bridge_configurations.get(current_agent_id, {}).get("pre_tools_data", [])
         post_tool = bridge_configurations.get(current_agent_id, {}).get("post_tool_data", {})
         parsed_data["pre_tools"] = setup_agent_tools(parsed_data, bridge_configurations, pre_tools)
-        parsed_data["post_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, post_tool)
         await apply_prompt_wrapper(parsed_data)
 
         # Initialize or retrieve transfer_request_id for tracking transfers
@@ -279,6 +278,7 @@ async def chat(request_body):
 
         # Step 7: Prepare Prompt, Variables and Memory
         memory, missing_vars = await prepare_prompt(parsed_data, thread_info, model_config, custom_config)
+        parsed_data["post_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, post_tool)
 
         missing_vars = filter_missing_vars(missing_vars, parsed_data["variables_state"])
 
