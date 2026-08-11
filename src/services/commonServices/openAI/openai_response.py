@@ -2,7 +2,9 @@ import base64
 
 from src.configs.constant import service_name
 from src.configs.model_configuration import model_config_document
+from src.configs.service_registry import image_generation_tool_config, web_search_tool_config
 from src.services.utils.ai_middleware_format import Response_formatter
+from src.services.utils.code_interpreter_service import build_code_interpreter_tool, process_code_interpreter_outputs
 from src.services.utils.gcp_upload_service import uploadDoc
 
 from ..baseService.baseService import BaseService
@@ -32,8 +34,16 @@ class OpenaiResponse(BaseService):
             conversation = ConversationService.createOpenAiConversation(
                 self.configuration.get("conversation"), self.memory, self.files
             ).get("messages", [])
+            developer_prompt = self.configuration["prompt"]
+            if "code_interpreter" in self.built_in_tools:
+                developer_prompt = (
+                    f"{developer_prompt}\n\n"
+                    "When you create or modify a file with the python tool, always "
+                    "explicitly mention the exact output filename in your final "
+                    "response so it can be identified and retrieved."
+                )
             developer = (
-                [{"role": "developer", "content": self.configuration["prompt"]}] if not self.reasoning_model else []
+                [{"role": "developer", "content": developer_prompt}] if not self.reasoning_model else []
             )
 
             if self.image_data and isinstance(self.image_data, list):
@@ -43,7 +53,14 @@ class OpenaiResponse(BaseService):
                 self.customConfig["input"].append({"role": "user", "content": content})
             elif self.files and len(self.files) > 0:
                 self.customConfig["input"] = developer + conversation
-                file_content = [{"type": "input_file", "file_url": file_url} for file_url in self.files]
+                await self.resolve_provider_files()
+                file_content = []
+                for file_url in self.files:
+                    ref = self.provider_file_map.get(file_url)
+                    if ref:
+                        file_content.append({"type": "input_file", "file_id": ref["file_id"]})
+                    else:
+                        file_content.append({"type": "input_file", "file_url": file_url})
                 content = [{"type": "input_text", "text": self.user}] + file_content if self.user else file_content
                 self.customConfig["input"].append({"role": "user", "content": content})
             else:
@@ -63,18 +80,23 @@ class OpenaiResponse(BaseService):
                     tools_to_append = []
 
                     if "web_search" in self.built_in_tools:
+                        web_search_cfg = web_search_tool_config(service_name["openai"]) or {}
                         if self.web_search_filters and isinstance(self.web_search_filters, list):
-                            web_search_tool = {
-                                "type": "web_search",
-                                "filters": {"allowed_domains": self.web_search_filters},
-                            }
+                            web_search_tool = dict(web_search_cfg.get("filtered"))
+                            web_search_tool["filters"] = {"allowed_domains": self.web_search_filters}
                         else:
-                            web_search_tool = {"type": "web_search_preview"}
+                            web_search_tool = dict(web_search_cfg.get("unfiltered"))
                         tools_to_append.append(web_search_tool)
 
                     if "image_generation" in self.built_in_tools:
-                        image_generation_tool = {"type": "image_generation"}
+                        image_generation_tool = dict(
+                            image_generation_tool_config(service_name["openai"]) or {"type": "image_generation"}
+                        )
                         tools_to_append.append(image_generation_tool)
+
+                    if "code_interpreter" in self.built_in_tools:
+                        input_file_ids = [ref["file_id"] for ref in self.provider_file_map.values()]
+                        tools_to_append.append(build_code_interpreter_tool(input_file_ids))
 
                     self.customConfig["tools"].extend(tools_to_append)
 
@@ -96,6 +118,10 @@ class OpenaiResponse(BaseService):
                     item["image_url"] = gcp_url
                     item["permanent_url"] = gcp_url
                     item.pop("result", None)
+
+            if "code_interpreter" in self.built_in_tools and not self.stream_mode:
+                input_file_ids = [ref["file_id"] for ref in self.provider_file_map.values()]
+                await process_code_interpreter_outputs(modelResponse, self.apikey, input_file_ids)
 
             if not openAIResponse.get("success"):
                 await self.handle_failure(openAIResponse)

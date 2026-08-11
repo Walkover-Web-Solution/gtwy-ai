@@ -22,16 +22,19 @@ def _handle_sigterm(*_):
 
 signal.signal(signal.SIGTERM, _handle_sigterm)
 from models.Timescale.connections import init_async_dbservice
+from src.configs.constant import file_lifecycle_config
 from src.configs.model_configuration import background_listen_for_changes, init_model_configuration
 from src.configs.service_registry import background_listen_for_service_changes, init_service_registry
 from src.routes.chatBot_routes import router as chatbot_router
 from src.routes.image_process_routes import router as image_process_routes
+from src.routes.provider_files_routes import router as provider_files_routes
 from src.routes.rag_routes import router as rag_routes
 from src.routes.v2.modelRouter import router as v2_router
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueService import queue_obj
 from src.services.utils.auto_router_utils import run_supported_services_refresh_loop
 from src.services.utils.batch_script import repeat_function
+from src.services.utils.files_cleanup_script import files_cleanup_cron
 
 async def consume_messages_in_executor():
     await queue_obj.consume_messages()
@@ -55,6 +58,11 @@ async def lifespan(app: FastAPI):
         consume_task = asyncio.create_task(consume_messages_in_executor())
         batch_task = asyncio.create_task(repeat_function())
 
+    files_cleanup_task = None
+    if file_lifecycle_config["enabled"]:
+        # cross-worker/pod single execution is guarded by a Redis lock inside the cron
+        files_cleanup_task = asyncio.create_task(files_cleanup_cron())
+
     asyncio.create_task(init_async_dbservice()) if Config.ENVIRONMENT == "LOCAL" else await init_async_dbservice()
 
     logger.info("Starting MongoDB change stream listener as a background task.")
@@ -76,6 +84,8 @@ async def lifespan(app: FastAPI):
         consume_task.cancel()
     if batch_task:
         batch_task.cancel()
+    if files_cleanup_task:
+        files_cleanup_task.cancel()
 
     await queue_obj.disconnect()
     await sub_queue_obj.disconnect()
@@ -91,6 +101,12 @@ async def lifespan(app: FastAPI):
             await batch_task
     except asyncio.CancelledError:
         logger.info("Batch script task was cancelled during shutdown.")
+
+    try:
+        if files_cleanup_task:
+            await files_cleanup_task
+    except asyncio.CancelledError:
+        logger.info("Files cleanup task was cancelled during shutdown.")
 
     try:
         await change_stream_task
@@ -149,6 +165,7 @@ app.include_router(chatbot_router, prefix="/chatbot")
 app.include_router(image_process_routes, prefix="/image/processing")
 app.include_router(image_process_routes, prefix="/files")
 app.include_router(rag_routes, prefix="/rag")
+app.include_router(provider_files_routes, prefix="/api/v2/files")
 
 if __name__ == "__main__":
     PORT = int(Config.PORT)

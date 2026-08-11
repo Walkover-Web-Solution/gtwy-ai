@@ -8,6 +8,22 @@ from src.services.utils.formatters.finish_reason import finish_reason_mapping
 from src.services.utils.formatters.web_search_extractor import extract_web_search_annotations
 
 
+def _last_message_item(output):
+    result = None
+    for item in output:
+        if isinstance(item, dict) and item.get("type") == "message":
+            result = item
+    return result
+
+
+def _last_message_item(output):
+    result = None
+    for item in output:
+        if isinstance(item, dict) and item.get("type") == "message":
+            result = item
+    return result
+
+
 def format_openai(response, tools_data, images, type="chat"):
     if type == "embedding":
         return _format_embedding(response)
@@ -28,10 +44,27 @@ def _format_chat(response, tools_data, images):
         and item.get("type") == "image_generation_call"
         and (item.get("image_url") or item.get("permanent_url") or item.get("url"))
     ]
+    last_message = _last_message_item(response.get("output") or [])
+    llm_urls = [
+        {
+            "revised_prompt": item.get("revised_prompt"),
+            "permanent_url": item.get("image_url") or item.get("permanent_url") or item.get("url"),
+            "type": "image",
+        }
+        for item in response.get("output", [])
+        if isinstance(item, dict)
+        and item.get("type") == "image_generation_call"
+        and (item.get("image_url") or item.get("permanent_url") or item.get("url"))
+    ] + [
+        {"revised_prompt": None, "permanent_url": f.get("gcp_url"), "filename": f.get("filename"), "type": "file"}
+        for f in response.get("generated_files", []) or []
+        if f.get("gcp_url")
+    ]
     return {
         "data": {
             "id": response.get("id", None),
             "image_urls": generated_image_urls,
+            "llm_urls": llm_urls,
             "content": (
                 # Check if any item in output is a function call
                 next(
@@ -45,16 +78,10 @@ def _format_chat(response, tools_data, images):
                 if any(item.get("type") == "function_call" for item in response.get("output", []))
                 # Try to get content from multiple types with fallback
                 else (
+                    (last_message.get("content") or [{}])[0].get("text") if last_message else None
+                )
+                or (
                     next(
-                        (
-                            (item.get("content") or [{}])[0].get("text", None)
-                            for item in response.get("output", [])
-                            if item.get("type") == "message"
-                            and (item.get("content") or [{}])[0].get("text", None) is not None
-                        ),
-                        None,
-                    )
-                    or next(
                         (
                             (item.get("content") or [{}])[0].get("text", None)
                             for item in response.get("output", [])
@@ -81,7 +108,7 @@ def _format_chat(response, tools_data, images):
             "tools_data": tools_data or {},
             "images": images,
             "annotations": extract_web_search_annotations(response, "openai")
-            or ((response.get("output") or [{}])[0].get("content") or [{}])[0].get("annotations", None),
+            or (last_message.get("content") or [{}])[0].get("annotations") if last_message else None,
             "fallback": response.get("fallback") or False,
             "firstAttemptError": response.get("firstAttemptError") or "",
         },

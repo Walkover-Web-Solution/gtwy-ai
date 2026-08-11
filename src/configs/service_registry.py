@@ -80,6 +80,18 @@ def prompt_role(name):
     return _field(name, "prompt_role", "system")
 
 
+def web_search_tool_config(name):
+    return _field(name, "web_search_tool", None)
+
+
+def image_generation_tool_config(name):
+    return _field(name, "image_generation_tool", None)
+
+
+def code_interpreter_tool_config(name):
+    return _field(name, "code_interpreter_tool", None)
+
+
 # ---------------------------------------------------------------------------
 # Capability predicates — each maps to a specific allow-list set (see plan §1.1)
 # ---------------------------------------------------------------------------
