@@ -1,3 +1,4 @@
+import json
 import time as _time
 from datetime import datetime
 
@@ -10,6 +11,7 @@ from models.postgres.pg_models import (
     system_prompt_versionings,
     user_bridge_config_history,
 )
+from src.configs.constant import redis_keys
 from src.services.utils.time import log_slow_call, SLOW_CALL_THRESHOLDS
 
 pg = models["pg"]
@@ -371,6 +373,116 @@ async def update_conversation_log(message_id, org_id, update_data):
         session.rollback()
         logger.error(f"Error updating conversation log for message_id={message_id}: {str(e)}")
         return False
+    finally:
+        session.close()
+
+
+def _find_examples_in_rounds(rounds, remaining_names, found):
+    """Single pass over an iterable of round-dicts ({call_id: {name, args,
+    data}}) — same shape whether it came from Postgres
+    conversation_logs.tools_call_data or a Redis-cached conversation entry's
+    tools_call_data — matching against ALL of `remaining_names` at once
+    instead of one tool at a time. Mutates `found` (dict: name -> {args,
+    response}) and `remaining_names` (set, shrinks as matches are found) in
+    place. Caller controls recency by how it orders `rounds` (reversed() for
+    newest-first) and stops once `remaining_names` is empty.
+    """
+    for round_data in rounds:
+        if not remaining_names:
+            return
+        if not isinstance(round_data, dict):
+            continue
+        for call in round_data.values():
+            if not isinstance(call, dict):
+                continue
+            call_name = call.get("name")
+            if call_name in remaining_names:
+                data = call.get("data")
+                response = data.get("response") if isinstance(data, dict) else data
+                if response is not None:
+                    found[call_name] = {"args": call.get("args"), "response": response}
+                    remaining_names.discard(call_name)
+
+
+async def get_recent_tool_examples(org_id, bridge_id, thread_id, sub_thread_id, tool_names, version_id="", scan_limit=20):
+    """Return the most recent real {args, response} pair recorded for each
+    name in `tool_names`, in THIS thread/sub_thread — as {name: {args,
+    response}}, omitting names that have never been called there.
+
+    Used by src/services/auto_exec/prompt_builder.py so the AI can see a
+    real response shape (not just the request schema) when writing code
+    that chains one tool's result into another's arguments. Scoped to
+    thread_id + sub_thread_id (not bridge-wide) so examples never leak in
+    from unrelated conversations.
+
+    Batched across all of `tool_names` in one fetch instead of one lookup
+    per tool — fetches the conversation cache (and, only if still needed,
+    Postgres) exactly ONCE per call, then scans that single dataset for
+    every requested name in a single pass. Checks TWO places in order,
+    cheapest/freshest first:
+    1. The conversation cache Redis key (cd_conversation_{version_id}_{thread_id}_
+       {sub_thread_id}) that src/services/utils/common_utils.py::save_conversations_to_redis
+       already writes to on every turn — no extra cache key, already thread-scoped,
+       already populated at zero extra cost.
+    2. A Postgres scan of conversation_logs (last `scan_limit` rows for this
+       thread) as the fallback, used for whichever names the conversation
+       cache didn't cover (it's a shallow rolling window of ~9 entries and
+       can miss a tool called earlier in a long thread).
+    """
+    from src.services.cache_service import find_in_cache
+
+    remaining = {name for name in tool_names if name}
+    found = {}
+    if not remaining:
+        return found
+
+    conversation_cache_key = f"{redis_keys['conversation_']}{version_id}_{thread_id}_{sub_thread_id}"
+    cached_conversation = await find_in_cache(conversation_cache_key)
+    if cached_conversation:
+        try:
+            conversation_entries = json.loads(cached_conversation) or []
+        except (json.JSONDecodeError, TypeError):
+            conversation_entries = []
+        for entry in reversed(conversation_entries):
+            if not remaining:
+                break
+            entry_tools_call_data = entry.get("tools_call_data") if isinstance(entry, dict) else None
+            if not entry_tools_call_data:
+                continue
+            _find_examples_in_rounds(reversed(entry_tools_call_data), remaining, found)
+
+    if not remaining:
+        return found
+
+    session = pg["session"]()
+    try:
+        _t = _time.time()
+        logs = (
+            session.query(ConversationLog)
+            .filter(
+                and_(
+                    ConversationLog.org_id == org_id,
+                    ConversationLog.bridge_id == bridge_id,
+                    ConversationLog.thread_id == thread_id,
+                    ConversationLog.sub_thread_id == sub_thread_id,
+                    ConversationLog.tools_call_data.isnot(None),
+                )
+            )
+            .order_by(ConversationLog.created_at.desc())
+            .limit(scan_limit)
+            .all()
+        )
+        log_slow_call("PG query get_recent_tool_examples", _time.time() - _t, SLOW_CALL_THRESHOLDS["pg"])
+
+        for log in logs:
+            if not remaining:
+                break
+            _find_examples_in_rounds(reversed(log.tools_call_data or []), remaining, found)
+
+        return found
+    except Exception as e:
+        logger.error(f"Error in get_recent_tool_examples: {str(e)}")
+        return found
     finally:
         session.close()
 

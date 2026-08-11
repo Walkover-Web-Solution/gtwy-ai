@@ -28,6 +28,7 @@ from ..openAI.openai_stream_utils import sanitize_openai_response_item
 from ..openaiCompatible.openai_compatible_modelrun import openai_compatible_modelrun, openai_compatible_stream
 from ..streaming_service import StreamingService
 from .utils import (
+    apply_variables_path,
     build_accumulated_response,
     make_code_mapping_by_service,
     process_data_and_run_tools,
@@ -877,24 +878,7 @@ class BaseService:
                 else tool_mapping.get("name", value.get("name"))
             )
 
-            function_variables_path = variables_path.get(function_name)
-            if not function_variables_path:
-                continue
-
-            for path_key, path_value in function_variables_path.items():
-                value_to_set = _.objects.get(variables, path_value)
-                if value_to_set is None:
-                    continue
-
-                keys = path_key.split('.')
-                current = args
-                for key in keys[:-1]:
-                    next_node = current.get(key)
-                    if not isinstance(next_node, dict):
-                        current[key] = {}
-                        next_node = current[key]
-                    current = next_node
-                current[keys[-1]] = value_to_set
+            apply_variables_path(args, function_name, variables, variables_path)
 
         return codes_mapping
 
