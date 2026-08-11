@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import tempfile
 import time
@@ -10,75 +11,77 @@ from google import genai
 
 from src.configs.constant import redis_keys
 from src.schemas.image_schemas import FileUploadRequest, VideoUrlUploadRequest
-from src.services.cache_service import store_in_cache
+from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.utils.gcp_upload_service import uploadDoc
 
+MAX_FILES_PER_REQUEST = 10
+MAX_TOTAL_UPLOAD_SIZE_BYTES = 35 * 1024 * 1024  # 35MB, combined across all files in one request
 
-async def image_processing(file: UploadFile):
-    file_content = await file.read()
 
-    try:
-        # Upload file using common GCP upload function
-        image_url = await uploadDoc(
-            file=file_content,
-            folder="uploads",
-            real_time=True,
-            content_type=file.content_type,
-            original_filename=file.filename,
+def _enforce_upload_limits(files: list[UploadFile]):
+    if len(files) > MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "error": f"Only {MAX_FILES_PER_REQUEST} files are allowed at a time"},
+        )
+    total_size = sum(file.size or 0 for file in files)
+    if total_size > MAX_TOTAL_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "success": False,
+                "error": f"Combined file size must not exceed {MAX_TOTAL_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB",
+            },
         )
 
-        return {"success": True, "image_url": image_url}
+
+async def _upload_single_image(image: UploadFile):
+    file_content = await image.read()
+    image_url = await uploadDoc(
+        file=file_content,
+        folder="uploads",
+        real_time=True,
+        content_type=image.content_type,
+        original_filename=image.filename,
+    )
+    return {"success": True, "image_url": image_url}
+
+
+async def image_processing(image: UploadFile):
+    _enforce_upload_limits([image])
+
+    try:
+        return await _upload_single_image(image)
     except Exception as e:
-        # Handle exceptions and return an error response
         raise HTTPException(
             status_code=400, detail={"success": False, "error": "Error in image processing: " + str(e)}
         ) from e
 
 
-async def file_processing(request):
-    # Check if request contains JSON data (for video URL) or form data (for file upload)
-    content_type = request.headers.get("content-type", "")
+async def multi_image_processing(images: list[UploadFile]):
+    _enforce_upload_limits(images)
 
-    # Handle video URL upload (JSON request)
-    if "application/json" in content_type:
-        body = await request.json()
-        vid_req = VideoUrlUploadRequest.model_validate(body)
-        return await _process_video_url(video_url=str(vid_req.video_url), api_key=vid_req.apikey or "")
+    results = []
+    for image in images:
+        try:
+            results.append(await _upload_single_image(image))
+        except Exception as e:
+            results.append({"success": False, "error": "Error in image processing: " + str(e)})
 
-    # Handle file upload (form data)
-    else:
-        body = await request.form()
+    return results
 
-        # Check for video_url in form data as well
-        video_url = body.get("video_url")
-        if video_url:
-            vid_req = VideoUrlUploadRequest.model_validate({
-                "video_url": video_url,
-                "apikey": body.get("apikey"),
-            })
-            return await _process_video_url(video_url=str(vid_req.video_url), api_key=vid_req.apikey or "")
 
-        # Check for both 'file' and 'video' in form data
-        file = body.get("file") or body.get("video")
-
-    # Extract thread parameters from form data
-    thread_id = body.get("thread_id")
-    sub_thread_id = body.get("sub_thread_id")
-    bridge_id = body.get("agent_id")
-
-    upload = FileUploadRequest.model_validate({"file": file, "apikey": body.get("apikey") or ""})
+async def _process_single_file(file, api_key: str):
+    """Validate and upload one file (video -> Gemini, everything else -> GCP). Raises HTTPException on failure."""
+    upload = FileUploadRequest.model_validate({"file": file, "apikey": api_key})
     file_content = await file.read()
     is_pdf = upload.is_pdf
     is_video = upload.is_video
-    api_key = upload.apikey or ""
 
     try:
-        # Handle video files with Gemini processing
         if is_video:
-            # Create Gemini client
             gemini_client = genai.Client(api_key=api_key)
 
-            # Create temporary file to upload to Gemini
             # Use original file extension or default to .mp4
             file_extension = os.path.splitext(file.filename)[1] if file.filename else ".mp4"
             with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
@@ -86,10 +89,8 @@ async def file_processing(request):
                 temp_file_path = temp_file.name
 
             try:
-                # Upload file to Gemini
                 gemini_file = gemini_client.files.upload(file=temp_file_path)
 
-                # Convert file object to dictionary for JSON serialization
                 file_data = {
                     "name": gemini_file.name,
                     "display_name": gemini_file.display_name,
@@ -107,16 +108,18 @@ async def file_processing(request):
                     "error": gemini_file.error,
                 }
 
-                return {"success": True, "file_data": file_data, "message": "Video uploaded to Gemini successfully"}
-
+                return {
+                    "success": True,
+                    "filename": file.filename,
+                    "file_data": file_data,
+                    "message": "Video uploaded to Gemini successfully",
+                    "is_pdf": False,
+                }
             finally:
-                # Clean up temporary file
                 if os.path.exists(temp_file_path):
                     os.unlink(temp_file_path)
 
-        # Handle regular files (non-video) with GCP upload
         else:
-            # Upload file using common GCP upload function
             file_url = await uploadDoc(
                 file=file_content,
                 folder="uploads",
@@ -124,18 +127,82 @@ async def file_processing(request):
                 content_type=file.content_type,
                 original_filename=file.filename,
             )
-
-            # If PDF and thread parameters exist, save to Redis cache
-            if is_pdf and thread_id and bridge_id:
-                cache_key = f"{redis_keys['pdf_url_']}{bridge_id}_{thread_id}_{sub_thread_id or thread_id}"
-                await store_in_cache(cache_key, [file_url], 604800)
-
-            return {"success": True, "file_url": file_url}
+            return {"success": True, "filename": file.filename, "file_url": file_url, "is_pdf": is_pdf}
 
     except Exception as e:
-        # Handle exceptions and return an error response
         error_message = "Error in video processing: " if is_video else "Error in file processing: "
         raise HTTPException(status_code=400, detail={"success": False, "error": error_message + str(e)}) from e
+
+
+async def _cache_pdf_urls(bridge_id, thread_id, sub_thread_id, new_urls):
+    """Merge newly uploaded pdf urls into the existing per-thread cache instead of clobbering it."""
+    cache_key = f"{redis_keys['pdf_url_']}{bridge_id}_{thread_id}_{sub_thread_id or thread_id}"
+    existing_raw = await find_in_cache(cache_key)
+    try:
+        existing_urls = json.loads(existing_raw) if existing_raw else []
+    except (json.JSONDecodeError, TypeError):
+        existing_urls = []
+    merged_urls = existing_urls + [url for url in new_urls if url not in existing_urls]
+    await store_in_cache(cache_key, merged_urls, 604800)
+
+
+async def file_processing(request):
+    # Check if request contains JSON data (for video URL) or form data (for file upload)
+    content_type = request.headers.get("content-type", "")
+
+    # Handle video URL upload (JSON request)
+    if "application/json" in content_type:
+        body = await request.json()
+        vid_req = VideoUrlUploadRequest.model_validate(body)
+        return await _process_video_url(video_url=str(vid_req.video_url), api_key=vid_req.apikey or "")
+
+    # Handle file upload (form data)
+    body = await request.form()
+
+    # Check for video_url in form data as well
+    video_url = body.get("video_url")
+    if video_url:
+        vid_req = VideoUrlUploadRequest.model_validate({
+            "video_url": video_url,
+            "apikey": body.get("apikey"),
+        })
+        return await _process_video_url(video_url=str(vid_req.video_url), api_key=vid_req.apikey or "")
+
+    # Accept one or more files under either 'file' or 'video' (repeated form fields)
+    files = [f for f in (body.getlist("file") + body.getlist("video")) if f]
+    if not files:
+        raise HTTPException(status_code=400, detail={"success": False, "error": "File or video_url not found"})
+    _enforce_upload_limits(files)
+
+    thread_id = body.get("thread_id")
+    sub_thread_id = body.get("sub_thread_id")
+    bridge_id = body.get("agent_id")
+    api_key = body.get("apikey") or ""
+
+    # Single file: keep the original response shape unchanged.
+    if len(files) == 1:
+        result = await _process_single_file(files[0], api_key)
+        if result.get("is_pdf") and thread_id and bridge_id:
+            await _cache_pdf_urls(bridge_id, thread_id, sub_thread_id, [result["file_url"]])
+        return {k: v for k, v in result.items() if k not in ("is_pdf", "filename")}
+
+    # Multiple files: process each independently so one bad file doesn't fail the whole batch.
+    results = []
+    pdf_urls = []
+    for file in files:
+        try:
+            result = await _process_single_file(file, api_key)
+            if result.get("is_pdf"):
+                pdf_urls.append(result["file_url"])
+            results.append({k: v for k, v in result.items() if k != "is_pdf"})
+        except HTTPException as e:
+            error = e.detail.get("error", str(e.detail)) if isinstance(e.detail, dict) else str(e.detail)
+            results.append({"success": False, "filename": file.filename, "error": error})
+
+    if pdf_urls and thread_id and bridge_id:
+        await _cache_pdf_urls(bridge_id, thread_id, sub_thread_id, pdf_urls)
+
+    return {"success": all(r["success"] for r in results), "results": results}
 
 
 async def _process_video_url(video_url: str, api_key: str):
