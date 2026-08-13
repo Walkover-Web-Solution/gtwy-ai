@@ -339,6 +339,11 @@ async def chat(request_body):
                     bridge_configurations=bridge_configurations,
                 )
             await prepare_planner_request(parsed_data, bridge_configurations, custom_config)
+        elif parsed_data.get("mode") == "auto_tools":
+            # User opts in to execute_plan by setting mode: "auto_tools" on the request.
+            from src.services.auto_exec.prompt_builder import inject_execute_plan_tool
+
+            await inject_execute_plan_tool(params, parsed_data)
 
         # Execute with retry mechanism
         class_obj = await Helper.create_service_handler(params, parsed_data["service"])

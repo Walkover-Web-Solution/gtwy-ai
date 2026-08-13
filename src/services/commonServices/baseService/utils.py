@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 import httpx
+import pydash as _
 from fastapi import Request
 from google.genai import types
 
@@ -427,6 +428,101 @@ async def sendResponse(response_format, data, success=False, variables=None, met
             return await send_request(**response_format["cred"], method="POST", data=data_to_send)
 
 
+def apply_variables_path(args, function_name, variables, variables_path):
+    """Inject variables_path[function_name] values from `variables` into
+    `args`, in place. No-op if variables/variables_path/args aren't the
+    right shape, or function_name has no entry.
+
+    Extracted from BaseService.replace_variables_in_args's inner per-call
+    loop body so it's shared verbatim by the normal tool-calling path
+    (baseService.py:replace_variables_in_args, one whole codes_mapping at a
+    time) and src/services/auto_exec/tool_bridge.py (one sandboxed call at
+    a time) — one implementation instead of two that can drift apart.
+    """
+    if not variables_path or not variables or not isinstance(args, dict):
+        return args
+
+    function_variables_path = variables_path.get(function_name)
+    if not function_variables_path:
+        return args
+
+    for path_key, path_value in function_variables_path.items():
+        value_to_set = _.objects.get(variables, path_value)
+        if value_to_set is None:
+            continue
+
+        keys = path_key.split(".")
+        current = args
+        for key in keys[:-1]:
+            next_node = current.get(key)
+            if not isinstance(next_node, dict):
+                current[key] = {}
+                next_node = current[key]
+            current = next_node
+        current[keys[-1]] = value_to_set
+
+    return args
+
+
+def build_single_tool_task(name, args, tool_mapping, ctx):
+    """Build the awaitable for one tool call, chosen by tool_mapping['type'].
+
+    `ctx` supplies the request-scoped fields the RAG/AGENT branches need:
+    org_id, owner_id, message_id, thread_id, sub_thread_id,
+    bridge_configurations, timer, stream_mode, streamer. Extracted from
+    process_data_and_run_tools's per-call dispatch (RAG/AGENT/Firecrawl/MCP/
+    default) so it's shared verbatim by that function (reading these off
+    `self` via a ctx dict built once per call) and
+    src/services/auto_exec/tool_bridge.py (reading them off its own ctx
+    dict, built once per sandboxed plan) — one implementation instead of
+    two that can drift apart (this is also where a real drift was caught:
+    tool_bridge.py's own copy filtered out "_query" instead of "user" from
+    the AGENT variables dict, and was missing version_id/timer_state/
+    bridge_configurations/injected_streamer entirely).
+    """
+    tool_type = tool_mapping.get("type")
+    if tool_type == "RAG":
+        return get_text_from_vectorsQuery(
+            {**args, "org_id": ctx.get("org_id")},
+            Flag=True,
+            owner_id=ctx.get("owner_id"),
+            resource_to_collection_mapping=tool_mapping.get("resource_to_collection_mapping", {}),
+        )
+    elif tool_type == "AGENT":
+        agent_args = {
+            "org_id": ctx.get("org_id"),
+            "bridge_id": tool_mapping.get("bridge_id"),
+            "user": args.get("_query"),
+            "variables": {key: value for key, value in args.items() if key != "user"},
+            "message_id": ctx.get("message_id"),
+        }
+
+        if ctx.get("stream_mode") and ctx.get("streamer"):
+            agent_args["injected_streamer"] = ctx["streamer"]
+            agent_args["nested_stream_call"] = True
+
+        if tool_mapping.get("requires_thread_id", False):
+            agent_args["thread_id"] = ctx.get("thread_id")
+            agent_args["sub_thread_id"] = ctx.get("sub_thread_id")
+        if tool_mapping.get("version_id", False):
+            agent_args["version_id"] = tool_mapping.get("version_id")
+
+        timer = ctx.get("timer")
+        if timer is not None and hasattr(timer, "getTime"):
+            agent_args["timer_state"] = timer.getTime()
+
+        if ctx.get("bridge_configurations"):
+            agent_args["bridge_configurations"] = ctx["bridge_configurations"]
+
+        return call_gtwy_agent(agent_args)
+    elif tool_type == inbuild_tools["Gtwy_Web_Search"]:
+        return call_firecrawl_scrape(args)
+    elif tool_type == "MCP":
+        return call_mcp_tool(args, tool_mapping)
+    else:
+        return axios_work(args, tool_mapping)
+
+
 async def process_data_and_run_tools(codes_mapping, self):
     try:
         self.timer.start()
@@ -436,6 +532,17 @@ async def process_data_and_run_tools(codes_mapping, self):
 
         # Prepare tasks for async execution
         tasks = []
+        dispatch_ctx = {
+            "org_id": self.org_id,
+            "owner_id": self.owner_id,
+            "message_id": self.message_id,
+            "thread_id": self.thread_id,
+            "sub_thread_id": self.sub_thread_id,
+            "bridge_configurations": getattr(self, "bridge_configurations", None),
+            "timer": getattr(self, "timer", None),
+            "stream_mode": self.stream_mode,
+            "streamer": self.streamer,
+        }
         for tool_call_key, tool in codes_mapping.items():
             original_name = tool["name"]
             name = original_name
@@ -470,53 +577,14 @@ async def process_data_and_run_tools(codes_mapping, self):
                 }
             elif not tool_data.get("response"):
                 # if function is present in db/NO response, create task for async processing
-                if self.tool_id_and_name_mapping[name].get("type") == "RAG":
-                    # Get the resource_to_collection_mapping from tool_id_and_name_mapping
-                    resource_to_collection_mapping = self.tool_id_and_name_mapping[name].get(
-                        "resource_to_collection_mapping", {}
-                    )
-                    task = get_text_from_vectorsQuery(
-                        {**tool_data.get("args"), "org_id": self.org_id},
-                        Flag=True,
-                        owner_id=self.owner_id,
-                        resource_to_collection_mapping=resource_to_collection_mapping,
-                    )
-                elif self.tool_id_and_name_mapping[name].get("type") == "AGENT":
-                    agent_args = {
-                        "org_id": self.org_id,
-                        "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
-                        "user": tool_data.get("args").get("_query"),
-                        "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
-                        "message_id": self.message_id
-                    }
+                if self.tool_id_and_name_mapping[name].get("type") == "CODE_EXEC":
+                    from src.services.auto_exec.handler import run_generated_plan
 
-                    if self.stream_mode and self.streamer:
-                        agent_args["injected_streamer"] = self.streamer
-                        agent_args["nested_stream_call"] = True
-
-                    # Add thread_id and sub_thread_id if bridge requires it
-                    if self.tool_id_and_name_mapping[name].get("requires_thread_id", False):
-                        agent_args["thread_id"] = self.thread_id
-                        agent_args["sub_thread_id"] = self.sub_thread_id
-                    if self.tool_id_and_name_mapping[name].get("version_id", False):
-                        agent_args["version_id"] = self.tool_id_and_name_mapping[name].get("version_id")
-
-                    # Pass timer state to maintain latency tracking in recursive calls
-                    if hasattr(self, "timer") and hasattr(self.timer, "getTime"):
-                        agent_args["timer_state"] = self.timer.getTime()
-
-                    # Pass bridge_configurations if available
-                    if hasattr(self, "bridge_configurations") and self.bridge_configurations:
-                        agent_args["bridge_configurations"] = self.bridge_configurations
-
-
-                    task = call_gtwy_agent(agent_args)
-                elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
-                    task = call_firecrawl_scrape(tool_data.get("args"))
-                elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
-                    task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
+                    task = run_generated_plan(tool_data.get("args"), self)
                 else:
-                    task = axios_work(tool_data.get("args"), self.tool_id_and_name_mapping[name])
+                    task = build_single_tool_task(
+                        name, tool_data.get("args"), self.tool_id_and_name_mapping[name], dispatch_ctx
+                    )
                 tasks.append((tool_call_key, tool_data, task))
                 executed_functions.append(name)
             else:
@@ -564,13 +632,49 @@ async def process_data_and_run_tools(codes_mapping, self):
                     }
                 )
 
-                # Update tool_call_logs with the response
-                tool_call_logs[tool_call_key] = {
-                    **tool_data,
-                    "name": tool_data.get("display_tool_name"),
-                    "data": result or response,
-                    "id": self.tool_id_and_name_mapping[tool_data["name"]].get("mcp_tool") or self.tool_id_and_name_mapping[tool_data["name"]].get("name"),
-                }
+                if self.tool_id_and_name_mapping[tool_data["name"]].get("type") == "CODE_EXEC" and isinstance(result, dict):
+                    # execute_plan is an internal orchestration mechanism, not a
+                    # real tool — don't persist it in history at all (it was
+                    # pre-seeded into tool_call_logs by `{**codes_mapping}` above,
+                    # so it must be explicitly dropped here). Only its internal
+                    # call_tool invocations (result.metadata.sub_calls, recorded
+                    # by src/services/auto_exec/tool_bridge.py + handler.py) get
+                    # stored, each as its own top-level entry in the exact same
+                    # shape a direct call to that tool would have produced — so
+                    # history/tools_call_data looks identical whether a tool was
+                    # called directly or via a generated plan.
+                    tool_call_logs.pop(tool_call_key, None)
+                    sub_calls = (result.get("metadata") or {}).get("sub_calls") or []
+                    for sub_idx, sub_call in enumerate(sub_calls):
+                        if not isinstance(sub_call, dict):
+                            continue
+                        sub_name = sub_call.get("name")
+                        sub_mapping = self.tool_id_and_name_mapping.get(sub_name, {})
+                        sub_display_name = (
+                            sub_mapping.get("mcp_tool") if sub_mapping.get("type") == "MCP" else display_mcp_tool_name(sub_name)
+                        )
+                        tool_call_logs[f"{tool_call_key}_sub_{sub_idx}"] = {
+                            **sub_mapping,
+                            "name": sub_display_name,
+                            "args": sub_call.get("args"),
+                            "error": False,
+                            "model_tool_name": sub_name,
+                            "display_tool_name": sub_display_name,
+                            "data": {
+                                "response": sub_call.get("response"),
+                                "status": 1,
+                                "metadata": {"type": "function"},
+                            },
+                            "id": sub_mapping.get("mcp_tool") or sub_mapping.get("name"),
+                        }
+                else:
+                    # Update tool_call_logs with the response
+                    tool_call_logs[tool_call_key] = {
+                        **tool_data,
+                        "name": tool_data.get("display_tool_name"),
+                        "data": result or response,
+                        "id": self.tool_id_and_name_mapping[tool_data["name"]].get("mcp_tool") or self.tool_id_and_name_mapping[tool_data["name"]].get("name"),
+                    }
         # Create mapping by tool_call_id (now tool_call_key) for return
         mapping = {resp["tool_call_id"]: resp for resp in responses}
 
