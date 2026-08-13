@@ -113,6 +113,8 @@ class BaseService:
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
         self.created_at = params.get("created_at")
+        self.run_testcase = params.get("run_testcase", False)
+        self.testcase_tools_response = params.get("testcase_tools_response") or {}
         self.tool_call_limit_error = None
         self.maximum_iteration_limit_reached = False
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
