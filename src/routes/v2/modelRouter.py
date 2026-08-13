@@ -44,7 +44,14 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
     
     stream_config = db_config.get('bridge_configurations', {}).get(current_id, {}).get('configuration', {}).get('stream')
     if is_playground and (stream_config == False or stream_config is None or stream_config == 'default'):
-        channel_id = f"{data_to_send.get('state', {}).get('profile', {}).get('org', {}).get('id')}_{db_config.get('bridge_configurations', {}).get(current_id, {}).get('bridge_id')}_{db_config.get('bridge_configurations', {}).get(current_id, {}).get('version_id')}"
+        org_id = data_to_send.get('state', {}).get('profile', {}).get('org', {}).get('id')
+        bridge_id = db_config.get('bridge_configurations', {}).get(current_id, {}).get('bridge_id')
+        version_id = db_config.get('bridge_configurations', {}).get(current_id, {}).get('version_id')
+        if version_id in ["undefined", "null", None]:
+            version_id = ""
+        user_id = data_to_send.get('state', {}).get('profile', {}).get('user', {}).get('id')
+        version_part = f"_{version_id}" if version_id else ""
+        channel_id = f"{org_id}_{bridge_id}{version_part}_{user_id}"
         playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
         data_to_send['body']['settings']['response_format'] = playground_response_format
     
@@ -120,7 +127,8 @@ async def run_testcases_route(request: Request):
             detail={"success": False, "error": "bridge_id is required for RTLayer-based testcase runs"},
         )
 
-    channel_id = f"{org_id}_{bridge_id}"
+    user_id = request.state.profile.get("user", {}).get("id")
+    channel_id = f"{org_id}_{bridge_id}_{user_id}"
     rtlayer_cred = build_rtlayer_cred(channel_id)
 
     async def _run():
