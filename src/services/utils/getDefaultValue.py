@@ -136,6 +136,8 @@ async def get_default_values_controller(service, model, current_configuration, t
             return get_default_values(modelObj)
         elif service == service_name["openai_completion"]:
             return get_default_values(modelObj)
+        elif service == service_name["huggingface"]:
+            return get_default_values(modelObj)
 
         else:
             raise HTTPException(status_code=404, detail=f"Service '{service}' not found.")

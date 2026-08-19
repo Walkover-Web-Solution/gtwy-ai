@@ -436,8 +436,9 @@ async def chat(request_body):
 
                 # Calculate tokens and create latency BEFORE storing history for transfer
                 if parsed_data.get("type") != "image":
-                    parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-                        parsed_data["model"], parsed_data["service"]
+                    parsed_data["tokens"] = await params["token_calculator"].calculate_total_cost(
+                        parsed_data["model"], parsed_data["service"],
+                        provider=((parsed_data.get("configuration") or {}).get("provider_config") or {}).get("provider")
                     )
                     result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
 
@@ -584,8 +585,9 @@ async def chat(request_body):
 
         parsed_data["alert_flag"] = result["modelResponse"].get("alert_flag", False)
         if parsed_data.get("type") != "image":
-            parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-                parsed_data["model"], parsed_data["service"]
+            parsed_data["tokens"] = await params["token_calculator"].calculate_total_cost(
+                parsed_data["model"], parsed_data["service"],
+                provider=((parsed_data.get('body',{}).get("configuration") or {}).get("provider_config") or {}).get("provider")
             )
             result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
 

@@ -1,4 +1,9 @@
+import json
+
+from globals import logger
+from src.configs.constant import redis_keys
 from src.configs.model_configuration import model_config_document
+from src.services.cache_service import find_in_cache
 from src.services.utils.gemini_token_utils import extract_gemini_image_usage, calculate_gemini_image_cost
 from src.services.utils.openai_token_utils import extract_openai_image_usage, calculate_openai_image_cost
 
@@ -33,7 +38,7 @@ class TokenCalculator:
     def calculate_usage(self, model_response):
         usage = {}
         match self.service:
-            case "open_router" | "mistral" | "openai_completion" | "neev_cloud" | "moonshot" | "minimax":
+            case "open_router" | "mistral" | "openai_completion" | "neev_cloud" | "moonshot" | "minimax" | "huggingface":
                 usage["inputTokens"] = (model_response.get("usage") or {}).get("prompt_tokens", 0)
                 usage["outputTokens"] = (model_response.get("usage") or {}).get("completion_tokens", 0)
                 usage["totalTokens"] = (model_response.get("usage") or {}).get("total_tokens", 0)
@@ -182,21 +187,50 @@ class TokenCalculator:
         return self.image_usage
 
 
-    def calculate_total_cost(self, model, service):
+    async def _get_huggingface_pricing(self, model, provider):
+        """
+        Hugging Face model ids are arbitrary Hub strings (not a fixed catalog), so pricing
+        can't be seeded into modelconfigurations like the other services. Instead the
+        AI-middleware controller fetches per-{model, provider} pricing from the HF router
+        API when a model is selected and caches it in Redis; this reads that cache.
+        """
+        pricing = {}
+        if not provider:
+            logger.warning(f"No provider given for huggingface model {model}; cost will be 0.")
+            return pricing
+
+        cache_key = f"{redis_keys['huggingface_model_price_']}{model}_{provider}"
+        cached = await find_in_cache(cache_key)
+        if not cached:
+            logger.warning(f"No cached pricing found for huggingface model {model} / provider {provider}.")
+            return pricing
+
+        try:
+            return json.loads(cached)
+        except (TypeError, ValueError):
+            logger.error(f"Failed to parse cached huggingface pricing for {cache_key}: {cached}")
+            return pricing
+
+    async def calculate_total_cost(self, model, service, provider=None):
         """
         Calculate total cost in dollars using accumulated total_usage
 
         Args:
             model: model name
             service: service name
+            provider: inference provider (huggingface only — pricing is per {model, provider}
+                      and is fetched dynamically from the HF router API rather than seeded
+                      into modelconfigurations, since HF model ids are arbitrary/open-ended)
 
         Returns:
             Dictionary with cost breakdown using total_usage
         """
-        model_obj = model_config_document[service][model]
-
-        # Regular chat model cost calculation
-        pricing = model_obj['outputConfig']['usage'][0]['total_cost']
+        if service == "huggingface":
+            pricing = await self._get_huggingface_pricing(model, provider)
+        else:
+            model_obj = model_config_document[service][model]
+            # Regular chat model cost calculation
+            pricing = model_obj['outputConfig']['usage'][0]['total_cost']
 
         # Priority processing charges 2x the standard cost
         priority_multiplier = 2 if self.service_tier == "priority" else 1

@@ -1807,8 +1807,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             try:
                 result["response"]["usage"] = params["token_calculator"].get_total_usage()
                 if parsed_data.get("type") != "image":
-                    parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-                        parsed_data["model"], parsed_data["service"]
+                    parsed_data["tokens"] = await params["token_calculator"].calculate_total_cost(
+                        parsed_data["model"], parsed_data["service"],
+                        provider=((parsed_data.get("configuration") or {}).get("provider_config") or {}).get("provider")
                     )
                     result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
 
@@ -1874,8 +1875,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
 
         result["response"]["usage"] = params["token_calculator"].get_total_usage()
         if parsed_data.get("type") != "image":
-            parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-                parsed_data["model"], parsed_data["service"]
+            parsed_data["tokens"] = await params["token_calculator"].calculate_total_cost(
+                parsed_data["model"], parsed_data["service"],
+                provider=((parsed_data.get("configuration") or {}).get("provider_config") or {}).get("provider")
             )
             result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0
 

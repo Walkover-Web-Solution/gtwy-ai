@@ -21,6 +21,7 @@ from ..Google.gemini_modelrun import gemini_modelrun, gemini_modelrun_stream
 from ..Google.gemini_video_model import gemini_video_model
 from ..grok.grokModelRun import grok_runmodel, grok_stream
 from ..groq.groqModelRun import groq_runmodel, groq_stream
+from ..huggingFace.hf_image_model import hf_image_model
 from ..Mistral.mistral_model_run import mistral_model_run, mistral_stream
 from ..openAI.image_model import OpenAIImageModel
 from ..openAI.runModel import openai_response_model, openai_response_stream
@@ -367,6 +368,8 @@ class BaseService:
                     service_name["neev_cloud"],
                     service_name["moonshot"],
                     service_name["minimax"],
+                    service_name["mistral"],
+                    service_name["huggingface"],
                     service_name["gemini"],
                 ]:
                     _.set_(
@@ -560,6 +563,15 @@ class BaseService:
             if service == service_name["deepgram"]:
                 if new_config.get("model_option"):
                     new_config["model"] = f"{new_config['model']}-{new_config.pop('model_option')}"
+
+            if service == service_name["huggingface"]:
+                provider_config = (
+                    self.configuration.get("provider_config") if isinstance(self.configuration, dict) else None
+                ) or {}
+                if provider_config.get("base_url"):
+                    new_config["base_url_override"] = provider_config["base_url"]
+                if provider_config.get("provider_model_id"):
+                    new_config["model"] = provider_config["provider_model_id"]
 
             remaining = get_tool_count(build_tool_count_key(self.bridge_id, self.message_id))
             if remaining is not None and remaining == 0:
@@ -911,6 +923,8 @@ class BaseService:
                 response = await OpenAIImageModel(configuration, apikey, self.execution_time_logs, self.timer)
             if service == service_name["gemini"]:
                 response = await gemini_image_model(configuration, apikey, self.execution_time_logs, self.timer)
+            if service == service_name["huggingface"]:
+                response = await hf_image_model(configuration, apikey, self.execution_time_logs, self.timer)
             if not response["success"]:
                 raise ValueError(response["error"])
             return {"success": True, "modelResponse": response["response"]}

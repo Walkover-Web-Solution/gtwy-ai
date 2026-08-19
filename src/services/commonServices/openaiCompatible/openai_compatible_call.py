@@ -1,3 +1,4 @@
+from src.configs.constant import service_name
 from src.configs.service_registry import prompt_role
 from src.services.utils.ai_middleware_format import Response_formatter
 from src.services.utils.apiservice import fetch_images_b64
@@ -9,7 +10,7 @@ from ..createConversations import ConversationService
 class OpenAICompatibleHandler(BaseService):
     """Single handler for OpenAI-Chat-Completions-compatible services that use the
     generic AsyncOpenAI runner (open_router, neev_cloud, moonshot,
-    openai_completion, + future ones).
+    openai_completion, huggingface, + future ones).
 
     Behavior-identical to the former per-service call classes; the only
     per-service variation is the system-prompt role (``prompt_role`` from the
@@ -18,10 +19,23 @@ class OpenAICompatibleHandler(BaseService):
     """
 
     async def execute(self):
+        service = self.service
+        if self.type == "image" and service == service_name["huggingface"]:
+            self.customConfig["prompt"] = self.user
+            hfResponse = await self.image(self.customConfig, self.apikey, service)
+            modelResponse = hfResponse.get("modelResponse", {})
+            if not hfResponse.get("success"):
+                await self.handle_failure(hfResponse)
+                raise ValueError(hfResponse.get("error"))
+            response = await Response_formatter(modelResponse, service, {}, self.type, self.image_data)
+            historyParams = self.prepare_history_params(response, modelResponse, {}, None)
+            historyParams["message"] = "image generated successfully"
+            historyParams["type"] = "assistant"
+            return {"success": True, "modelResponse": modelResponse, "historyParams": historyParams, "response": response}
+
         historyParams = {}
         tools = {}
         functionCallRes = {}
-        service = self.service
         role = prompt_role(service)
         conversation = ConversationService.createOpenAICompatibleConversation(
             self.configuration.get("conversation"), self.memory
