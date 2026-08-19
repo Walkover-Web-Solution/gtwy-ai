@@ -89,6 +89,7 @@ class BaseService:
         self.apikey_object_id = params.get("apikey_object_id")
         self.apikey_status = params.get("apikey_status")
         self.image_data = params.get("images")
+        self.compress_images = params.get("compress_images")
         self.audio_data = params.get("audios")
         self.maximum_iterations = params.get("maximum_iterations")
         self.text = params.get("text")

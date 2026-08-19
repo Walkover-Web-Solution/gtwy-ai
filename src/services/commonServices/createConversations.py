@@ -1,3 +1,4 @@
+import base64
 import json
 import mimetypes
 import traceback
@@ -5,7 +6,51 @@ from urllib.parse import urlparse
 
 from globals import logger
 
-from ..utils.apiservice import fetch_images_b64
+from src.services.utils.image_compression import fetch_images_b64_compressed, to_data_urls
+
+
+async def _compressed_url_map(urls, compress_images):
+    """Map ``url -> data-URL`` for images we should inline in a compressed form.
+
+    Returns an empty dict when compression is off, so history keeps passing plain
+    URLs through exactly as before.
+    """
+    urls = [u for u in dict.fromkeys(urls) if u]
+    if not compress_images or not urls:
+        return {}
+    try:
+        data_urls = to_data_urls(await fetch_images_b64_compressed(urls, compress_images))
+    except Exception as e:  # noqa: BLE001 - fall back to plain URLs
+        logger.warning(f"_compressed_url_map: falling back to plain URLs ({type(e).__name__}: {e})")
+        return {}
+    return dict(zip(urls, data_urls, strict=False))
+
+
+async def _compressed_image_parts(conversation, compress_images):
+    """Map ``url -> (compressed_bytes, mime)`` for non-pdf/non-audio history URLs."""
+    if not compress_images:
+        return {}
+    urls = [
+        url_info.get("url")
+        for message in conversation or []
+        for url_info in (message.get("user_urls") or [])
+        if isinstance(url_info, dict)
+        and url_info.get("url")
+        and url_info.get("type") not in ("pdf", "audio")
+        and not str(url_info.get("url")).lower().endswith(".pdf")
+    ]
+    urls = list(dict.fromkeys(urls))
+    if not urls:
+        return {}
+    try:
+        pairs = await fetch_images_b64_compressed(urls, compress_images)
+    except Exception as e:  # noqa: BLE001 - fall back to plain URI parts
+        logger.warning(f"_compressed_image_parts: falling back to URIs ({type(e).__name__}: {e})")
+        return {}
+    return {
+        url: (base64.b64decode(b64), mime or "image/jpeg")
+        for url, (b64, mime) in zip(urls, pairs, strict=False)
+    }
 
 
 def _format_memory(memory):
@@ -16,9 +61,18 @@ def _format_memory(memory):
 
 class ConversationService:
     @staticmethod
-    def createOpenAiConversation(conversation, memory, files):
+    async def createOpenAiConversation(conversation, memory, files, compress_images=None):
         try:
             threads = []
+            compressed = await _compressed_url_map(
+                [
+                    url.get("url")
+                    for message in conversation or []
+                    for url in (message.get("user_urls") or [])
+                    if isinstance(url, dict) and url.get("type") == "image"
+                ],
+                compress_images,
+            )
             # Track distinct PDF URLs across the entire conversation
             seen_pdf_urls = set()
 
@@ -50,7 +104,7 @@ class ConversationService:
                                 if url.get('type') == 'image':
                                     content.append({
                                         "type": "input_image",
-                                        "image_url": url.get('url')
+                                        "image_url": compressed.get(url.get('url'), url.get('url'))
                                     })
                                 elif url.get('url') not in files and url.get('url') not in seen_pdf_urls:
                                     content.append({
@@ -73,7 +127,7 @@ class ConversationService:
             raise ValueError(e.args[0]) from e
 
     @staticmethod
-    async def createAnthropicConversation(conversation, memory, files):
+    async def createAnthropicConversation(conversation, memory, files, compress_images=None):
         try:
             if conversation is None:
                 conversation = []
@@ -86,7 +140,7 @@ class ConversationService:
 
             # Process image URLs if present
             image_urls = [url.get("url") for message in conversation for url in message.get("user_urls", [])]
-            images_data = await fetch_images_b64(image_urls) if image_urls else []
+            images_data = await fetch_images_b64_compressed(image_urls, compress_images) if image_urls else []
             images = dict(zip(image_urls, images_data, strict=False))
 
             valid_conversation = []
@@ -172,7 +226,9 @@ class ConversationService:
             raise ValueError(f"Error while creating conversation: {str(e)}") from e
 
     @staticmethod
-    def createOpenAICompatibleConversation(conversation, memory, files=None, image_urls=None, plain_text_fallback=True):
+    async def createOpenAICompatibleConversation(
+        conversation, memory, files=None, image_urls=None, plain_text_fallback=True, compress_images=None
+    ):
         """Shared conversation builder for OpenAI-Chat-compatible services
         (open_router, neev_cloud, moonshot, mistral, openai_completion, grok, deepseek).
 
@@ -185,6 +241,15 @@ class ConversationService:
         """
         try:
             threads = []
+            compressed = await _compressed_url_map(
+                [
+                    url
+                    for message in conversation or []
+                    for url in (message.get("urls") or [])
+                    if isinstance(url, str) and not url.lower().endswith(".pdf")
+                ],
+                compress_images,
+            )
             if memory is not None:
                 threads.append(
                     {
@@ -199,7 +264,9 @@ class ConversationService:
                     if "urls" in message and isinstance(message["urls"], list):
                         for url in message["urls"]:
                             if not url.lower().endswith(".pdf"):
-                                content.append({"type": "image_url", "image_url": {"url": url}})
+                                content.append(
+                                    {"type": "image_url", "image_url": {"url": compressed.get(url, url)}}
+                                )
                     elif plain_text_fallback:
                         # Default behavior for messages without URLs
                         content = message["content"]
@@ -212,10 +279,11 @@ class ConversationService:
             raise ValueError(e.args[0]) from e
 
     @staticmethod
-    def createGeminiConversation(conversation, memory):
+    async def createGeminiConversation(conversation, memory, compress_images=None):
         from google.genai import types
         try:
             contents = []
+            compressed_parts = await _compressed_image_parts(conversation, compress_images)
             if memory is not None:
                 contents.append(types.Content(role='user', parts=[types.Part(text='Please Provide the summary of the previous conversation stored in the memory.')]))
                 contents.append(types.Content(role='model', parts=[types.Part(text=f'Summary of previous conversations: {_format_memory(memory)}')]))
@@ -239,6 +307,9 @@ class ConversationService:
                             elif url_type == 'audio':
                                 mime_type, _ = mimetypes.guess_type(urlparse(url).path)
                                 parts.append(types.Part.from_uri(file_uri=url, mime_type=mime_type))
+                            elif url in compressed_parts:
+                                raw, mime_type = compressed_parts[url]
+                                parts.append(types.Part.from_bytes(data=raw, mime_type=mime_type))
                             else:
                                 mime_type, _ = mimetypes.guess_type(urlparse(url).path)
                                 parts.append(types.Part.from_uri(file_uri=url, mime_type=mime_type))

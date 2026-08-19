@@ -1,6 +1,6 @@
 from src.configs.service_registry import prompt_role
 from src.services.utils.ai_middleware_format import Response_formatter
-from src.services.utils.apiservice import fetch_images_b64
+from src.services.utils.image_compression import fetch_images_b64_compressed
 
 from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService
@@ -23,8 +23,10 @@ class OpenAICompatibleHandler(BaseService):
         functionCallRes = {}
         service = self.service
         role = prompt_role(service)
-        conversation = ConversationService.createOpenAICompatibleConversation(
-            self.configuration.get("conversation"), self.memory
+        conversation = (
+            await ConversationService.createOpenAICompatibleConversation(
+                self.configuration.get("conversation"), self.memory, compress_images=self.compress_images
+            )
         ).get("messages", [])
         if self.reasoning_model:
             self.customConfig["messages"] = conversation + (
@@ -49,7 +51,9 @@ class OpenAICompatibleHandler(BaseService):
                     if isinstance(self.image_data, list):
                         # Moonshot requires base64 encoded images, not URLs
                         # Use existing fetch_images_b64 function to download and convert images
-                        images_with_mime = await fetch_images_b64(self.image_data)
+                        images_with_mime = await fetch_images_b64_compressed(
+                            self.image_data, self.compress_images
+                        )
                         for base64_image, mime_type in images_with_mime:
                             base64_url = f"data:{mime_type};base64,{base64_image}"
                             user_content.append({"type": "image_url", "image_url": {"url": base64_url}})

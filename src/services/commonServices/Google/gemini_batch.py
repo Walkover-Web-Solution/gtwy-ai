@@ -49,7 +49,7 @@ class GeminiBatch(BaseService):
                     # Convert to Gemini conversation format
                     memory = getattr(self, 'gpt_memory_context', None)
                     
-                    conversation_result = ConversationService.createGeminiConversation(
+                    conversation_result = await ConversationService.createGeminiConversation(
                         conversation=chats,
                         memory=memory
                     )

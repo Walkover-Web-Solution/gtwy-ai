@@ -7,6 +7,8 @@ from src.services.utils.gcp_upload_service import uploadDoc
 
 from ..baseService.baseService import BaseService
 from src.services.utils.mcp_utils import merge_server_side_mcp_into_tools
+from src.services.utils.image_compression import fetch_images_as_data_urls
+
 from ..createConversations import ConversationService
 
 
@@ -29,8 +31,10 @@ class OpenaiResponse(BaseService):
             historyParams["message"] = "image generated successfully"
             historyParams["type"] = "assistant"
         else:
-            conversation = ConversationService.createOpenAiConversation(
-                self.configuration.get("conversation"), self.memory, self.files
+            conversation = (
+                await ConversationService.createOpenAiConversation(
+                    self.configuration.get("conversation"), self.memory, self.files, self.compress_images
+                )
             ).get("messages", [])
             developer = (
                 [{"role": "developer", "content": self.configuration["prompt"]}] if not self.reasoning_model else []
@@ -38,7 +42,12 @@ class OpenaiResponse(BaseService):
 
             if self.image_data and isinstance(self.image_data, list):
                 self.customConfig["input"] = developer + conversation
-                image_content = [{"type": "input_image", "image_url": url} for url in self.image_data]
+                image_urls = (
+                    await fetch_images_as_data_urls(self.image_data, self.compress_images)
+                    if self.compress_images
+                    else self.image_data
+                )
+                image_content = [{"type": "input_image", "image_url": url} for url in image_urls]
                 content = [{"type": "input_text", "text": self.user}] + image_content if self.user else image_content
                 self.customConfig["input"].append({"role": "user", "content": content})
             elif self.files and len(self.files) > 0:

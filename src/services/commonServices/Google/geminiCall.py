@@ -1,11 +1,14 @@
 import pydash as _
 import json
 from ..baseService.baseService import BaseService
+from src.services.utils.image_compression import fetch_images_b64_compressed
+
 from ..createConversations import ConversationService
 from src.configs.constant import service_name
 from src.services.utils.ai_middleware_format import Response_formatter
 from google.genai import types
 from urllib.parse import urlparse
+import base64
 import mimetypes
 from src.services.commonServices.baseService.utils import serialize_config
 
@@ -43,7 +46,7 @@ class GeminiHandler(BaseService):
             historyParams = self.prepare_history_params(response, model_response, tools, None)
             historyParams["type"] = "assistant"
         else:
-            conversation = ConversationService.createGeminiConversation(self.configuration.get('conversation'), self.memory).get('messages', [])
+            conversation = (await ConversationService.createGeminiConversation(self.configuration.get('conversation'), self.memory, self.compress_images)).get('messages', [])
 
             contents = conversation
 
@@ -53,9 +56,22 @@ class GeminiHandler(BaseService):
                 user_parts = []
 
                 if self.image_data and isinstance(self.image_data, list):
-                    for image_url in self.image_data:
-                        mime_type, _ = mimetypes.guess_type(urlparse(image_url).path)
-                        user_parts.append(types.Part.from_uri(file_uri=image_url, mime_type=mime_type))
+                    if self.compress_images:
+                        # Inline the compressed bytes; Gemini would otherwise fetch the
+                        # (possibly multi-MB) URL itself and time out.
+                        for b64_image, mime_type in await fetch_images_b64_compressed(
+                            self.image_data, self.compress_images
+                        ):
+                            user_parts.append(
+                                types.Part.from_bytes(
+                                    data=base64.b64decode(b64_image),
+                                    mime_type=mime_type or "image/jpeg",
+                                )
+                            )
+                    else:
+                        for image_url in self.image_data:
+                            mime_type, _ = mimetypes.guess_type(urlparse(image_url).path)
+                            user_parts.append(types.Part.from_uri(file_uri=image_url, mime_type=mime_type))
 
                 if self.audio_data and isinstance(self.audio_data, list):
                     for audio_url in self.audio_data:

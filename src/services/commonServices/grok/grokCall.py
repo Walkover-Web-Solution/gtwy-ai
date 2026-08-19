@@ -2,6 +2,8 @@ from src.configs.constant import service_name
 from src.services.utils.ai_middleware_format import Response_formatter
 
 from ..baseService.baseService import BaseService
+from src.services.utils.image_compression import fetch_images_as_data_urls
+
 from ..createConversations import ConversationService
 
 
@@ -11,8 +13,15 @@ class Grok(BaseService):
         tools = {}
         function_call_response = {}
 
-        conversation = ConversationService.createOpenAICompatibleConversation(
-            self.configuration.get("conversation"), self.memory, self.files, self.image_data, plain_text_fallback=False
+        conversation = (
+            await ConversationService.createOpenAICompatibleConversation(
+                self.configuration.get("conversation"),
+                self.memory,
+                self.files,
+                self.image_data,
+                plain_text_fallback=False,
+                compress_images=self.compress_images,
+            )
         ).get("messages", [])
 
         messages = [{"role": "system", "content": self.configuration["prompt"]}] + conversation
@@ -22,7 +31,12 @@ class Grok(BaseService):
             if self.user:
                 user_content.append({"type": "text", "text": self.user})
             if isinstance(self.image_data, list):
-                for image_url in self.image_data:
+                image_urls = (
+                    await fetch_images_as_data_urls(self.image_data, self.compress_images)
+                    if self.compress_images
+                    else self.image_data
+                )
+                for image_url in image_urls:
                     user_content.append({"type": "image_url", "image_url": {"url": image_url}})
             if user_content:
                 messages.append({"role": "user", "content": user_content})

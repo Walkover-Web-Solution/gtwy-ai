@@ -33,6 +33,7 @@ from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
 from src.utils.formatter import apply_variables_to_template_json
 from src.services.utils.helper import Helper
+from src.services.utils.image_compression import normalize_compress_options
 from ...controllers.conversationController import getThread
 from ..commonServices.baseService.utils import sendResponse
 
@@ -221,6 +222,10 @@ def parse_request_body(request_body):
             for url in body.get("user_urls", [])
             if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
         ],
+        "compress_images": normalize_compress_options(
+            body.get("compress_images") if body.get("compress_images") is not None
+            else body.get("settings", {}).get("compress_images")
+        ),
         "maximum_iterations": body.get("settings", {}).get("maximum_iterations") or 3,
         "tokens": {},
         "memory": "",
@@ -843,6 +848,7 @@ def build_service_params(
         "token_calculator": token_calculator,
         "apikey_object_id": parsed_data["apikey_object_id"],
         "images": parsed_data["images"],
+        "compress_images": parsed_data.get("compress_images"),
         "audios": parsed_data.get("audios"),
         "maximum_iterations": parsed_data["maximum_iterations"],
         "rag_data": parsed_data["rag_data"],

@@ -76,11 +76,15 @@ async def add_configuration_data_to_body(request: Request):
 
         body_wrapper_id = body.get("wrapper_id")
         incoming_response_format = body.get("settings", {}).get("response_format")
+        # Request-level compress_images wins; the bridge value acts as the default.
+        incoming_compress_images = body.get("compress_images")
         body.update(primary_config)
         if body_wrapper_id is not None:
             body["wrapper_id"] = body_wrapper_id
         if incoming_response_format is not None:
             body.setdefault("settings", {})["response_format"] = incoming_response_format
+        if incoming_compress_images is not None:
+            body["compress_images"] = incoming_compress_images
         
         explicit_stream = body.get("stream")
 

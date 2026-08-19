@@ -2,6 +2,8 @@ from src.configs.constant import service_name
 from src.services.utils.ai_middleware_format import Response_formatter
 
 from ..baseService.baseService import BaseService
+from src.services.utils.image_compression import fetch_images_as_data_urls
+
 from ..createConversations import ConversationService
 
 
@@ -21,8 +23,10 @@ class Mistral(BaseService):
             historyParams["message"] = "image generated successfully"
             historyParams["type"] = "assistant"
         else:
-            conversation = ConversationService.createOpenAICompatibleConversation(
-                self.configuration.get("conversation"), self.memory
+            conversation = (
+                await ConversationService.createOpenAICompatibleConversation(
+                    self.configuration.get("conversation"), self.memory, compress_images=self.compress_images
+                )
             ).get("messages", [])
 
             if self.reasoning_model:
@@ -47,7 +51,12 @@ class Mistral(BaseService):
 
                     # Add images if present
                     if self.image_data and isinstance(self.image_data, list):
-                        for image_url in self.image_data:
+                        image_urls = (
+                            await fetch_images_as_data_urls(self.image_data, self.compress_images)
+                            if self.compress_images
+                            else self.image_data
+                        )
+                        for image_url in image_urls:
                             user_content.append({"type": "image_url", "image_url": {"url": image_url}})
 
                     # Add audio if present
