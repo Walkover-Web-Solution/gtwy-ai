@@ -111,6 +111,8 @@ new_agent_service = {
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
 
+tool_types = {"SKILL": "SKILL"}
+
 VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
 
 GPT_MEMORY_TURNS_PER_CYCLE = 3

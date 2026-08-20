@@ -1,7 +1,7 @@
 import src.db_services.ConfigurationServices as ConfigurationService
 from config import Config
 from models.mongo_connection import db
-from src.configs.constant import inbuild_tools
+from src.configs.constant import inbuild_tools, tool_types
 from src.services.commonServices.baseService.utils import makeFunctionName
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
@@ -356,6 +356,43 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
         "type": inbuild_tools["Gtwy_Web_Search"],
         "name": inbuild_tools["Gtwy_Web_Search"],
     }
+
+
+def add_connected_skills(bridges, tools, tool_id_and_name_mapping):
+    """Add connected skills as tools"""
+    connected_skills = bridges.get("connected_skills", [])
+    
+    if not connected_skills:
+        return
+    
+    for skill in connected_skills:
+        skill_id = skill.get("_id", "")
+        skill_name = skill.get("name", "")
+        skill_description = skill.get("description", "")
+        
+        if not skill_id or not skill_name:
+            continue
+        
+        # Create tool name from skill name
+        tool_name = makeFunctionName(skill_name)
+        
+        # Build tool format for skill
+        tools.append(
+            {
+                "type": "function",
+                "name": tool_name,
+                "description": skill_description or f"Execute the {skill_name} skill",
+                "properties": {},
+                "required": [],
+            }
+        )
+        
+        # Add skill to tool mapping
+        tool_id_and_name_mapping[tool_name] = {
+            "type": tool_types["SKILL"],
+            "skill_id": skill_id,
+            "skill_name": skill_name,
+        }
 
 
 def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag):
