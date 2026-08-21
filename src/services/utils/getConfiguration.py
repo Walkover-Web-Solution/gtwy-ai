@@ -286,6 +286,7 @@ async def _prepare_configuration_response(
         "folder_id": bridges.get("folder_id"),
         "wrapper_id": bridges.get("wrapper_id"),
         "web_search_filters": web_search_filters_value,
+        "chatbot": chatbot,
         "chatbot_auto_answers": chatbot_auto_answers,
         "cache_on": cache_on,
         "richui_templates": bridges.get("richui_templates"),
