@@ -2,10 +2,12 @@ from fastapi import HTTPException, Request
 
 from globals import logger, traceback
 from src.configs.model_configuration import model_config_document
+from src.services.billing.billing_utils import release_credits, reserve_credits_and_api_key_setup
 from src.services.utils.getConfiguration import getConfiguration
 
 
 async def add_configuration_data_to_body(request: Request):
+    credit_hold = False
     try:
         body = await request.json()
         org_id = request.state.profile["org"]["id"]
@@ -46,6 +48,10 @@ async def add_configuration_data_to_body(request: Request):
         if not db_config.get("success", True) or db_config.get("error"):
             # Return the actual error from getConfiguration directly
             raise HTTPException(status_code=400, detail=db_config)
+
+        credit_hold, credit_error = await reserve_credits_and_api_key_setup(org_id, db_config)
+        if credit_error:
+            raise HTTPException(status_code=400, detail=credit_error)
 
         bridge_configurations = db_config.get("bridge_configurations") or {}
 
@@ -88,6 +94,7 @@ async def add_configuration_data_to_body(request: Request):
             body.get("configuration", {})["stream"] = explicit_stream
             
         body["bridge_configurations"] = bridge_configurations
+        body["credit_hold_owner"] = credit_hold
         service = body.get("service")
         model = body.get("configuration").get("model")
         user = body.get("user")
@@ -117,6 +124,8 @@ async def add_configuration_data_to_body(request: Request):
     except HTTPException as he:
         raise he
     except Exception as e:
+        if credit_hold:
+            await release_credits(org_id)
         logger.error(f"Error in get_data: {str(e)}, {traceback.format_exc()}")
         raise HTTPException(
             status_code=400, detail={"success": False, "error": "Error in getting data: " + str(e)}

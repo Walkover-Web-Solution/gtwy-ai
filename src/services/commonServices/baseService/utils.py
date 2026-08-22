@@ -14,6 +14,7 @@ from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redi
 from src.configs.service_registry import has_openai_choices_shape, uses_string_tool_choice
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.db_services.ConfigurationServices import get_skill_content_by_id
+from src.services.billing.billing_utils import build_llm_usage_event
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
 from src.services.mcp_gateway.client import call_mcp_tool
@@ -689,6 +690,19 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
     suggestion_content = {"data": {"content": {}}}
     suggestion_content["data"]["content"] = result.get("historyParams", {}).get("message")
 
+    history_params = result.get("historyParams", {})
+
+    llm_usage = (
+        build_llm_usage_event(
+            parsed_data.get("usage"),
+            history_params.get("message_id") or parsed_data.get("message_id"),
+            parsed_data.get("org_id"),
+            parsed_data.get("bridge_id"),
+        )
+        if parsed_data.get("wallet")
+        else None
+    )
+
     # Extract user and assistant messages for Hippocampus
     user_message = parsed_data.get("user", "")
     assistant_message = result.get("historyParams", {}).get("message", "")
@@ -787,6 +801,15 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "thread_id": parsed_data.get("thread_id"),
             "service": parsed_data.get("service"),
         },
+        "billing": [
+            {
+                "model": history_params.get("model") or parsed_data.get("model"),
+                "service": parsed_data.get("service"),
+                "bridge_id": parsed_data.get("bridge_id"),
+                "thread_id": parsed_data.get("thread_id"),
+                **llm_usage,
+            }
+        ] if llm_usage else None,
     }
 
     return data

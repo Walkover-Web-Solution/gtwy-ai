@@ -16,13 +16,14 @@ from globals import TRANSFER_HISTORY, BadRequestException, logger, try_catch
 from src.configs.model_configuration import model_config_document
 from src.configs.serviceKeys import model_config_change
 from src.db_services.metrics_service import (
-    build_history_and_metrics_payload,
+    build_queue_payload,
     build_orchestrator_log_data,
     save_conversations_to_redis,
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
 from src.configs.constant import bridge_ids, redis_keys, alert_types
+from src.services.billing.billing_utils import apply_billing_events
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
@@ -170,6 +171,7 @@ def parse_request_body(request_body):
         "thread_id": body.get("thread_id"),
         "sub_thread_id": body.get("sub_thread_id") or body.get("thread_id"),
         "org_id": state.get("profile", {}).get("org", {}).get("id", "") or body.get("org_id"),
+        "wallet": body.get("wallet", False),
         "user": body.get("user"),
         "original_user": body.get("user"),
         "tools": body.get("configuration", {}).get("tools"),
@@ -896,7 +898,7 @@ def _build_orchestrator_sub_thread_data(parsed_data, thread_info=None):
 async def _publish_history_to_queue(dataset, history_params, version_id, thread_info=None, parsed_data=None):
     """Build history/metrics payload and publish it to the log queue for Node.js to save."""
     try:
-        payload = build_history_and_metrics_payload(dataset, history_params, version_id)
+        payload = build_queue_payload(dataset, history_params, version_id)
         if parsed_data is not None:
             _attach_sub_thread_extras(payload["conversation_log_data"], parsed_data)
         metrics_data = payload["metrics_data"]
@@ -1128,7 +1130,7 @@ async def process_background_tasks(
                         agent_config = bridge_configs[agent_bridge_id].get("configuration", {})
                         history_entry["history_params"]["prompt"] = agent_config.get("prompt")
 
-                payload = build_history_and_metrics_payload(
+                payload = build_queue_payload(
                     history_entry["dataset"],
                     history_entry["history_params"],
                     history_entry["version_id"],
@@ -1151,7 +1153,7 @@ async def process_background_tasks(
             result["historyParams"]["parent_id"] = parsed_data.get("parent_bridge_id", "")
             result["historyParams"]["child_id"] = None
 
-        payload = build_history_and_metrics_payload(
+        payload = build_queue_payload(
             [parsed_data["usage"]],
             result["historyParams"],
             parsed_data["version_id"],
@@ -1188,6 +1190,9 @@ async def process_background_tasks(
     await sub_queue_obj.publish_message(data)
 
     await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_entries}))
+
+    if data.get("billing"):
+        await apply_billing_events(data["billing"])
 
 async def process_background_tasks_for_error(parsed_data, error):
     # Primary-agent sub-tasks inside plan mode skip per-call history.

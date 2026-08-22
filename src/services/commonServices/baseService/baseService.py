@@ -336,7 +336,7 @@ class BaseService:
             "actor": "user" if self.user else "tool",
             "message_id": self.message_id,
         }
-        payload = metrics_service.build_history_and_metrics_payload([usage], history_params, None)
+        payload = metrics_service.build_queue_payload([usage], history_params, None)
         history_data = payload["conversation_log_data"]
         history_data["thread_flag"] = self.thread_flag
         history_data["response_format"] = self.response_format

@@ -13,6 +13,7 @@ from src.configs.constant import alert_types, redis_keys
 from src.handler.executionHandler import handle_exceptions
 from src.send_alert import send_alert
 from src.services.auto_router_service import apply_auto_model_selection
+from src.services.billing.billing_utils import release_credits, release_credits_after
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.todo.planner_service import prepare_planner_request
 from src.services.todo.todo_handler import handle_todo_mode
@@ -170,6 +171,7 @@ async def chat(request_body):
             request_body.setdefault("body", {})["created_at"] = datetime.now(timezone.utc).isoformat()
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
+        owns_hold = bool(request_body.get("body", {}).pop("credit_hold_owner", False))
 
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
         if isinstance(mcp_cfg, dict):
@@ -383,6 +385,9 @@ async def chat(request_body):
                     _transfer_task, tool_count_key_for_cleanup, tool_count_owner_token,
                 ))
                 tool_count_owner_token = None  # ownership transferred to the deferred cleanup
+                if owns_hold:
+                    asyncio.create_task(release_credits_after(_transfer_task, parsed_data.get("org_id")))
+                    owns_hold = False
                 return JSONResponse(status_code=200, content={"success": True})
 
             _stream_task = asyncio.create_task(sse_stream_and_finalize(
@@ -394,6 +399,9 @@ async def chat(request_body):
                 _stream_task, tool_count_key_for_cleanup, tool_count_owner_token,
             ))
             tool_count_owner_token = None  # ownership transferred to the deferred cleanup
+            if owns_hold:
+                asyncio.create_task(release_credits_after(_stream_task, parsed_data.get("org_id")))
+                owns_hold = False
             return StreamingResponse(class_obj.streamer.generator(), media_type="text/event-stream")
 
         original_exception = None
@@ -498,6 +506,8 @@ async def chat(request_body):
                 parsed_data["configuration"]["model"] = fallback_model
                 if fallback_config.get("apikey"):
                     parsed_data["apikey"] = fallback_config["apikey"]
+                    # Fallback runs on the customer's own key — never billed.
+                    parsed_data["wallet"] = False
 
                 # Always rebuild fallback handler/config to avoid stale customConfig/model reuse
                 (
@@ -769,6 +779,8 @@ async def chat(request_body):
             fallback_service,
             fallback_error_code,
         )
+        if owns_hold:
+            await release_credits(parsed_data.get("org_id"))
 
 
 @handle_exceptions

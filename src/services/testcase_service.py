@@ -21,6 +21,7 @@ from bson import ObjectId
 from config import Config
 from models.mongo_connection import db
 from src.services.commonServices.baseService.utils import send_message
+from src.services.billing.billing_utils import release_credits, reserve_credits_and_api_key_setup
 from src.services.commonServices.common import chat
 from src.services.utils.getConfiguration import getConfiguration
 from src.services.utils.time import with_timeout
@@ -256,10 +257,18 @@ async def get_testcase_configuration(
     if not db_config.get("success"):
         raise TestcaseValidationError(db_config.get("error", "Failed to get configuration"))
 
+    credit_hold, credit_error = await reserve_credits_and_api_key_setup(org_id, db_config)
+    if credit_error:
+        raise TestcaseValidationError(credit_error.get("error", "Could not resolve an API key"))
+
     primary_bridge_id = db_config.get("primary_bridge_id")
     bridge_configurations = db_config.get("bridge_configurations", {})
 
-    return bridge_configurations[primary_bridge_id]
+    bridge_config = bridge_configurations[primary_bridge_id]
+    # Release marker only, checked by execute_testcases' finally. Billing is
+    # gated by the per-cfg `wallet` flag stamped in reserve_credits_and_api_key_setup.
+    bridge_config["credit_hold"] = credit_hold
+    return bridge_config
 
 
 async def process_single_testcase(
@@ -537,6 +546,13 @@ async def execute_testcases(
             request_data["testcase_data"],
             request_data["variables"],
         )
+        try:
+            return await _run_testcases_for_config(db_config, version_id, model_spec)
+        finally:
+            if db_config.get("credit_hold"):
+                await release_credits(org_id)
+
+    async def _run_testcases_for_config(db_config, version_id, model_spec):
         is_overridden = False
         new_service: str | None = None
         if model_spec:

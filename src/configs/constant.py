@@ -81,6 +81,8 @@ redis_keys = {
     "dailyusedcost_": "nd_dailyusedcost_",
     "usagealertsent_": "nd_usagealertsent_",
     "usagespikealert_": "nd_usagespikealert_",
+    "billing_credit_balance_": "nd_billing_credit_balance_",
+    "billing_credit_applied_": "nd_billing_credit_applied_",
 }
 
 tag_keys = {
@@ -137,6 +139,11 @@ usage_alert_config = {
     "spike_window_days": 7,         # trailing window used to compute the average daily spend
     "spike_min_history_days": 3,    # require this many past days of data before spike can fire
     "daily_bucket_ttl_days": 8,     # how long each per-day bucket lives (window + buffer)
+}
+
+billing_config = {
+    "reserve_credits_per_request": 50,
+    "reserve_overdraft_floor": -100,
 }
 
 auto_model_tradeoff = {

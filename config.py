@@ -66,3 +66,20 @@ class Config:
     OTEL_EXPORTER_OTLP_PROTOCOL = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
     OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
     NOT_DIAMOND_API_KEY = os.getenv("NOT_DIAMOND_API_KEY")
+    LAGO_API_URL = os.getenv("LAGO_API_URL")
+    LAGO_CREDIT_RATE_USD = os.getenv("LAGO_CREDIT_RATE_USD")
+    LAGO_API_KEY = os.getenv("LAGO_API_KEY")
+    PLATFORM_API_KEYS = {
+        "openai": os.getenv("OPENAI_API_KEY"),
+        "anthropic": os.getenv("PLATFORM_ANTHROPIC_API_KEY"),
+        "google": os.getenv("PLATFORM_GOOGLE_API_KEY"),
+        "groq": os.getenv("PLATFORM_GROQ_API_KEY"),
+        "mistral": os.getenv("PLATFORM_MISTRAL_API_KEY"),
+        "grok": os.getenv("PLATFORM_GROK_API_KEY"),
+        "open_router": os.getenv("PLATFORM_OPEN_ROUTER_API_KEY"),
+        "deepgram": os.getenv("PLATFORM_DEEPGRAM_API_KEY"),
+        "neev_cloud": os.getenv("PLATFORM_NEEV_CLOUD_API_KEY"),
+        "moonshot": os.getenv("PLATFORM_MOONSHOT_API_KEY"),
+        "deepseek": os.getenv("PLATFORM_DEEPSEEK_API_KEY"),
+        "minimax": os.getenv("PLATFORM_MINIMAX_API_KEY"),
+    }
