@@ -51,7 +51,7 @@ class MistralBatch(BaseService):
                     memory = getattr(self, 'gpt_memory_context', None)
                     files = getattr(self, 'files', [])
                     
-                    conversation_result = ConversationService.createOpenAiConversation(
+                    conversation_result = await ConversationService.createOpenAiConversation(
                         conversation=chats,
                         memory=memory,
                         files=files
