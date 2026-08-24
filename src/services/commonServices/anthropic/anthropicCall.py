@@ -2,7 +2,7 @@ from src.configs.constant import service_name
 from src.configs.model_configuration import model_config_document
 from src.services.utils.ai_middleware_format import Response_formatter
 
-from ....services.utils.apiservice import fetch_images_b64
+from src.services.utils.image_compression import fetch_images_b64
 from ..baseService.baseService import BaseService
 from src.services.utils.mcp_utils import merge_server_side_mcp_into_tools
 from ..createConversations import ConversationService
