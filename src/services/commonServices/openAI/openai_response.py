@@ -7,6 +7,8 @@ from src.services.utils.gcp_upload_service import uploadDoc
 
 from ..baseService.baseService import BaseService
 from src.services.utils.mcp_utils import merge_server_side_mcp_into_tools
+from src.services.utils.image_compression import fetch_images_as_data_urls
+
 from ..createConversations import ConversationService
 
 
@@ -29,8 +31,10 @@ class OpenaiResponse(BaseService):
             historyParams["message"] = "image generated successfully"
             historyParams["type"] = "assistant"
         else:
-            conversation = ConversationService.createOpenAiConversation(
-                self.configuration.get("conversation"), self.memory, self.files
+            conversation = (
+                await ConversationService.createOpenAiConversation(
+                    self.configuration.get("conversation"), self.memory, self.files
+                )
             ).get("messages", [])
             developer = (
                 [{"role": "developer", "content": self.configuration["prompt"]}] if not self.reasoning_model else []
@@ -38,7 +42,12 @@ class OpenaiResponse(BaseService):
 
             if self.image_data and isinstance(self.image_data, list):
                 self.customConfig["input"] = developer + conversation
-                image_content = [{"type": "input_image", "image_url": url} for url in self.image_data]
+                # Inline the image bytes rather than the URL: OpenAI would otherwise
+                # download the (possibly multi-MB) file itself and time out.
+                image_content = [
+                    {"type": "input_image", "image_url": data_url}
+                    for data_url in await fetch_images_as_data_urls(self.image_data)
+                ]
                 content = [{"type": "input_text", "text": self.user}] + image_content if self.user else image_content
                 self.customConfig["input"].append({"role": "user", "content": content})
             elif self.files and len(self.files) > 0:
