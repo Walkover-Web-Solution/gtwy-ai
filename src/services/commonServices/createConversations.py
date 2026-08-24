@@ -5,7 +5,28 @@ from urllib.parse import urlparse
 
 from globals import logger
 
-from ..utils.apiservice import fetch_images_b64
+from src.services.utils.image_compression import fetch_images_b64, to_data_urls
+
+
+async def _image_data_urls(conversation):
+    """Map ``url -> data-URL`` for every image in history, compressed as needed.
+
+    Falls back to an empty map so history keeps passing plain URLs through if the
+    downloads fail — a broken history image must not fail the completion.
+    """
+    urls = list(dict.fromkeys(
+        url.get("url")
+        for message in conversation or []
+        for url in (message.get("user_urls") or [])
+        if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
+    ))
+    if not urls:
+        return {}
+    try:
+        return dict(zip(urls, to_data_urls(await fetch_images_b64(urls)), strict=False))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"_image_data_urls: falling back to plain URLs ({type(e).__name__}: {e})")
+        return {}
 
 
 def _format_memory(memory):
@@ -16,9 +37,10 @@ def _format_memory(memory):
 
 class ConversationService:
     @staticmethod
-    def createOpenAiConversation(conversation, memory, files):
+    async def createOpenAiConversation(conversation, memory, files):
         try:
             threads = []
+            image_urls = await _image_data_urls(conversation)
             # Track distinct PDF URLs across the entire conversation
             seen_pdf_urls = set()
 
@@ -50,7 +72,7 @@ class ConversationService:
                                 if url.get('type') == 'image':
                                     content.append({
                                         "type": "input_image",
-                                        "image_url": url.get('url')
+                                        "image_url": image_urls.get(url.get('url'), url.get('url'))
                                     })
                                 elif url.get('url') not in files and url.get('url') not in seen_pdf_urls:
                                     content.append({
