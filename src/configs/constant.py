@@ -68,6 +68,12 @@ redis_keys = {
     "bridgeusedcost_": "nd_bridgeusedcost_",
     "folderusedcost_": "nd_folderusedcost_",
     "apikeyusedcost_": "nd_apikeyusedcost_",
+    # Period-keyed apikey counters: the reset window is part of the key, so a new
+    # period reads as zero without anything expiring or being reset. The counter
+    # holds a bare number (atomic INCRBYFLOAT); the version/bridge ids that used
+    # to ride along in the same JSON blob live in the companion set.
+    "apikeyperiodcost_": "nd_apikeyperiodcost_",
+    "apikeyperiodrefs_": "nd_apikeyperiodrefs_",
     "apikeylastused_": "nd_apikeylastused_",
     "bridgelastused_": "nd_bridgelastused_",
     "files_": "nd_files_",
