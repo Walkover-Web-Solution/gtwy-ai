@@ -47,6 +47,7 @@ from src.services.utils.mcp_utils import (
     server_mcp_config,
 )
 from src.services.utils.maximum_iterations_utils import build_tool_count_key, decrement_tool_count, get_tool_count
+from src.services.utils.ai_middleware_format import set_request_model
 from src.exceptions import ApiCallError
 
 executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
@@ -71,6 +72,10 @@ class BaseService:
         self.thread_id = params.get("thread_id")
         self.sub_thread_id = params.get("sub_thread_id")
         self.model = params.get("model")
+        # Responses report the model the caller asked for, not the dated snapshot
+        # the provider echoes back. Recorded once here so every Response_formatter
+        # call in this request picks it up.
+        set_request_model(self.model)
         self.service = params.get("service")
         self.modelOutputConfig = params.get("modelOutputConfig")
         self.template = params.get("template")
