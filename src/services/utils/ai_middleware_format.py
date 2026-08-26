@@ -1,3 +1,4 @@
+import contextvars
 import json
 import uuid
 
@@ -18,18 +19,57 @@ from src.services.utils.formatters.groq_formatter import format_groq
 from src.services.utils.formatters.openai_compatible_formatter import format_openai_compatible
 from src.services.utils.formatters.openai_formatter import format_openai
 
-__all__ = ["Response_formatter", "Batch_Response_formatter", "process_batch_results", "finish_reason_mapping"]
+__all__ = [
+    "Response_formatter",
+    "Batch_Response_formatter",
+    "process_batch_results",
+    "finish_reason_mapping",
+    "set_request_model",
+]
+
+# The model name the in-flight request is being sent to the provider with.
+# Providers resolve aliases to dated snapshots on the way back (``gpt-4o`` ->
+# ``gpt-4o-2024-08-06``), and the raw response is all the formatters below get
+# to see — so the requested name has to be carried alongside it. BaseService
+# records it once per request; every formatter call downstream reads it here
+# instead of threading a `model` argument through ~14 call sites.
+#
+# contextvars (not a module global) because requests run concurrently: a task
+# only ever sees the value its own request set, and asyncio.create_task copies
+# the context, so streaming and agent-transfer subtasks inherit it correctly.
+_request_model = contextvars.ContextVar("ai_middleware_request_model", default=None)
 
 
-async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False, isCache=False):
+def set_request_model(model):
+    """Record the model name the current request is being sent to the provider with."""
+    _request_model.set(model)
+
+
+def _stamp_request_model(formatted, model=None):
+    """Report the model name we sent to the provider, not the one it echoes back.
+
+    Falls back to the current request's model when no explicit override is given
+    (batch result polling runs outside any request, so it passes one in).
+    """
+    model = model or _request_model.get()
+    if model and isinstance(formatted, dict) and isinstance(formatted.get("data"), dict):
+        formatted["data"]["model"] = model
+    return formatted
+
+
+async def Response_formatter(response=None, service=None, tools=None, type="chat", images=None, isBatch=False, isCache=False, model=None):
     """Normalize a provider response into the AI-middleware format.
 
     Thin dispatcher: routes by service to the per-service formatter, each of
     which handles that service's own variants (chat / batch / image / video /
     embedding). See src/services/utils/formatters/.
+
+    The formatted response reports the model name the request was sent with
+    (see ``set_request_model``); ``model`` overrides that for callers running
+    outside a request context, such as batch result polling.
     """
     if isCache:
-        return {
+        return _stamp_request_model({
             "data": {
                 "id": f"cache_{uuid.uuid4().hex}",
                 "content": response,
@@ -48,7 +88,7 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 "cost": 0,
             },
             "is_cached": True,
-        }
+        }, model)
 
     tools_data = tools
     if isinstance(tools_data, dict):
@@ -59,27 +99,31 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                 except json.JSONDecodeError:
                     pass
 
+    formatted = None
     if service == service_name["gemini"]:
-        return format_gemini(response, tools_data, images, type, isBatch)
+        formatted = format_gemini(response, tools_data, images, type, isBatch)
     elif service == service_name["anthropic"]:
-        return format_anthropic(response, tools_data, images, isBatch)
+        formatted = format_anthropic(response, tools_data, images, isBatch)
     elif service == service_name["openai"]:
-        return format_openai(response, tools_data, images, type)
+        formatted = format_openai(response, tools_data, images, type)
     elif service == service_name["groq"]:
-        return format_groq(response, tools_data, images)
+        formatted = format_groq(response, tools_data, images)
     elif service == service_name["deepseek"]:
-        return format_deepseek(response, tools_data, images)
+        formatted = format_deepseek(response, tools_data, images)
     elif service == service_name["grok"]:
-        return format_grok(response, tools_data, images)
+        formatted = format_grok(response, tools_data, images)
     elif has_openai_choices_shape(service):
         # open_router / neev_cloud / moonshot / openai_completion / mistral (+ future)
-        return format_openai_compatible(response, tools_data, images)
+        formatted = format_openai_compatible(response, tools_data, images)
     elif service == service_name["deepgram"]:
-        return format_deepgram(response, tools_data, images)
+        formatted = format_deepgram(response, tools_data, images)
+
+    return _stamp_request_model(formatted, model)
 
 
 async def Batch_Response_formatter(
-    response=None, service=None, tools=None, type="chat", images=None, batch_id=None, message_id=None, isBatch=True
+    response=None, service=None, tools=None, type="chat", images=None, batch_id=None, message_id=None, isBatch=True,
+    model=None,
 ):
     """
     Formatter specifically for batch responses that includes batch_id and message_id for easy mapping
@@ -89,7 +133,7 @@ async def Batch_Response_formatter(
     """
     # Get the base formatted response with isBatch flag
     formatted_response = await Response_formatter(
-        response=response, service=service, tools=tools, type=type, images=images, isBatch=isBatch
+        response=response, service=service, tools=tools, type=type, images=images, isBatch=isBatch, model=model
     )
     # Add batch_id and message_id to the response for mapping
     formatted_response["batch_id"] = batch_id
@@ -99,7 +143,7 @@ async def Batch_Response_formatter(
     return formatted_response
 
 
-async def process_batch_results(results, service, batch_id, batch_variables, message_id_mapping):
+async def process_batch_results(results, service, batch_id, batch_variables, message_id_mapping, model=None):
     """
     Common function to process batch results for all services.
 
@@ -109,6 +153,7 @@ async def process_batch_results(results, service, batch_id, batch_variables, mes
         batch_id: Batch ID
         batch_variables: Optional batch variables
         message_id_mapping: Mapping of message_id to index
+        model: Model name the batch was submitted with
 
     Returns:
         List of formatted results
@@ -147,6 +192,7 @@ async def process_batch_results(results, service, batch_id, batch_variables, mes
                 batch_id=batch_id,
                 message_id=message_id,
                 isBatch=True,
+                model=model,
             )
 
         # Add batch_variables to response if available
