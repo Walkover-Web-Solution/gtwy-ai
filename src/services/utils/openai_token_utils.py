@@ -7,7 +7,7 @@ def extract_openai_image_usage(model_response):
 
     # Prefer OpenAI's own total; fall back to input + output.
     usage["total_tokens"] = usage_data.get("total_tokens") or (
-        usage_data.get("input_tokens", 0) + usage_data.get("output_tokens", 0)
+        (usage_data.get("input_tokens") or 0) + (usage_data.get("output_tokens") or 0)
     )
 
     # Extract input token details

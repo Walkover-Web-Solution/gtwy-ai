@@ -9,7 +9,7 @@ def extract_gemini_image_usage(model_response):
     prompt_tokens_details = usage_metadata.get('prompt_tokens_details', [])
     for detail in prompt_tokens_details:
         modality = detail.get('modality', '')
-        token_count = detail.get('token_count', 0)
+        token_count = detail.get('token_count') or 0
         
         if modality == 'TEXT':
             usage['text_input_tokens'] = token_count
@@ -20,7 +20,7 @@ def extract_gemini_image_usage(model_response):
     candidates_tokens_details = usage_metadata.get('candidates_tokens_details', [])
     for detail in candidates_tokens_details:
         modality = detail.get('modality', '')
-        token_count = detail.get('token_count', 0)
+        token_count = detail.get('token_count') or 0
         
         if modality == 'TEXT':
             usage['text_output_tokens'] = token_count
