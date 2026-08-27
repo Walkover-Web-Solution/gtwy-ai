@@ -85,7 +85,7 @@ async def check_batch_status():
                                     logger.error(f"Error calculating batch cost for message {msg_id}: {str(cost_error)}")
 
                         formatted_results = await process_batch_results(
-                            results, service, batch_id, batch_variables, message_id_mapping
+                            results, service, batch_id, batch_variables, message_id_mapping, model
                         )
 
                         if not all(is_finalized_batch_item(item) for item in formatted_results):
