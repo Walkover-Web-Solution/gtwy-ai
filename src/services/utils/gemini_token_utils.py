@@ -28,13 +28,9 @@ def extract_gemini_image_usage(model_response):
             usage['image_output_tokens'] = token_count
 
     # Prefer Gemini's own total; fall back to summing the breakdown above.
-    usage['total_tokens'] = (
-        usage_metadata.get('total_token_count')
-        or usage_metadata.get('totalTokenCount')
-        or (
-            usage.get('text_input_tokens', 0) + usage.get('image_input_tokens', 0)
-            + usage.get('text_output_tokens', 0) + usage.get('image_output_tokens', 0)
-        )
+    usage['total_tokens'] = usage_metadata.get('total_token_count') or (
+        usage.get('text_input_tokens', 0) + usage.get('image_input_tokens', 0)
+        + usage.get('text_output_tokens', 0) + usage.get('image_output_tokens', 0)
     )
 
     return usage
