@@ -482,6 +482,10 @@ class BaseService:
             if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
 
+            # Remove internal keys that shouldn't be passed to API
+            new_config.pop("_json_schema_instruction", None)
+            new_config.pop("_text_instruction", None)
+
             if service == service_name["minimax"]:
                 extra_body = dict(new_config.get("extra_body") or {})
                 extra_body["reasoning_split"] = True

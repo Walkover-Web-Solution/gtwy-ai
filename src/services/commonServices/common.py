@@ -39,7 +39,7 @@ from src.services.utils.common_utils import (
     process_batch_background_tasks,
     process_variable_state,
     render_template_if_applicable,
-    restructure_json_schema,
+    normalize_response_type,
     save_error_history,
     setup_agent_tools,
     sse_stream_and_finalize,
@@ -170,7 +170,7 @@ async def chat(request_body):
             request_body.setdefault("body", {})["created_at"] = datetime.now(timezone.utc).isoformat()
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-
+        
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
         if isinstance(mcp_cfg, dict):
             from src.services.utils.mcp_utils import resolve_mcp_type
@@ -325,9 +325,17 @@ async def chat(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
-            custom_config["response_type"] = restructure_json_schema(
-                custom_config["response_type"], parsed_data["service"]
+        normalize_response_type(custom_config, parsed_data["service"], model_config)
+        
+        # Append JSON schema and text instructions to the prompt in configuration
+        # This ensures all services get the updated prompt without needing to check for instruction keys
+        if custom_config.get("_json_schema_instruction"):
+            parsed_data["configuration"]["prompt"] = (
+                parsed_data["configuration"].get("prompt", "") + "\n" + custom_config["_json_schema_instruction"]
+            )
+        if custom_config.get("_text_instruction"):
+            parsed_data["configuration"]["prompt"] = (
+                parsed_data["configuration"].get("prompt", "") + "\n" + custom_config["_text_instruction"]
             )
         if parsed_data.get("mode") == "plan":
             # Executor orchestration actions keep the existing pipeline.
@@ -521,13 +529,7 @@ async def chat(request_body):
                     bridge_configurations,
                 )
 
-                if (
-                    "response_type" in fallback_custom_config
-                    and fallback_custom_config["response_type"].get("type") == "json_schema"
-                ):
-                    fallback_custom_config["response_type"] = restructure_json_schema(
-                        fallback_custom_config["response_type"], parsed_data["service"]
-                    )
+                normalize_response_type(fallback_custom_config, parsed_data["service"], fallback_model_config)
 
                 class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
@@ -901,10 +903,7 @@ async def batch(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
-            custom_config["response_type"] = restructure_json_schema(
-                custom_config["response_type"], parsed_data["service"]
-            )
+        normalize_response_type(custom_config, parsed_data["service"], model_config)
 
         # Step 8: Execute Service Handler
         params = build_service_params_for_batch(parsed_data, custom_config, model_output_config)
