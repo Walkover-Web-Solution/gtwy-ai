@@ -1,5 +1,6 @@
 import base64
 
+from globals import logger
 from src.configs.constant import service_name
 from src.configs.model_configuration import model_config_document
 from src.services.utils.ai_middleware_format import Response_formatter
@@ -94,6 +95,10 @@ class OpenaiResponse(BaseService):
             modelResponse = openAIResponse.get("modelResponse", {})
 
             for item in modelResponse.get("output", []):
+                if item.get("type") in ("web_search_call", "web_search"):
+                    logger.info(
+                        f"Websearch tool results are in modelResponse['output'] key: {item}"
+                    )
                 if item.get("type") == "image_generation_call" and item.get("result"):
                     image_bytes = base64.b64decode(item["result"].strip())
                     gcp_url = await uploadDoc(
