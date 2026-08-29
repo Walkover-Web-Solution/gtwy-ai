@@ -97,9 +97,9 @@ class TokenCalculator:
                 usage["inputTokens"] = _usage.get("input_tokens", 0)
                 usage["outputTokens"] = _usage.get("output_tokens", 0)
                 usage["totalTokens"] = _usage.get("total_tokens", 0)
-                usage["cachedTokens"] = (_usage.get("input_tokens_details") or {}).get(
-                    "cached_tokens", 0
-                )
+                input_tokens_details = _usage.get("input_tokens_details") or {}
+                usage["cachedTokens"] = input_tokens_details.get("cached_tokens", 0)
+                usage["cachingCreationInputTokens"] = input_tokens_details.get("cache_write_tokens", 0)
                 usage["reasoningTokens"] = (_usage.get("output_tokens_details") or {}).get(
                     "reasoning_tokens", 0
                 )
@@ -198,6 +198,13 @@ class TokenCalculator:
         # Regular chat model cost calculation
         pricing = model_obj['outputConfig']['usage'][0]['total_cost']
 
+        if (
+            service == "openai"
+            and pricing.get("long_context_cost")
+            and self.total_usage["input_tokens"] > pricing.get("long_context_threshold", 0)
+        ):
+            pricing = {**pricing, **pricing["long_context_cost"]}
+
         # Priority processing charges 2x the standard cost
         priority_multiplier = 2 if self.service_tier == "priority" else 1
 
@@ -228,6 +235,8 @@ class TokenCalculator:
         billable_input_tokens = self.total_usage["input_tokens"]
         if has_cached_pricing:
             billable_input_tokens = max(billable_input_tokens - self.total_usage["cached_tokens"], 0)
+        if service == "openai" and pricing.get("caching_write_cost"):
+            billable_input_tokens = max(billable_input_tokens - self.total_usage["cache_creation_input_tokens"], 0)
 
         if billable_input_tokens and pricing.get("input_cost"):
             cost["input_cost"] = (billable_input_tokens / 1_000_000) * pricing["input_cost"]
