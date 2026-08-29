@@ -1,43 +1,28 @@
 from config import Config
-from src.configs.constant import api_key_status, service_name
+from src.configs.constant import api_key_status
+from src.configs.service_registry import apikey_status_codes
 from src.db_services.api_key_status_service import update_apikey_status
 from src.services.commonServices.baseService.utils import send_message
 
 
-def _make_mapper(
-    invalid: tuple = (),
-    unauthorized: tuple = (),
-    limited: tuple = (),
-):
-    """Generate a mapper function from sets of HTTP codes per status."""
-    def mapper(code: int) -> str:
-        if code in invalid:      return api_key_status["invalid"]
-        if code in unauthorized: return api_key_status["unauthorized"]
-        if code in limited:      return api_key_status["limited"]
-        if 500 <= code < 600:    return api_key_status["service_down"]
-        return api_key_status["working"]
-    return mapper
-
-
-SERVICE_MAPPERS = {
-    service_name["openai"]:            _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
-    service_name["openai_completion"]: _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
-    service_name["gemini"]:            _make_mapper(invalid=(400,),          unauthorized=(403,),     limited=(429,)),
-    service_name["anthropic"]:         _make_mapper(invalid=(401, 400),      unauthorized=(402, 403), limited=(429,)),
-    service_name["groq"]:              _make_mapper(invalid=(400, 401),      unauthorized=(403,),     limited=(422, 429, 498)),
-    service_name["grok"]:              _make_mapper(invalid=(400, 401),      unauthorized=(403,),     limited=(429,)),
-    service_name["deepseek"]:          _make_mapper(invalid=(400, 401),      unauthorized=(403,),     limited=(429,)),
-    service_name["mistral"]:           _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
-    service_name["open_router"]:       _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(402, 429)),
-    service_name["deepgram"]:          _make_mapper(invalid=(400, 401, 404), unauthorized=(403,),     limited=(402, 413, 422, 429)),
-    service_name["neev_cloud"]:        _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
-    service_name["moonshot"]:          _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
-    service_name["minimax"]:           _make_mapper(invalid=(401,),          unauthorized=(403,),     limited=(429,)),
-}
-
-
 def get_api_key_status(service: str, code: int) -> str:
-    return SERVICE_MAPPERS[service](code)
+    """Map an HTTP status code to an api-key status using the service's
+    DB-configured ``apikey_status_codes`` (invalid/unauthorized/limited code lists).
+
+    Previously a hardcoded per-service mapper table, which raised KeyError for any
+    service not listed in it — the one thing that made registering a service in the
+    DB insufficient on its own.
+    """
+    codes = apikey_status_codes(service)
+    if code in codes.get("invalid", ()):
+        return api_key_status["invalid"]
+    if code in codes.get("unauthorized", ()):
+        return api_key_status["unauthorized"]
+    if code in codes.get("limited", ()):
+        return api_key_status["limited"]
+    if 500 <= code < 600:
+        return api_key_status["service_down"]
+    return api_key_status["working"]
 
 
 async def mark_apikey_status_from_response(service, parsed_data, code=None):

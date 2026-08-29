@@ -363,16 +363,15 @@ class BaseService:
                     self.modelOutputConfig["message"],
                     _.get(funcModelResponse, self.modelOutputConfig["message"]),
                 )
-                if self.service in [
-                    service_name["openai_completion"],
-                    service_name["groq"],
-                    service_name["grok"],
-                    service_name["deepseek"],
-                    service_name["open_router"],
-                    service_name["neev_cloud"],
-                    service_name["moonshot"],
-                    service_name["minimax"],
-                    service_name["gemini"],
+                # `message` and `tools` are sibling paths in outputConfig
+                # (choices[0].message.content vs choices[0].message.tool_calls), so
+                # the copy above does not carry tool_calls — they need their own copy.
+                # Stated as an exclusion list so a newly registered service is covered
+                # by default; anthropic nests tool_use inside its message path, and
+                # mistral is excluded to preserve its existing behaviour.
+                if self.service not in [
+                    service_name["anthropic"],
+                    service_name["mistral"],
                 ]:
                     _.set_(
                         model_response,
@@ -479,7 +478,7 @@ class BaseService:
                 for key, value in configuration.items()
             }
 
-            if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
+            if new_config.get("stream") is not None and service in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
 
             if service == service_name["minimax"]:
