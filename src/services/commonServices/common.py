@@ -689,6 +689,21 @@ async def chat(request_body):
                     "is_overridden": parsed_data.get("testcase_data", {}).get("is_overridden", False),
                 }
 
+            # In-place update mode: when a message_id was supplied on the
+            # /testcases request, update only the testcase columns of that
+            # existing conversation_logs row instead of creating a new history
+            # row. Skip the normal save_history/metrics publish below.
+            update_message_id = parsed_data.get("testcase_data", {}).get("update_message_id")
+            if update_message_id:
+                from src.db_services.metrics_service import publish_testcase_data_update
+                hp = result.get("historyParams") or {}
+                await publish_testcase_data_update(
+                    message_id=update_message_id,
+                    testcase_id=hp.get("testcase_id"),
+                    testcase_data=hp.get("testcase_data"),
+                )
+                parsed_data["skip_history"] = True
+
             if parsed_data.get("body", {}).get("bridge_configurations", {}).get("playground_response_format"):
                 await sendResponse(
                     parsed_data["body"]["bridge_configurations"]["playground_response_format"],
