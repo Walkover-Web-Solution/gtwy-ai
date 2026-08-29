@@ -93,6 +93,18 @@ def has_openai_choices_shape(name):
     return wire_format(name) == "openai_chat"
 
 
+def has_gemini_shape(name):
+    return wire_format(name) == "gemini"
+
+
+def has_anthropic_shape(name):
+    return wire_format(name) == "anthropic"
+
+
+def has_openai_responses_shape(name):
+    return wire_format(name) == "openai_responses"
+
+
 def uses_string_tool_choice(name):
     """Set G — services that accept a string/function-style ``tool_choice``.
 

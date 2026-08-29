@@ -22,7 +22,6 @@ service_name = {
     "neev_cloud": "neev_cloud",
     "moonshot": "moonshot",
     "minimax": "minimax",
-    "together_ai": "together_ai",
 }
 
 bridge_ids = {
