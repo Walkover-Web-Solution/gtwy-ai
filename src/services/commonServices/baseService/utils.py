@@ -836,7 +836,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
     if service in [service_name["groq"], service_name["grok"], service_name["deepseek"], 
                    service_name["open_router"], service_name["mistral"],
                    service_name["neev_cloud"], service_name["moonshot"],
-                   service_name["minimax"]]:
+                   service_name["minimax"], service_name["together_ai"]]:
         message = {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls or []}
         if accumulated_reasoning:
             message["reasoning_content"] = "".join(accumulated_reasoning)

@@ -372,6 +372,7 @@ class BaseService:
                     service_name["neev_cloud"],
                     service_name["moonshot"],
                     service_name["minimax"],
+                    service_name["together_ai"],
                     service_name["gemini"],
                 ]:
                     _.set_(
