@@ -97,9 +97,14 @@ class TokenCalculator:
                 usage["inputTokens"] = _usage.get("input_tokens", 0)
                 usage["outputTokens"] = _usage.get("output_tokens", 0)
                 usage["totalTokens"] = _usage.get("total_tokens", 0)
-                usage["cachedTokens"] = (_usage.get("input_tokens_details") or {}).get(
-                    "cached_tokens", 0
-                )
+                input_tokens_details = _usage.get("input_tokens_details") or {}
+                usage["cachedTokens"] = input_tokens_details.get("cached_tokens", 0)
+                # Prompt-caching cache-write tokens (billed once at the write rate,
+                # separate from a cache-read hit). Reuses the same
+                # cachingCreationInputTokens accumulator Anthropic already populates,
+                # so the existing cache_creation_cost billing below picks it up
+                # automatically — see calculate_total_cost.
+                usage["cachingCreationInputTokens"] = input_tokens_details.get("cache_write_tokens", 0)
                 usage["reasoningTokens"] = (_usage.get("output_tokens_details") or {}).get(
                     "reasoning_tokens", 0
                 )
@@ -198,6 +203,19 @@ class TokenCalculator:
         # Regular chat model cost calculation
         pricing = model_obj['outputConfig']['usage'][0]['total_cost']
 
+        # Long-context premium: some models charge a higher flat rate across
+        # input/output/cached once the prompt exceeds a configured threshold. Unlike
+        # Gemini's multiplier (applied to the computed token_cost at the end), this
+        # config carries a full sibling pricing object (`long_context_cost`) that
+        # replaces the base rates outright, since the higher tier isn't always a clean
+        # multiple of the base one. Gated purely on the field's presence — today only
+        # OpenAI models have it configured, but any service's pricing could carry it.
+        # Swap it in before any cost math below runs.
+        if pricing.get("long_context_cost") and self.total_usage["input_tokens"] > pricing.get(
+            "long_context_threshold", 0
+        ):
+            pricing = {**pricing, **pricing["long_context_cost"]}
+
         # Priority processing charges 2x the standard cost
         priority_multiplier = 2 if self.service_tier == "priority" else 1
 
@@ -228,6 +246,26 @@ class TokenCalculator:
         billable_input_tokens = self.total_usage["input_tokens"]
         if has_cached_pricing:
             billable_input_tokens = max(billable_input_tokens - self.total_usage["cached_tokens"], 0)
+
+        # Cache-write tokens are billed separately below (cache_creation_cost, via
+        # caching_write_cost) — carve them out of the standard-rate base the same way
+        # cached (read) tokens are carved out above, so they aren't double-billed at
+        # both the input rate and the write rate.
+        #
+        # NOT safe to gate on `pricing.get("caching_write_cost")` alone: Anthropic's
+        # pricing also carries that field (it's what makes the existing
+        # cache_creation_cost line below work for Anthropic), but Anthropic reports
+        # input_tokens EXCLUDING cache entirely (see the cached-token note above) —
+        # cache_creation_input_tokens is never a subset of input_tokens there, so
+        # carving it out would double-subtract once Anthropic caching is enabled.
+        # OpenAI's cache_write_tokens, by contrast, come from input_tokens_details (a
+        # breakdown OF input_tokens) — a genuine subset, same shape as cached_tokens
+        # above. Gate on that wire shape rather than the service name so any future
+        # service sharing the same "subset" reporting style picks this up for free.
+        from src.configs.service_registry import has_openai_responses_shape  # lazy: avoid import cycle
+
+        if has_openai_responses_shape(service) and pricing.get("caching_write_cost"):
+            billable_input_tokens = max(billable_input_tokens - self.total_usage["cache_creation_input_tokens"], 0)
 
         if billable_input_tokens and pricing.get("input_cost"):
             cost["input_cost"] = (billable_input_tokens / 1_000_000) * pricing["input_cost"]

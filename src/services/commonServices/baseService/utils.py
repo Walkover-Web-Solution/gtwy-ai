@@ -10,8 +10,16 @@ from google.genai import types
 
 from globals import *
 from globals import logger, traceback
-from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name, tool_types
-from src.configs.service_registry import has_openai_choices_shape, uses_string_tool_choice
+from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, tool_types
+from src.configs.service_registry import (
+    has_anthropic_shape,
+    has_gemini_shape,
+    has_openai_choices_shape,
+    has_openai_responses_shape,
+    reasoning_extra_body,
+    reasoning_param_style,
+    uses_string_tool_choice,
+)
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.db_services.ConfigurationServices import get_skill_content_by_id
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
@@ -115,11 +123,11 @@ def validate_tool_call(service, response):
         case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
             tool_calls = response.get('choices', [])[0].get('message', {}).get("tool_calls", [])
             return len(tool_calls) > 0 if tool_calls is not None else False
-        case "openai":
+        case s if has_openai_responses_shape(s):
             return any(output.get("type") == "function_call" for output in response.get("output", []))
-        case "anthropic":
+        case s if has_anthropic_shape(s):
             return response.get('stop_reason') == 'tool_use'
-        case 'gemini':
+        case s if has_gemini_shape(s):
             candidates = response.get('candidates', [])
             if not candidates:
                 return False
@@ -227,7 +235,7 @@ def disable_tool_call(configuration: dict, service: str):
     if uses_string_tool_choice(service):
         configuration["tool_choice"] = "none"
 
-    elif service == service_name["gemini"]:
+    elif has_gemini_shape(service):
         # Disabling Tool Call
         configuration["config"].tool_config = types.ToolConfig(
             function_calling_config=types.FunctionCallingConfig(
@@ -239,7 +247,7 @@ def disable_tool_call(configuration: dict, service: str):
             disable=True
         )
 
-    elif service == service_name["anthropic"]:
+    elif has_anthropic_shape(service):
         configuration["tool_choice"] = {"type": "none"}
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
@@ -274,7 +282,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
         ]
         return data_to_send
 
-    elif service == service_name['gemini']:
+    elif has_gemini_shape(service):
         gemini_tools = []
         function_declarations = [
             {
@@ -300,7 +308,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             gemini_tools.append(types.Tool(function_declarations=function_declarations))
 
         return gemini_tools
-    elif service == service_name['openai']:
+    elif has_openai_responses_shape(service):
         data_to_send =  [
             {
                 "type": "function",
@@ -325,7 +333,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
         return data_to_send
-    elif service == service_name["anthropic"]:
+    elif has_anthropic_shape(service):
         return [
             transformed_tool
             if transformed_tool["name"] == "JSON_Schema_Response_Format"
@@ -349,43 +357,58 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
 
+def _apply_summary_flag_reasoning(service: str, new_config: dict) -> None:
+    if isinstance(new_config.get("reasoning"), dict):
+        new_config["reasoning"]["summary"] = "auto"
+
+
+def _apply_thinking_config_reasoning(service: str, new_config: dict) -> None:
+    effort = new_config["reasoning"].get("effort", "medium")
+    new_config["thinking_config"] = types.ThinkingConfig(
+        include_thoughts=True,
+        thinking_level=effort
+    )
+    new_config.pop("reasoning", None)
+
+
+def _apply_output_config_effort_reasoning(service: str, new_config: dict) -> None:
+    new_config["thinking"] = {"type": "adaptive"}
+    effort = new_config["reasoning"].get("effort", "medium")
+    if new_config.get("output_config"):
+        new_config["output_config"]["effort"] = effort
+    else:
+        new_config["output_config"] = {"effort": effort}
+    new_config.pop("reasoning", None)
+
+
+def _apply_reasoning_effort(service: str, new_config: dict) -> None:
+    effort = new_config["reasoning"].get("effort", "medium")
+    new_config["reasoning_effort"] = effort
+    new_config.pop("reasoning", None)
+
+
+def _apply_reasoning_effort_extra_body(service: str, new_config: dict) -> None:
+    _apply_reasoning_effort(service, new_config)
+    extra_body = dict(new_config.get("extra_body") or {})
+    extra_body.update(reasoning_extra_body(service))
+    new_config["extra_body"] = extra_body
+
+
+_REASONING_STYLE_HANDLERS = {
+    "summary_flag": _apply_summary_flag_reasoning,
+    "thinking_config": _apply_thinking_config_reasoning,
+    "output_config_effort": _apply_output_config_effort_reasoning,
+    "reasoning_effort": _apply_reasoning_effort,
+    "reasoning_effort_extra_body": _apply_reasoning_effort_extra_body,
+}
+
+
 def reasoning_formatter(service: str, new_config: dict) -> None:
-    if service == service_name["openai"]:
-        if isinstance(new_config.get("reasoning"), dict):
-            new_config["reasoning"]["summary"] = "auto"
-
-    elif service == service_name["gemini"]:
-        effort = new_config["reasoning"].get("effort", "medium")
-        new_config["thinking_config"] = types.ThinkingConfig(
-            include_thoughts=True,
-            thinking_level=effort
-        )
-        new_config.pop("reasoning", None)
-
-    elif service == service_name["anthropic"]:
-        new_config["thinking"] = {"type": "adaptive"}
-        effort = new_config["reasoning"].get("effort", "medium")
-        if new_config.get("output_config"):
-            new_config["output_config"]["effort"] = effort
-        else:
-            new_config["output_config"] = {"effort": effort}
-
-        new_config.pop("reasoning", None)
-
-    elif service == service_name["groq"]:
-        effort = new_config["reasoning"].get("effort", "medium")
-        new_config["reasoning_effort"] = effort
-        new_config.pop("reasoning", None)
-
-    elif service in (service_name["deepseek"], service_name["minimax"]):
-        effort = new_config["reasoning"].get("effort", "medium")
-        new_config["reasoning_effort"] = effort
-        extra_body = dict(new_config.get("extra_body") or {})
-        extra_body["thinking"] = {"type": "enabled"}
-        new_config["extra_body"] = extra_body
-        new_config.pop("reasoning", None)
-
-    # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
+    """Apply the service's reasoning/thinking param shape, driven by its
+    DB-configured `reasoning_param_style` (None means unsupported)."""
+    handler = _REASONING_STYLE_HANDLERS.get(reasoning_param_style(service))
+    if handler:
+        handler(service, new_config)
 
 
 async def send_request(url, data, method, headers):
@@ -610,7 +633,7 @@ def make_code_mapping_by_service(responses, service):
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
 
-        case 'gemini':
+        case s if has_gemini_shape(s):
             for part in responses['candidates'][0]["content"]["parts"]:
                 function_call = part.get('function_call') if isinstance(part, dict) else None
                 if function_call:
@@ -624,7 +647,7 @@ def make_code_mapping_by_service(responses, service):
                     }
                     function_list.append(name)
 
-        case 'openai':
+        case s if has_openai_responses_shape(s):
 
             for tool_call in [output for output in responses['output'] if output.get('type') == 'function_call']:
                 name = tool_call['name']
@@ -636,7 +659,7 @@ def make_code_mapping_by_service(responses, service):
                     error = True
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
-        case "anthropic":
+        case s if has_anthropic_shape(s):
             for tool_call in [
                 item for item in responses["content"] if item["type"] == "tool_use"
             ]:  # Skip the first item
@@ -833,10 +856,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
                                 service_tier=None, accumulated_reasoning=None):
     """Build a complete response dict from streamed data, matching the shape of each service's non-stream response."""
     full_text = "".join(accumulated_content)
-    if service in [service_name["groq"], service_name["grok"], service_name["deepseek"], 
-                   service_name["open_router"], service_name["mistral"],
-                   service_name["neev_cloud"], service_name["moonshot"],
-                   service_name["minimax"]]:
+    if has_openai_choices_shape(service):
         message = {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls or []}
         if accumulated_reasoning:
             message["reasoning_content"] = "".join(accumulated_reasoning)
@@ -849,7 +869,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
             "model": configuration.get("model", ""),
             "usage": final_usage,
         }
-    elif service == service_name["anthropic"]:
+    elif has_anthropic_shape(service):
         content = [{"type": "text", "text": full_text}] if full_text else []
         if final_tool_calls:
             content += final_tool_calls
@@ -863,7 +883,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
             "stop_sequence": None,
             "usage": final_usage,
         }
-    elif service == service_name["gemini"]:
+    elif has_gemini_shape(service):
         parts = [{"text": full_text}] if full_text else []
         if final_tool_calls:
             parts += [{"function_call": tc} for tc in final_tool_calls]
@@ -871,7 +891,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
             "candidates": [{"content": {"parts": parts, "role": "model"}, "finish_reason": final_finish_reason}],
             "usage_metadata": final_usage,
         }
-    elif service == service_name["openai"]:
+    elif has_openai_responses_shape(service):
         output = list((last_delta or {}).get("output") or [])
         if not output:
             output = [{"type": "message", "content": [{"type": "output_text", "text": full_text}]}]
