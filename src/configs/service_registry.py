@@ -27,6 +27,7 @@ from pymongo.errors import OperationFailure, PyMongoError
 from config import Config
 from globals import logger
 from models.mongo_connection import db
+from src.configs.constant import Client, WireFormat
 from src.services.utils.load_service_configs import get_service_configs
 
 # NOTE: send_message is imported lazily inside _async_change_listener to avoid a
@@ -85,12 +86,24 @@ def prompt_role(name):
 # ---------------------------------------------------------------------------
 def uses_openai_sdk(name):
     """Set C — services callable via a generic AsyncOpenAI(base_url=...) runner."""
-    return client(name) == "openai_sdk" and wire_format(name) == "openai_chat"
+    return client(name) == Client.OPENAI_SDK and wire_format(name) == WireFormat.OPENAI_CHAT
 
 
 def has_openai_choices_shape(name):
     """Set A — response uses the OpenAI ``choices[0].message`` shape."""
-    return wire_format(name) == "openai_chat"
+    return wire_format(name) == WireFormat.OPENAI_CHAT
+
+
+def has_gemini_shape(name):
+    return wire_format(name) == WireFormat.GEMINI
+
+
+def has_anthropic_shape(name):
+    return wire_format(name) == WireFormat.ANTHROPIC
+
+
+def has_openai_responses_shape(name):
+    return wire_format(name) == WireFormat.OPENAI_RESPONSES
 
 
 def uses_string_tool_choice(name):
@@ -100,7 +113,7 @@ def uses_string_tool_choice(name):
     a string tool_choice ("none"/"auto"/function name), unlike anthropic/gemini
     which use structured objects.
     """
-    return wire_format(name) in ("openai_chat", "openai_responses")
+    return wire_format(name) in (WireFormat.OPENAI_CHAT, WireFormat.OPENAI_RESPONSES)
 
 
 def supports_streaming(name):
@@ -120,13 +133,28 @@ def supports_reasoning(name):
     return bool(_field(name, "supports_reasoning", False))
 
 
+def reasoning_param_style(name):
+    """Which reasoning/thinking param shape this service expects, or None if unsupported."""
+    return _field(name, "reasoning_param_style", None)
+
+
+def extra_body(name):
+    """Static extra_body params always merged into this service's request, regardless of reasoning."""
+    return _field(name, "extra_body", {})
+
+
+def reasoning_extra_body(name):
+    """extra_body params merged in only when reasoning is enabled for this service."""
+    return _field(name, "reasoning_extra_body", {})
+
+
 def apikey_status_codes(name):
     """Return the per-status HTTP code map for ``name`` (with safe default)."""
     return _field(name, "apikey_status_codes", {})
 
 
 def web_search_tool_config(name):
-    if wire_format(name) in ("openai_chat", "openai_responses"):
+    if wire_format(name) in (WireFormat.OPENAI_CHAT, WireFormat.OPENAI_RESPONSES):
         return {
             "unfiltered": {"type": "web_search_preview"},
             "filtered": {"type": "web_search"},
