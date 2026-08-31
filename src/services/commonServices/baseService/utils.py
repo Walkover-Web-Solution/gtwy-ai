@@ -437,6 +437,33 @@ async def send_message(cred, data):
         logger.error(f"Unexpected send message error=>, {str(e)}")
 
 
+USAGE_KEYS = {"usage", "tokens"}
+
+
+def _strip_usage_keys(value):
+    if isinstance(value, dict):
+        return {k: _strip_usage_keys(v) for k, v in value.items() if k not in USAGE_KEYS}
+    if isinstance(value, list):
+        return [_strip_usage_keys(item) for item in value]
+    return value
+
+
+def strip_usage_for_embed(payload, is_embed):
+    """Drop token/cost usage from a client-facing payload for embed users.
+
+    Completion responses carry usage under "usage"; history entries carry it
+    under "tokens", including nested copies inside tools_call_data — hence the
+    recursive walk over both keys.
+
+    Embed clients must not see token counts or cost, but internal bookkeeping
+    (usage metrics, history rows, billing) still needs the real numbers — so
+    this returns a new structure and never mutates the caller's payload.
+    """
+    if not is_embed:
+        return payload
+    return _strip_usage_keys(payload)
+
+
 async def sendResponse(response_format, data, success=False, variables=None, meta=None):
     if variables is None:
         variables = {}
