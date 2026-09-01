@@ -57,7 +57,7 @@ from src.services.utils.maximum_iterations_utils import (
 
 from ..utils.ai_middleware_format import Response_formatter
 from ..utils.helper import Helper
-from .baseService.utils import sendResponse, unknown_error_handler_alert
+from .baseService.utils import sendResponse, strip_usage_for_embed, unknown_error_handler_alert
 from json_repair import repair_json
 from .response_caching_service import handle_response_caching
 from .reviewer_service import run_review_loop
@@ -642,7 +642,7 @@ async def chat(request_body):
             result["response"]["data"]["message_id"] = parsed_data["message_id"]
         await sendResponse(
             parsed_data["response_format"],
-            result["response"],
+            strip_usage_for_embed(result["response"], parsed_data.get("is_embed")),
             success=True,
             variables=parsed_data.get("variables", {}),
         )
@@ -725,7 +725,13 @@ async def chat(request_body):
                 f"Cached agent {bridge_id} for thread {thread_id}_{sub_thread_id} with key based on original primary {original_primary_bridge_id}"
             )
 
-        return JSONResponse(status_code=200, content={"success": True, "response": result["response"]})
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "response": strip_usage_for_embed(result["response"], parsed_data.get("is_embed")),
+            },
+        )
 
     except (Exception, ValueError, BadRequestException) as error:
         if not isinstance(error, BadRequestException):
@@ -1012,7 +1018,11 @@ async def image(request_body):
         if result.get("response") and result["response"].get("data"):
             result["response"]["data"]["id"] = parsed_data["message_id"]
         await sendResponse(
-            parsed_data["response_format"], result["response"], success=True, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
+            parsed_data["response_format"],
+            strip_usage_for_embed(result["response"], parsed_data.get("is_embed")),
+            success=True,
+            variables=parsed_data.get("variables", {}),
+            meta=parsed_data.get("meta"),
         )
         latency = create_latency_object(timer, params)
         # Update usage metrics for successful API calls
@@ -1021,7 +1031,13 @@ async def image(request_body):
         await process_background_tasks(
             parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
         )
-        return JSONResponse(status_code=200, content={"success": True, "response": result["response"]})
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "response": strip_usage_for_embed(result["response"], parsed_data.get("is_embed")),
+            },
+        )
 
     except (Exception, ValueError, BadRequestException) as error:
         if not isinstance(error, BadRequestException):

@@ -38,6 +38,7 @@ from ..streaming_service import StreamingService
 from .utils import (
     build_accumulated_response,
     make_code_mapping_by_service,
+    merge_nested_agent_usage,
     process_data_and_run_tools,
     run_stream_and_collect,
     sendResponse,
@@ -132,13 +133,7 @@ class BaseService:
         self.maximum_iteration_limit_reached = False
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
         if self.stream_mode:
-            self.streamer = StreamingService(mode="sse")
-        else:
-            self.streamer = None
-
-        self.stream_mode = params.get("customConfig", {}).get("stream") is True
-        if self.stream_mode:
-            self.streamer = StreamingService(mode="sse")
+            self.streamer = StreamingService(mode="sse", is_embed=self.is_embed)
         else:
             self.streamer = None
 
@@ -175,14 +170,19 @@ class BaseService:
 
         return func_response_data, mapping_response_data, tools_call_data
 
-    def update_configration(self, response, function_responses, configuration, mapping_response_data, service, tools):
+    def update_configration(self, response, function_responses, configuration, mapping_response_data, service, tools, tools_call_data=None):
         if has_anthropic_shape(service):
             configuration["messages"].append({"role": "assistant", "content": response["content"]})
             configuration["messages"].append({"role": "user", "content": []})
 
+        tools_call_data = tools_call_data if isinstance(tools_call_data, dict) else {}
         for index, function_response in enumerate(function_responses):
             display_tool_name = display_mcp_tool_name(function_response["name"])
-            tools[display_tool_name] = function_response["content"]
+            # tools_call_data still holds each tool's untrimmed result, so a nested
+            # agent's own tokens/cost can be folded into its tools_data entry here.
+            tools[display_tool_name] = merge_nested_agent_usage(
+                function_response["content"], tools_call_data.get(function_response.get("tool_call_id"))
+            )
 
             match service:
                 case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
@@ -304,7 +304,7 @@ class BaseService:
                 )
 
         configuration, tools = self.update_configration(
-            model_response, func_response_data, configuration, mapping_response_data, service, tools
+            model_response, func_response_data, configuration, mapping_response_data, service, tools, tools_call_data
         )
         if not self.stream_mode and self.response_format.get("type", "") != "webhook":
             asyncio.create_task(

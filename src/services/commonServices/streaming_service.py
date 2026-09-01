@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from .baseService.utils import send_message
+from .baseService.utils import send_message, strip_usage_for_embed
 
 
 class StreamingService:
@@ -13,12 +13,13 @@ class StreamingService:
     - "rtlayer"  : each event is POSTed to the RTLayer channel immediately via send_message()
     """
 
-    def __init__(self, mode: str = "sse", rtlayer_cred: dict = None):
+    def __init__(self, mode: str = "sse", rtlayer_cred: dict = None, is_embed: bool = False):
         self.mode = mode
         self.rtlayer_cred = rtlayer_cred or {}
         self.queue = asyncio.Queue() if mode == "sse" else None
         self._started = False
         self.redirect_delta_to_reasoning = False
+        self.is_embed = bool(is_embed)
 
     async def _emit(self, payload: dict):
         if self.mode == "sse":
@@ -75,12 +76,15 @@ class StreamingService:
     async def emit_done(self, usage: dict, message_id: str, finish_reason: str, accumulated_data: dict = None):
         payload = {
             "event": "done",
-            "usage": usage,
             "message_id": message_id,
             "finish_reason": finish_reason,
         }
+        # Embed clients get no token/cost figures — neither the standalone usage
+        # block nor the copy nested inside the accumulated response.
+        if not self.is_embed:
+            payload["usage"] = usage
         if accumulated_data is not None:
-            payload["response"] = accumulated_data
+            payload["response"] = strip_usage_for_embed(accumulated_data, self.is_embed)
         await self._emit(payload)
 
     async def emit_error(self, error: str, fallback_error: str = None):

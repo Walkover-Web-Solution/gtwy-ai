@@ -437,6 +437,33 @@ async def send_message(cred, data):
         logger.error(f"Unexpected send message error=>, {str(e)}")
 
 
+USAGE_KEYS = {"usage", "tokens"}
+
+
+def _strip_usage_keys(value):
+    if isinstance(value, dict):
+        return {k: _strip_usage_keys(v) for k, v in value.items() if k not in USAGE_KEYS}
+    if isinstance(value, list):
+        return [_strip_usage_keys(item) for item in value]
+    return value
+
+
+def strip_usage_for_embed(payload, is_embed):
+    """Drop token/cost usage from a client-facing payload for embed users.
+
+    Completion responses carry usage under "usage"; history entries carry it
+    under "tokens", including nested copies inside tools_call_data — hence the
+    recursive walk over both keys.
+
+    Embed clients must not see token counts or cost, but internal bookkeeping
+    (usage metrics, history rows, billing) still needs the real numbers — so
+    this returns a new structure and never mutates the caller's payload.
+    """
+    if not is_embed:
+        return payload
+    return _strip_usage_keys(payload)
+
+
 async def sendResponse(response_format, data, success=False, variables=None, meta=None):
     if variables is None:
         variables = {}
@@ -449,6 +476,42 @@ async def sendResponse(response_format, data, success=False, variables=None, met
             if meta:
                 data_to_send["meta"] = meta
             return await send_request(**response_format["cred"], method="POST", data=data_to_send)
+
+
+def merge_nested_agent_usage(content, tool_log):
+    """Fold a nested agent's own tokens/cost into its tools_data entry.
+
+    A nested agent runs a full completion of its own, so it has tokens and cost the
+    parent's token_calculator never sees. `tool_log` is this tool's entry from the
+    tools_call_data run_tool just returned, whose "data" still holds the untrimmed
+    call_gtwy_agent result: reply, usage and the agent's own tools_data. `content`
+    is what the model was told — returned as-is for every tool that isn't an agent,
+    and as the fallback whenever the log has no usable reply to build on.
+
+    Usage is passed along
+    whole rather than field-picked, so cached/reasoning/cache-write tokens and
+    anything a future service starts reporting come along for free; it is empty
+    when the nested run reported nothing (an error, or usage stripped because the
+    caller is an embed client). Cost lands under "usage" so strip_usage_for_embed's
+    recursive walk hides it from embed clients with the parent's own numbers.
+    """
+    if not isinstance(tool_log, dict) or tool_log.get("type") != "AGENT":
+        return content
+
+    data = tool_log.get("data")
+    if not isinstance(data, dict):
+        return content
+        
+    reply = data.get("response")
+    if not isinstance(reply, dict):
+        return content
+
+    merged = {**reply, "usage": dict(data.get("usage") or {})}
+    # An agent that called agents of its own carries them in its own tools_data;
+    # keep that tree so cost stays attributable per level.
+    if data.get("tools_data"):
+        merged["tools_data"] = data["tools_data"]
+    return merged
 
 
 async def process_data_and_run_tools(codes_mapping, self):

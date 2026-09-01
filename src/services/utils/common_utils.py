@@ -34,7 +34,7 @@ from src.services.utils.update_and_check_cost import update_cost, update_last_us
 from src.utils.formatter import apply_variables_to_template_json
 from src.services.utils.helper import Helper
 from ...controllers.conversationController import getThread
-from ..commonServices.baseService.utils import sendResponse
+from ..commonServices.baseService.utils import sendResponse, strip_usage_for_embed
 
 UTC = timezone.utc
 
@@ -904,12 +904,14 @@ async def _publish_history_to_queue(dataset, history_params, version_id, thread_
         await sub_queue_obj.publish_message(make_json_serializable({"save_history": [history_data]}))
         await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_data}))
 
-        asyncio.create_task(_send_history_to_rt_layer(history_params))
+        asyncio.create_task(
+            _send_history_to_rt_layer(history_params, (parsed_data or {}).get("is_embed"))
+        )
     except Exception as err:
         logger.error(f"Error publishing history/metrics to queue: {str(err)}")
 
 
-async def _send_history_to_rt_layer(history_entry):
+async def _send_history_to_rt_layer(history_entry, is_embed=None):
     if not history_entry.get("bridge_id"):
         return
 
@@ -922,7 +924,20 @@ async def _send_history_to_rt_layer(history_entry):
         },
         "type": "RTLayer",
     }
-    await sendResponse(response_format_copy, history_entry, True)
+    # The queued copy (saved to the DB) keeps its usage figures; only this
+    # client-facing broadcast is stripped for embed users.
+    #
+    # is_embed must be passed in by the caller: history rows are built by
+    # prepare_history_params / build_history_and_metrics_payload, neither of
+    # which carries an is_embed field, so reading it off the row alone always
+    # yielded None and stripped nothing.
+    if is_embed is None:
+        is_embed = history_entry.get("is_embed")
+    await sendResponse(
+        response_format_copy,
+        strip_usage_for_embed(history_entry, is_embed),
+        True,
+    )
 
 
 async def _update_history_redis(dataset, history_params, version_id, thread_info):
@@ -1176,7 +1191,10 @@ async def process_background_tasks(
         data["save_history"] = history_entries
 
         asyncio.gather(
-            *(_send_history_to_rt_layer(history_entry) for history_entry in history_entries),
+            *(
+                _send_history_to_rt_layer(history_entry, parsed_data.get("is_embed"))
+                for history_entry in history_entries
+            ),
             return_exceptions=True
         )
 
