@@ -1,7 +1,7 @@
 import src.db_services.ConfigurationServices as ConfigurationService
 from config import Config
 from models.mongo_connection import db
-from src.configs.constant import inbuild_tools
+from src.configs.constant import inbuild_tools, tool_types
 from src.services.commonServices.baseService.utils import makeFunctionName
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
@@ -435,7 +435,7 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
         )
 
         tool_id_and_name_mapping[name] = {
-            "type": "AGENT",
+            "type": tool_types["AGENT"],
             "bridge_id": bridge_id_value,
             "requires_thread_id": bridge_info.get("thread_id", False),
         }

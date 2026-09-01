@@ -10,7 +10,7 @@ from google.genai import types
 
 from globals import *
 from globals import logger, traceback
-from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name
+from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name, tool_types
 from src.configs.service_registry import has_openai_choices_shape, uses_string_tool_choice
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
@@ -393,6 +393,36 @@ async def sendResponse(response_format, data, success=False, variables=None, met
             return await send_request(**response_format["cred"], method="POST", data=data_to_send)
 
 
+def merge_nested_agent_usage(content, tool_log):
+    """Fold a nested agent's own tokens/cost into its tools_data entry.
+
+    Call only for AGENT tools. A nested agent runs a full completion of its own, so
+    it has tokens and cost the parent's token_calculator never sees. `tool_log` is
+    this agent's entry from the tools_call_data run_tool just returned, whose "data"
+    still holds the untrimmed call_gtwy_agent result: reply, usage and the agent's
+    own tools_data. `content` is what the model was told, returned unchanged as the
+    fallback when the log has no usable reply to build on.
+
+    Usage is passed along whole rather than field-picked, so cached/reasoning/
+    cache-write tokens and anything a future service starts reporting come along
+    for free; it is empty whenever the nested run reported none.
+    """
+    # "data" is `result or response`, so a gathered exception lands there as the
+    # Exception itself, and a failed agent returns "response" as a plain error
+    # string — neither is a mapping. Fall back to what the model was told.
+    data = tool_log.get("data")
+    reply = data.get("response") if isinstance(data, dict) else None
+    if not isinstance(reply, dict):
+        return content
+
+    merged = {**reply, "usage": dict(data.get("usage") or {})}
+    # An agent that called agents of its own carries them in its own tools_data;
+    # keep that tree so cost stays attributable per level.
+    if data.get("tools_data"):
+        merged["tools_data"] = data["tools_data"]
+    return merged
+
+
 async def process_data_and_run_tools(codes_mapping, self):
     try:
         self.timer.start()
@@ -429,7 +459,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                         owner_id=self.owner_id,
                         resource_to_collection_mapping=resource_to_collection_mapping,
                     )
-                elif self.tool_id_and_name_mapping[name].get("type") == "AGENT":
+                elif self.tool_id_and_name_mapping[name].get("type") == tool_types["AGENT"]:
                     agent_args = {
                         "org_id": self.org_id,
                         "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
