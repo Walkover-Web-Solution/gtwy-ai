@@ -13,7 +13,7 @@ from src.configs.constant import alert_types, redis_keys
 from src.handler.executionHandler import handle_exceptions
 from src.send_alert import send_alert
 from src.services.auto_router_service import apply_auto_model_selection
-from src.services.billing.billing_utils import release_credits, release_credits_after
+from src.services.billing.billing_utils import fallback_allowed_on_plan, release_credits, release_credits_after
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.todo.planner_service import prepare_planner_request
 from src.services.todo.todo_handler import handle_todo_mode
@@ -143,6 +143,14 @@ async def chat_multiple_agents(request_body):
 
     except Exception as error:
         logger.error(f"Error in chat_multiple_agents: {str(error)}, {traceback.format_exc()}")
+        # Failures before chat() ran (empty configurations, cache trouble) would
+        # otherwise strand the middleware's hold. Release is token-idempotent, so
+        # attempting it here is safe even if chat() already released.
+        _body = request_body.get("body", {})
+        await release_credits(
+            _body.get("org_id") or request_body.get("state", {}).get("profile", {}).get("org", {}).get("id"),
+            _body.get("credit_hold_token"),
+        )
         error_object = {
             "success": False,
             "error": f"{str(error)} (Type: {type(error).__name__}). For more support contact us at support@gtwy.ai",
@@ -163,6 +171,10 @@ async def chat(request_body):
     fallback_error_code = None
     completion_success = True
     original_service = None
+    # Initialized before the try: if parse_request_body raises, the finally
+    # below still runs and must not NameError (that used to leak the hold).
+    parsed_data = {}
+    hold_token = None
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
@@ -171,7 +183,10 @@ async def chat(request_body):
             request_body.setdefault("body", {})["created_at"] = datetime.now(timezone.utc).isoformat()
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-        owns_hold = bool(request_body.get("body", {}).pop("credit_hold_owner", False))
+        # Single-use hold token from the middleware. Popping it makes this frame
+        # the owner; release_credits is idempotent per token, so redeliveries or
+        # overlapping cleanup paths can never release twice.
+        hold_token = request_body.get("body", {}).pop("credit_hold_token", None)
 
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
         if isinstance(mcp_cfg, dict):
@@ -385,9 +400,9 @@ async def chat(request_body):
                     _transfer_task, tool_count_key_for_cleanup, tool_count_owner_token,
                 ))
                 tool_count_owner_token = None  # ownership transferred to the deferred cleanup
-                if owns_hold:
-                    asyncio.create_task(release_credits_after(_transfer_task, parsed_data.get("org_id")))
-                    owns_hold = False
+                if hold_token:
+                    asyncio.create_task(release_credits_after(_transfer_task, parsed_data.get("org_id"), hold_token))
+                    hold_token = None
                 return JSONResponse(status_code=200, content={"success": True})
 
             _stream_task = asyncio.create_task(sse_stream_and_finalize(
@@ -399,9 +414,9 @@ async def chat(request_body):
                 _stream_task, tool_count_key_for_cleanup, tool_count_owner_token,
             ))
             tool_count_owner_token = None  # ownership transferred to the deferred cleanup
-            if owns_hold:
-                asyncio.create_task(release_credits_after(_stream_task, parsed_data.get("org_id")))
-                owns_hold = False
+            if hold_token:
+                asyncio.create_task(release_credits_after(_stream_task, parsed_data.get("org_id"), hold_token))
+                hold_token = None
             return StreamingResponse(class_obj.streamer.generator(), media_type="text/event-stream")
 
         original_exception = None
@@ -492,7 +507,7 @@ async def chat(request_body):
             result = {"success": False, "error": original_error, "response": {"usage": {}}, "modelResponse": {}}
 
         # Retry mechanism with fallback configuration
-        if execution_failed and parsed_data.get("settings", {}).get("fall_back") and parsed_data["settings"]["fall_back"].get("is_enable", False):
+        if execution_failed and parsed_data.get("settings", {}).get("fall_back") and parsed_data["settings"]["fall_back"].get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
             try:
                 # Store original configuration
                 fallback_config = parsed_data["settings"]["fall_back"]
@@ -506,8 +521,27 @@ async def chat(request_body):
                 parsed_data["configuration"]["model"] = fallback_model
                 if fallback_config.get("apikey"):
                     parsed_data["apikey"] = fallback_config["apikey"]
+                    if parsed_data.get("wallet"):
+                        # The failed primary attempt ran on the platform key and may
+                        # have burned real tokens (tool loops before failing). Its
+                        # cost must still be billed even though the fallback itself
+                        # runs free on the customer's own key.
+                        parsed_data["_wallet_primary_cost"] = parsed_data.get("tokens", {}).get("total_cost", 0)
                     # Fallback runs on the customer's own key — never billed.
                     parsed_data["wallet"] = False
+                elif parsed_data.get("wallet"):
+                    # Still on wallet: swap to the fallback service's platform key —
+                    # keeping the original service's key would hit the wrong
+                    # provider's SDK with the wrong credential.
+                    from src.services.billing.billing_utils import get_platform_apikey
+                    fallback_platform_key = get_platform_apikey(fallback_service)
+                    if fallback_platform_key:
+                        parsed_data["apikey"] = fallback_platform_key
+                    else:
+                        logger.warning(
+                            f"[billing] no platform api key for fallback service '{fallback_service}' — "
+                            f"fallback will run with the original service's key and likely fail"
+                        )
 
                 # Always rebuild fallback handler/config to avoid stale customConfig/model reuse
                 (
@@ -779,8 +813,8 @@ async def chat(request_body):
             fallback_service,
             fallback_error_code,
         )
-        if owns_hold:
-            await release_credits(parsed_data.get("org_id"))
+        if hold_token:
+            await release_credits(parsed_data.get("org_id"), hold_token)
 
 
 @handle_exceptions

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from config import Config
 from globals import logger
 from src.middlewares.ratelimitMiddleware import rate_limit
+from src.services.billing.billing_utils import release_credits
 from src.services.commonServices.baseService.utils import make_request_data
 from src.services.commonServices.common import batch, chat_multiple_agents, embedding, image
 from src.services.commonServices.queueService.queueService import queue_obj
@@ -67,6 +68,11 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         except Exception as e:
             # Log the error and return a meaningful error response
             logger.error(f"Failed to publish message: {str(e)}")
+            # The queued consumer would have released the hold after running; if
+            # the message never reached the queue, nobody downstream will.
+            _body = data_to_send.get("body", {})
+            _org_id = data_to_send.get("state", {}).get("profile", {}).get("org", {}).get("id") or _body.get("org_id")
+            await release_credits(_org_id, _body.get("credit_hold_token"))
             raise HTTPException(status_code=500, detail="Failed to publish message.") from e
     else:
         # Handle different types of requests
@@ -165,12 +171,19 @@ async def rerun_messages_route(request: Request, db_config: dict = Depends(add_c
     Option 2 – by thread (reruns the last message in the thread):
         Body: {"bridge_id": "...", "thread_id": "...", "sub_thread_id": "..."}
     """
+    _hold_org_id = None
+    _hold_token = None
     try:
         request.state.version = 2
         data_to_send = await make_request_data(request)
 
         body = data_to_send.get("body", {})
         org_id = data_to_send["state"]["profile"]["org"]["id"]
+        # The middleware's hold covers only THIS request. Each queued rerun copy
+        # has the token stripped (build_rerun_queue_message); the single release
+        # happens in the finally below, queued or not.
+        _hold_org_id = org_id
+        _hold_token = body.pop("credit_hold_token", None)
 
         thread_id = body.get("thread_id")
         sub_thread_id = body.get("sub_thread_id")
@@ -209,3 +222,5 @@ async def rerun_messages_route(request: Request, db_config: dict = Depends(add_c
     except Exception as e:
         logger.error(f"Error in rerun_messages_route: {str(e)}")
         raise HTTPException(status_code=500, detail={"success": False, "error": f"Internal server error: {str(e)}"}) from e
+    finally:
+        await release_credits(_hold_org_id, _hold_token)

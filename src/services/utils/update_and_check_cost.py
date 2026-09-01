@@ -326,6 +326,12 @@ async def update_cost(parsed_data):
             if api_data is not None:
                 redis_usage["apikey"] = api_data
 
+        # Update per-user usage (embed wallet runs, billed to the attributed user)
+        from src.services.billing.user_credit_limits import record_user_usage
+        user_data = await record_user_usage(parsed_data, expected_cost)
+        if user_data is not None:
+            redis_usage["user"] = user_data
+
         # Evaluate usage alerts (threshold / limit reached / daily spike) for every
         # limited scope. Self-guarded; never breaks this background cost update.
         await evaluate_usage_alerts(parsed_data, redis_usage)

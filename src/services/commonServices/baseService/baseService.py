@@ -108,6 +108,7 @@ class BaseService:
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
+        self.billing_attribution = params.get("billing_attribution") or {}
         self.is_embed = params.get("is_embed")
         self.user_id = params.get("user_id")
         self.api_collection = params.get("api_collection")

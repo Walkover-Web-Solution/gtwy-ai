@@ -7,7 +7,8 @@ from src.services.utils.getConfiguration import getConfiguration
 
 
 async def add_configuration_data_to_body(request: Request):
-    credit_hold = False
+    credit_hold_token = None
+    org_id = None
     try:
         body = await request.json()
         org_id = request.state.profile["org"]["id"]
@@ -49,7 +50,17 @@ async def add_configuration_data_to_body(request: Request):
             # Return the actual error from getConfiguration directly
             raise HTTPException(status_code=400, detail=db_config)
 
-        credit_hold, credit_error = await reserve_credits_and_api_key_setup(org_id, db_config)
+        # Only chat-type requests place a hold: embedding and batch are not
+        # billed per-event yet, so a hold for them could only leak (nothing on
+        # those paths releases it). API keys and wallet flags are still filled
+        # for every type.
+        primary_cfg = (db_config.get("bridge_configurations") or {}).get(db_config.get("primary_bridge_id")) or {}
+        request_type = (primary_cfg.get("configuration") or {}).get("type")
+        reserve_hold = request_type not in ("embedding", "image") and not body.get("batch")
+
+        credit_hold_token, credit_error = await reserve_credits_and_api_key_setup(
+            org_id, db_config, reserve_hold=reserve_hold
+        )
         if credit_error:
             raise HTTPException(status_code=400, detail=credit_error)
 
@@ -94,7 +105,11 @@ async def add_configuration_data_to_body(request: Request):
             body.get("configuration", {})["stream"] = explicit_stream
             
         body["bridge_configurations"] = bridge_configurations
-        body["credit_hold_owner"] = credit_hold
+        body["billing_attribution"] = db_config.get("billing_attribution") or {}
+        if db_config.get("org_billing_plan"):
+            body["org_billing_plan"] = db_config["org_billing_plan"]
+        if credit_hold_token:
+            body["credit_hold_token"] = credit_hold_token
         service = body.get("service")
         model = body.get("configuration").get("model")
         user = body.get("user")
@@ -121,11 +136,16 @@ async def add_configuration_data_to_body(request: Request):
                 )
 
         return db_config
-    except HTTPException as he:
-        raise he
+    except HTTPException:
+        # Validation failures after the reserve (empty bridge_configurations,
+        # "User message is compulsory", unknown model, ...) must hand the hold
+        # back too — this branch used to skip the release below and leak it.
+        if credit_hold_token:
+            await release_credits(org_id, credit_hold_token)
+        raise
     except Exception as e:
-        if credit_hold:
-            await release_credits(org_id)
+        if credit_hold_token:
+            await release_credits(org_id, credit_hold_token)
         logger.error(f"Error in get_data: {str(e)}, {traceback.format_exc()}")
         raise HTTPException(
             status_code=400, detail={"success": False, "error": "Error in getting data: " + str(e)}

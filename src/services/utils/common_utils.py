@@ -172,6 +172,10 @@ def parse_request_body(request_body):
         "sub_thread_id": body.get("sub_thread_id") or body.get("thread_id"),
         "org_id": state.get("profile", {}).get("org", {}).get("id", "") or body.get("org_id"),
         "wallet": body.get("wallet", False),
+        # Who the run is billed to (the FIRST agent's owner) — propagated
+        # unchanged into nested/transfer frames.
+        "billing_attribution": body.get("billing_attribution") or {},
+        "org_billing_plan": body.get("org_billing_plan"),
         "user": body.get("user"),
         "original_user": body.get("user"),
         "tools": body.get("configuration", {}).get("tools"),
@@ -838,6 +842,7 @@ def build_service_params(
         "variables_path": parsed_data["variables_path"],
         "message_id": parsed_data["message_id"],
         "bridgeType": parsed_data["bridgeType"],
+        "billing_attribution": parsed_data.get("billing_attribution") or {},
         "tool_id_and_name_mapping": parsed_data["tool_id_and_name_mapping"],
         "reasoning_model": parsed_data["reasoning_model"],
         "memory": memory,

@@ -257,7 +257,7 @@ async def get_testcase_configuration(
     if not db_config.get("success"):
         raise TestcaseValidationError(db_config.get("error", "Failed to get configuration"))
 
-    credit_hold, credit_error = await reserve_credits_and_api_key_setup(org_id, db_config)
+    credit_hold_token, credit_error = await reserve_credits_and_api_key_setup(org_id, db_config)
     if credit_error:
         raise TestcaseValidationError(credit_error.get("error", "Could not resolve an API key"))
 
@@ -265,9 +265,10 @@ async def get_testcase_configuration(
     bridge_configurations = db_config.get("bridge_configurations", {})
 
     bridge_config = bridge_configurations[primary_bridge_id]
-    # Release marker only, checked by execute_testcases' finally. Billing is
-    # gated by the per-cfg `wallet` flag stamped in reserve_credits_and_api_key_setup.
-    bridge_config["credit_hold"] = credit_hold
+    # Single-use release token, consumed by execute_testcases' finally. Billing
+    # is gated by the per-cfg `wallet` flag stamped in reserve_credits_and_api_key_setup.
+    bridge_config["credit_hold_token"] = credit_hold_token
+    bridge_config["billing_attribution"] = db_config.get("billing_attribution") or {}
     return bridge_config
 
 
@@ -546,11 +547,13 @@ async def execute_testcases(
             request_data["testcase_data"],
             request_data["variables"],
         )
+        # Pop so the token never reaches the per-testcase chat bodies (chat()
+        # would pop-and-release it after the first testcase otherwise).
+        hold_token = db_config.pop("credit_hold_token", None)
         try:
             return await _run_testcases_for_config(db_config, version_id, model_spec)
         finally:
-            if db_config.get("credit_hold"):
-                await release_credits(org_id)
+            await release_credits(org_id, hold_token)
 
     async def _run_testcases_for_config(db_config, version_id, model_spec):
         is_overridden = False

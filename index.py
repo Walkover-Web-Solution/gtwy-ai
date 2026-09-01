@@ -22,7 +22,11 @@ def _handle_sigterm(*_):
 
 signal.signal(signal.SIGTERM, _handle_sigterm)
 from models.Timescale.connections import init_async_dbservice
-from src.configs.model_configuration import background_listen_for_changes, init_model_configuration
+from src.configs.model_configuration import (
+    background_listen_for_changes,
+    background_listen_for_platform_apikey_changes,
+    init_model_configuration,
+)
 from src.configs.service_registry import background_listen_for_service_changes, init_service_registry
 from src.routes.chatBot_routes import router as chatbot_router
 from src.routes.image_process_routes import router as image_process_routes
@@ -59,6 +63,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting MongoDB change stream listener as a background task.")
     change_stream_task = asyncio.create_task(background_listen_for_changes())
+    platform_apikey_stream_task = asyncio.create_task(background_listen_for_platform_apikey_changes())
     service_registry_task = asyncio.create_task(background_listen_for_service_changes())
     supported_services_refresh_task = asyncio.create_task(run_supported_services_refresh_loop())
 
@@ -69,6 +74,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down MongoDB change stream listener.")
     change_stream_task.cancel()
+    platform_apikey_stream_task.cancel()
     service_registry_task.cancel()
     supported_services_refresh_task.cancel()
 
@@ -101,6 +107,11 @@ async def lifespan(app: FastAPI):
         await service_registry_task
     except asyncio.CancelledError:
         logger.info("Service registry change stream listener task successfully cancelled.")
+
+    try:
+        await platform_apikey_stream_task
+    except asyncio.CancelledError:
+        logger.info("Platform apikey change stream listener task successfully cancelled.")
 
     try:
         await supported_services_refresh_task

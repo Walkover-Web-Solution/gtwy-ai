@@ -83,6 +83,10 @@ redis_keys = {
     "usagespikealert_": "nd_usagespikealert_",
     "billing_credit_balance_": "nd_billing_credit_balance_",
     "billing_credit_applied_": "nd_billing_credit_applied_",
+    "billing_credit_hold_": "nd_billing_credit_hold_",
+    "billing_no_wallet_": "nd_billing_no_wallet_",
+    "org_billing_plan_": "nd_org_billing_plan_",
+    "userusedcost_": "nd_userusedcost_",
 }
 
 tag_keys = {
