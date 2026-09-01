@@ -478,6 +478,42 @@ async def sendResponse(response_format, data, success=False, variables=None, met
             return await send_request(**response_format["cred"], method="POST", data=data_to_send)
 
 
+def merge_nested_agent_usage(content, tool_log):
+    """Fold a nested agent's own tokens/cost into its tools_data entry.
+
+    A nested agent runs a full completion of its own, so it has tokens and cost the
+    parent's token_calculator never sees. `tool_log` is this tool's entry from the
+    tools_call_data run_tool just returned, whose "data" still holds the untrimmed
+    call_gtwy_agent result: reply, usage and the agent's own tools_data. `content`
+    is what the model was told — returned as-is for every tool that isn't an agent,
+    and as the fallback whenever the log has no usable reply to build on.
+
+    Usage is passed along
+    whole rather than field-picked, so cached/reasoning/cache-write tokens and
+    anything a future service starts reporting come along for free; it is empty
+    when the nested run reported nothing (an error, or usage stripped because the
+    caller is an embed client). Cost lands under "usage" so strip_usage_for_embed's
+    recursive walk hides it from embed clients with the parent's own numbers.
+    """
+    if not isinstance(tool_log, dict) or tool_log.get("type") != "AGENT":
+        return content
+
+    data = tool_log.get("data")
+    if not isinstance(data, dict):
+        return content
+        
+    reply = data.get("response")
+    if not isinstance(reply, dict):
+        return content
+
+    merged = {**reply, "usage": dict(data.get("usage") or {})}
+    # An agent that called agents of its own carries them in its own tools_data;
+    # keep that tree so cost stays attributable per level.
+    if data.get("tools_data"):
+        merged["tools_data"] = data["tools_data"]
+    return merged
+
+
 async def process_data_and_run_tools(codes_mapping, self):
     try:
         self.timer.start()
