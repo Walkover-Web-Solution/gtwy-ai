@@ -129,7 +129,7 @@ limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
 
-tool_types = {"SKILL": "SKILL"}
+tool_types = {"SKILL": "SKILL", "AGENT": "AGENT"}
 
 VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
 
