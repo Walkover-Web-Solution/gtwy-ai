@@ -455,10 +455,11 @@ def merge_nested_agent_usage(content, tool_log):
     """Fold a nested agent's own tokens/cost into its tools_data entry.
 
     Call only for AGENT tools. A nested agent runs a full completion of its own, so
-    it has tokens and cost the parent's token_calculator never sees. `tool_log` is
-    this agent's entry from the tools_call_data run_tool just returned, whose "data"
-    still holds the untrimmed call_gtwy_agent result: reply, usage and the agent's
-    own tools_data. `content` is what the model was told, returned unchanged as the
+    it has tokens, cost and a service/model of its own that the parent's
+    token_calculator never sees. `tool_log` is this agent's entry from the
+    tools_call_data run_tool just returned, whose "data" still holds the untrimmed
+    call_gtwy_agent result: reply, service/model, usage and the agent's own
+    tools_data. `content` is what the model was told, returned unchanged as the
     fallback when the log has no usable reply to build on.
 
     Usage is passed along whole rather than field-picked, so cached/reasoning/
@@ -473,7 +474,16 @@ def merge_nested_agent_usage(content, tool_log):
     if not isinstance(reply, dict):
         return content
 
-    merged = {**reply, "usage": dict(data.get("usage") or {})}
+    # service/model say what the usage below was priced against — a nested agent
+    # can run on a different pair than its caller. type marks the entry as an agent
+    # so a reader can tell it apart from an ordinary tool result.
+    merged = {
+        **reply,
+        "type": tool_log.get("type"),
+        "service": data.get("service"),
+        "model": data.get("model"),
+        "usage": dict(data.get("usage") or {}),
+    }
     # An agent that called agents of its own carries them in its own tools_data;
     # keep that tree so cost stays attributable per level.
     if data.get("tools_data"):
