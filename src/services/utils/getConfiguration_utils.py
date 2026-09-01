@@ -472,7 +472,7 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
         )
 
         tool_id_and_name_mapping[name] = {
-            "type": "AGENT",
+            "type": tool_types["AGENT"],
             "bridge_id": bridge_id_value,
             "requires_thread_id": bridge_info.get("thread_id", False),
         }
