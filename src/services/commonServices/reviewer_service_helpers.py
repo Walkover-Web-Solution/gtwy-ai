@@ -28,6 +28,7 @@ from src.services.utils.common_utils import (
     build_service_params,
     configure_custom_settings,
     create_latency_object,
+    ensure_metrics_user_id,
     load_model_configuration,
     update_usage_metrics,
 )
@@ -224,6 +225,10 @@ async def _publish_reviewer_round(
 
         await sub_queue_obj.publish_message(message)
         if metrics_data:
+            ensure_metrics_user_id(
+                metrics_data,
+                (reviewer_parsed_data or {}).get("user_id"),
+            )
             await metrics_queue_obj.publish_message(
                 make_json_serializable({"save_metrics": metrics_data})
             )
@@ -587,6 +592,7 @@ def _build_reviewer_history_params_for_round(
     history_params["thread_id"] = parsed_data.get("thread_id")
     history_params["sub_thread_id"] = reviewer_sub_thread_id
     history_params["org_id"] = parsed_data.get("org_id")
+    history_params["user_id"] = parsed_data.get("user_id")
     # Pin `user` to the templated review prompt for THIS round. On synthesized
     # hard-error rows prepare_history_params didn't run, so this fills the gap;
     # on successful rounds it's already correct but pinning keeps both

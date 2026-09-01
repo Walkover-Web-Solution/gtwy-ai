@@ -694,6 +694,14 @@ async def make_request_data(request: Request):
         if hasattr(request.state, attr):
             state_data[attr] = getattr(request.state, attr)
 
+    # Explicitly carry authenticated user id for metrics / history.
+    if hasattr(request.state, "user_id") and request.state.user_id is not None:
+        state_data["user_id"] = str(request.state.user_id)
+    elif isinstance(state_data.get("profile"), dict):
+        profile_user_id = (state_data.get("profile") or {}).get("user", {}).get("id")
+        if profile_user_id is not None:
+            state_data["user_id"] = str(profile_user_id)
+
     if hasattr(request.state, "timer"):
         state_data["timer"] = request.state.timer
 

@@ -122,7 +122,7 @@ class BaseService:
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
         self.is_embed = params.get("is_embed")
-        self.user_id = params.get("user_id")
+        self.user_id = str(params["user_id"]) if params.get("user_id") is not None else None
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
         self.created_at = params.get("created_at")
@@ -477,6 +477,7 @@ class BaseService:
             "error": "",
             "plans": self.parsed_data.get("plans") if hasattr(self, 'parsed_data') else None,
             "created_at": self.created_at,
+            "user_id": str(self.user_id) if self.user_id is not None else None,
         }
 
     def service_formatter(self, configuration: object, service: str):  # changes
