@@ -5,6 +5,7 @@ import time
 import uuid
 
 from globals import logger
+from src.configs.constant import tool_types
 from src.services.prebuilt_prompt_service import get_multiple_prebuilt_prompts_without_org_service
 from src.services.todo import plan_store
 
@@ -663,7 +664,7 @@ def _inject_variables_into_tool_args(tool_name, args, variables, variables_path,
     
     # Get the function name for variable path lookup
     tool_mapping = tool_id_and_name_mapping.get(tool_name, {})
-    if tool_mapping.get("type") == "AGENT":
+    if tool_mapping.get("type") == tool_types["AGENT"]:
         function_name = tool_mapping.get("bridge_id", "")
     else:
         function_name = tool_mapping.get("name", tool_name)
