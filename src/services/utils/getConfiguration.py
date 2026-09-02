@@ -234,7 +234,7 @@ async def _prepare_configuration_response(
 
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
-    add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag)
+    add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag, variables_path_bridge)
     add_connected_skills(bridges, tools, tool_id_and_name_mapping)
     web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
 
