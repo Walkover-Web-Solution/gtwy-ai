@@ -694,13 +694,9 @@ async def make_request_data(request: Request):
         if hasattr(request.state, attr):
             state_data[attr] = getattr(request.state, attr)
 
-    # Carry authenticated user id for metrics / history.
+    # Middleware always sets request.state.user_id — put it on the body for metrics/history.
     if getattr(request.state, "user_id", None) is not None:
-        state_data["user_id"] = request.state.user_id
-    elif isinstance(state_data.get("profile"), dict):
-        profile_user_id = state_data["profile"].get("user", {}).get("id")
-        if profile_user_id is not None:
-            state_data["user_id"] = profile_user_id
+        body["user_id"] = request.state.user_id
 
     if hasattr(request.state, "timer"):
         state_data["timer"] = request.state.timer

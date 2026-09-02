@@ -246,7 +246,7 @@ def parse_request_body(request_body):
         "testcase_data": body.get("testcase_data") or {},
         "is_embed": body.get("is_embed"),
         "post_tool_data": body.get("post_tool_data"),
-        "user_id": body.get("user_id") or state.get("user_id") or state.get("profile", {}).get("user", {}).get("id"),
+        "user_id": body.get("user_id"),
         "file_data": body.get("video_data") or {},
         "youtube_url": body.get("youtube_url") or None,
         "folder_id": body.get("folder_id"),
@@ -896,8 +896,6 @@ def _build_orchestrator_sub_thread_data(parsed_data, thread_info=None):
 async def _publish_history_to_queue(dataset, history_params, version_id, thread_info=None, parsed_data=None):
     """Build history/metrics payload and publish it to the log queue for Node.js to save."""
     try:
-        if history_params is not None and parsed_data is not None and not history_params.get("user_id"):
-            history_params["user_id"] = parsed_data.get("user_id")
         payload = build_history_and_metrics_payload(dataset, history_params, version_id)
         if parsed_data is not None:
             _attach_sub_thread_extras(payload["conversation_log_data"], parsed_data)
@@ -1130,9 +1128,6 @@ async def process_background_tasks(
                         agent_config = bridge_configs[agent_bridge_id].get("configuration", {})
                         history_entry["history_params"]["prompt"] = agent_config.get("prompt")
 
-                    if not history_entry["history_params"].get("user_id"):
-                        history_entry["history_params"]["user_id"] = parsed_data.get("user_id")
-
                 payload = build_history_and_metrics_payload(
                     history_entry["dataset"],
                     history_entry["history_params"],
@@ -1155,8 +1150,6 @@ async def process_background_tasks(
         if result.get("historyParams"):
             result["historyParams"]["parent_id"] = parsed_data.get("parent_bridge_id", "")
             result["historyParams"]["child_id"] = None
-            if not result["historyParams"].get("user_id"):
-                result["historyParams"]["user_id"] = parsed_data.get("user_id")
 
         payload = build_history_and_metrics_payload(
             [parsed_data["usage"]],
