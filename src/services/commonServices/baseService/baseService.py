@@ -485,6 +485,7 @@ class BaseService:
             "error": "",
             "plans": self.parsed_data.get("plans") if hasattr(self, 'parsed_data') else None,
             "created_at": self.created_at,
+            "user_id": self.user_id,
         }
 
     def service_formatter(self, configuration: object, service: str):  # changes

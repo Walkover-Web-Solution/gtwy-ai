@@ -1564,6 +1564,7 @@ def update_usage_metrics(parsed_data, params, latency, result=None, error=None, 
         # can be persisted into conversation_logs.tokens (JSONB) for the UI.
         "token_usage": usage_data or {},
         "cost_breakdown": parsed_data.get('tokens') or {},
+        "user_id": parsed_data.get("user_id"),
     }
 
     # Add success-specific fields
@@ -1627,6 +1628,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
             + [{"url": u, "type": "audio"} for u in parsed_data.get("audios", [])]
         ),
         "created_at": parsed_data.get("created_at"),
+        "user_id": parsed_data.get("user_id"),
     }
 
 

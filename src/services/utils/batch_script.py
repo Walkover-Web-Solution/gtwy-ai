@@ -203,6 +203,7 @@ async def check_batch_status():
                                     'cost': individual_cost,
                                     'time_zone': 'Asia/Kolkata',
                                     'service': service,
+                                    'user_id': batch_data.get('user_id'),
                                 })
 
                         if batch_updates:

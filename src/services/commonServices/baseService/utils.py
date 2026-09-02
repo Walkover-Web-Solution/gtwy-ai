@@ -734,6 +734,10 @@ async def make_request_data(request: Request):
         if hasattr(request.state, attr):
             state_data[attr] = getattr(request.state, attr)
 
+    # Middleware always sets request.state.user_id — put it on the body for metrics/history.
+    if getattr(request.state, "user_id", None) is not None:
+        body["user_id"] = request.state.user_id
+
     if hasattr(request.state, "timer"):
         state_data["timer"] = request.state.timer
 

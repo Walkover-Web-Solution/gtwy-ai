@@ -229,6 +229,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
                 "cost": data_obj.get("expectedCost", 0) or 0.0,
                 "time_zone": "Asia/Kolkata",
                 "service": service,
+                "user_id": history_params.get("user_id"),
             }
         )
 

@@ -125,6 +125,7 @@ async def chat_bot_auth(request: Request):
                     "org": {"id": str(check_token["org_id"])},
                     "user": {"id": str(check_token["user_id"]), "email": str(check_token.get("userEmail", ""))},
                 }
+                request.state.user_id = str(check_token["user_id"])
                 if check_token.get("variables") is not None:
                     request.state.profile["variables"] = (
                         json.dumps(check_token["variables"])
