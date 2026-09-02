@@ -520,7 +520,13 @@ def build_rerun_queue_message(log, data_to_send):
     if bridge_id and bridge_id in bridge_confs:
         bridge_confs[bridge_id]["variables"] = merged_variables
 
-    body.setdefault("settings", {}).update({"response_format": {"type": "default"}, "stream": False})
+    stored_response_format = log.get("response_format") or {}
+    if stored_response_format.get("type") == "webhook" and (stored_response_format.get("cred") or {}).get("url"):
+        rerun_response_format = stored_response_format
+    else:
+        rerun_response_format = {"type": "default"}
+
+    body.setdefault("settings", {}).update({"response_format": rerun_response_format, "stream": False})
     return {"body": body, "state": data_to_send.get("state", {}), "path_params": data_to_send.get("path_params", {})}
 
 
