@@ -134,12 +134,20 @@ async def call_gtwy_agent(args):
                 parsed_result = {"data": parsed_result, "image_urls": image_urls}
 
         # The nested agent runs a full completion of its own, so it carries its own
-        # token/cost usage — and its own tools_data if it called agents/tools in
-        # turn. Surface both so the parent can fold them into its tools_data entry
-        # for this agent. Embed callers get usage stripped upstream, so it can
-        # legitimately come back empty.
+        # token/cost usage, the service/model that produced it, and its own
+        # tools_data if it called agents/tools in turn. Surface all of it so the
+        # parent can fold it into its tools_data entry for this agent. Embed callers
+        # get usage stripped upstream, so it can legitimately come back empty.
+        #
+        # The agent may run on a different service/model than its caller, and that
+        # is what its cost was priced against — so report the pair, not just tokens.
+        # The response is stamped with the model actually sent to the provider (see
+        # set_request_model), which is what auto model select / per-request overrides
+        # resolve to — prefer it over the configured one.
         return {
             "response": parsed_result,
+            "service": primary_config.get("service"),
+            "model": data_section.get("model"),
             "usage": response_section.get("usage") or {},
             "tools_data": data_section.get("tools_data") or {},
             "metadata": {
