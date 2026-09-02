@@ -28,7 +28,6 @@ from src.services.utils.common_utils import (
     build_service_params,
     configure_custom_settings,
     create_latency_object,
-    ensure_metrics_user_id,
     load_model_configuration,
     update_usage_metrics,
 )
@@ -225,10 +224,6 @@ async def _publish_reviewer_round(
 
         await sub_queue_obj.publish_message(message)
         if metrics_data:
-            ensure_metrics_user_id(
-                metrics_data,
-                (reviewer_parsed_data or {}).get("user_id"),
-            )
             await metrics_queue_obj.publish_message(
                 make_json_serializable({"save_metrics": metrics_data})
             )

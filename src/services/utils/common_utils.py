@@ -246,19 +246,7 @@ def parse_request_body(request_body):
         "testcase_data": body.get("testcase_data") or {},
         "is_embed": body.get("is_embed"),
         "post_tool_data": body.get("post_tool_data"),
-        "user_id": (
-            str(body["user_id"])
-            if body.get("user_id") is not None
-            else (
-                str(state["user_id"])
-                if state.get("user_id") is not None
-                else (
-                    str(state.get("profile", {}).get("user", {}).get("id"))
-                    if state.get("profile", {}).get("user", {}).get("id") is not None
-                    else None
-                )
-            )
-        ),
+        "user_id": body.get("user_id") or state.get("user_id") or state.get("profile", {}).get("user", {}).get("id"),
         "file_data": body.get("video_data") or {},
         "youtube_url": body.get("youtube_url") or None,
         "folder_id": body.get("folder_id"),
@@ -905,47 +893,15 @@ def _build_orchestrator_sub_thread_data(parsed_data, thread_info=None):
     }
 
 
-def _resolve_user_id(*candidates):
-    for value in candidates:
-        if value is None or value == "":
-            continue
-        return str(value)
-    return None
-
-
-def ensure_metrics_user_id(metrics_entries, *user_id_candidates):
-    """Stamp user_id onto metrics rows when missing."""
-    if not metrics_entries:
-        return metrics_entries
-    user_id = _resolve_user_id(*user_id_candidates)
-    if user_id is None:
-        return metrics_entries
-    for row in metrics_entries:
-        if row is None:
-            continue
-        if row.get("user_id") is None or row.get("user_id") == "":
-            row["user_id"] = user_id
-        else:
-            row["user_id"] = str(row["user_id"])
-    return metrics_entries
-
-
 async def _publish_history_to_queue(dataset, history_params, version_id, thread_info=None, parsed_data=None):
     """Build history/metrics payload and publish it to the log queue for Node.js to save."""
     try:
-        if history_params is not None and parsed_data is not None:
-            history_params["user_id"] = _resolve_user_id(
-                history_params.get("user_id"),
-                parsed_data.get("user_id"),
-            )
+        if history_params is not None and parsed_data is not None and not history_params.get("user_id"):
+            history_params["user_id"] = parsed_data.get("user_id")
         payload = build_history_and_metrics_payload(dataset, history_params, version_id)
         if parsed_data is not None:
             _attach_sub_thread_extras(payload["conversation_log_data"], parsed_data)
-        metrics_data = ensure_metrics_user_id(
-            payload["metrics_data"],
-            (history_params or {}).get("user_id"),
-            (parsed_data or {}).get("user_id"),
-        )
+        metrics_data = payload["metrics_data"]
         history_data = payload["conversation_log_data"]
         await sub_queue_obj.publish_message(make_json_serializable({"save_history": [history_data]}))
         await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_data}))
@@ -1174,10 +1130,8 @@ async def process_background_tasks(
                         agent_config = bridge_configs[agent_bridge_id].get("configuration", {})
                         history_entry["history_params"]["prompt"] = agent_config.get("prompt")
 
-                    history_entry["history_params"]["user_id"] = _resolve_user_id(
-                        history_entry["history_params"].get("user_id"),
-                        parsed_data.get("user_id"),
-                    )
+                    if not history_entry["history_params"].get("user_id"):
+                        history_entry["history_params"]["user_id"] = parsed_data.get("user_id")
 
                 payload = build_history_and_metrics_payload(
                     history_entry["dataset"],
@@ -1201,10 +1155,8 @@ async def process_background_tasks(
         if result.get("historyParams"):
             result["historyParams"]["parent_id"] = parsed_data.get("parent_bridge_id", "")
             result["historyParams"]["child_id"] = None
-            result["historyParams"]["user_id"] = _resolve_user_id(
-                result["historyParams"].get("user_id"),
-                parsed_data.get("user_id"),
-            )
+            if not result["historyParams"].get("user_id"):
+                result["historyParams"]["user_id"] = parsed_data.get("user_id")
 
         payload = build_history_and_metrics_payload(
             [parsed_data["usage"]],
@@ -1242,7 +1194,6 @@ async def process_background_tasks(
     data = make_json_serializable(data)
     await sub_queue_obj.publish_message(data)
 
-    ensure_metrics_user_id(metrics_entries, parsed_data.get("user_id"), (result.get("historyParams") or {}).get("user_id"))
     await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_entries}))
 
 async def process_background_tasks_for_error(parsed_data, error):
@@ -1620,7 +1571,7 @@ def update_usage_metrics(parsed_data, params, latency, result=None, error=None, 
         # can be persisted into conversation_logs.tokens (JSONB) for the UI.
         "token_usage": usage_data or {},
         "cost_breakdown": parsed_data.get('tokens') or {},
-        "user_id": str(parsed_data["user_id"]) if parsed_data.get("user_id") is not None else None,
+        "user_id": parsed_data.get("user_id"),
     }
 
     # Add success-specific fields
@@ -1684,7 +1635,7 @@ def create_history_params(parsed_data, error=None, class_obj=None, thread_info=N
             + [{"url": u, "type": "audio"} for u in parsed_data.get("audios", [])]
         ),
         "created_at": parsed_data.get("created_at"),
-        "user_id": str(parsed_data["user_id"]) if parsed_data.get("user_id") is not None else None,
+        "user_id": parsed_data.get("user_id"),
     }
 
 
