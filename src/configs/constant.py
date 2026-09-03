@@ -112,6 +112,7 @@ redis_keys = {
     "dailyusedcost_": "nd_dailyusedcost_",
     "usagealertsent_": "nd_usagealertsent_",
     "usagespikealert_": "nd_usagespikealert_",
+    "blocked_orgs_": "nd_blocked_orgs_",
 }
 
 tag_keys = {
