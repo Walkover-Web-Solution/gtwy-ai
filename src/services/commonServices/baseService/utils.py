@@ -172,38 +172,23 @@ def resolve_url_params(url, method, data, query_param_keys=None):
     return resolved_url, query_params or None, data or None
 
 
-def _canonicalize_for_match(value):
-    if isinstance(value, dict):
-        return {k: _canonicalize_for_match(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_canonicalize_for_match(v) for v in value]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return value.strip()
-    return value
-
-
-def resolve_testcase_mock_response(self, tool_name, args):
+def get_saved_tool_response(self, tool_name, args):
     """
-    Look up a recorded tool response for a testcase run instead of hitting the real tool.
-    Matches on tool name + canonicalized args and returns the first recording that matches
-    every time (repeated calls with the same args get the same response). If nothing
-    matches, returns an error payload so the model sees a tool failure (same shape a real
-    tool error would have) and the run continues instead of aborting.
+    Look up a saved tool response for a testcase run instead of hitting the real tool.
+    Matches on tool name + args and returns the first saved response that matches every
+    time (repeated calls with the same args get the same response). If nothing matches,
+    returns an error payload so the model sees a tool failure (same shape a real tool
+    error would have) and the run continues instead of aborting.
     """
-    tool_mock = (self.testcase_tools_response or {}).get(tool_name) or {}
-    recordings = tool_mock.get("recordings") or []
-    canonical_args = _canonicalize_for_match(args or {})
+    saved_tool_entry = (self.testcase_tools_response or {}).get(tool_name) or {}
+    saved_responses = saved_tool_entry.get("recordings") or []
+    requested_args = args or {}
 
-    for recording in recordings:
-        recorded_args = _canonicalize_for_match(recording.get("args") or {})
-        if recorded_args == canonical_args:
-            return recording.get("response")
+    for saved_response in saved_responses:
+        if (saved_response.get("args") or {}) == requested_args:
+            return saved_response.get("response")
 
-    return {"error": f"No recorded tool response found for '{tool_name}' with args {args}"}
+    return {"error": f"No saved tool response found for '{tool_name}' with args {args}"}
 
 
 async def axios_work(data, function_payload):
@@ -514,22 +499,21 @@ async def process_data_and_run_tools(codes_mapping, self):
             tool_data = {**tool, **tool_mapping, "name": name, "model_tool_name": original_name, "display_tool_name": display_tool_name}
 
             if self.run_testcase and name in (self.testcase_tools_response or {}):
-                # Testcase run with a recorded response for this tool: replay it instead
+                # Testcase run with a saved response for this tool: replay it instead
                 # of hitting the real tool (DB write / Sheet update / webhook, etc.).
-                mocked_response = resolve_testcase_mock_response(self, name, tool_data.get("args") or {})
+                saved_response = get_saved_tool_response(self, name, tool_data.get("args") or {})
                 responses.append(
                     {
                         "tool_call_id": tool_call_key,
                         "role": "tool",
                         "name": tool["name"],
-                        "content": json.dumps(mocked_response),
+                        "content": json.dumps(saved_response),
                     }
                 )
                 tool_call_logs[tool_call_key] = {
                     **tool,
                     "name": tool_data.get("display_tool_name"),
-                    "response": mocked_response,
-                    "source": "mocked",
+                    "response": saved_response,
                 }
             elif not tool_data.get("response"):
                 # if function is present in db/NO response, create task for async processing
