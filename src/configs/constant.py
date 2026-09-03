@@ -82,7 +82,7 @@ RANGER_MEMORY_TURNS_PER_CYCLE = 3  # turns per Ranger before the memory writer a
 
 RANGER_MEMORY_SOKT_FLOW_URL = "https://flow.sokt.io/func/scriKwUMohaI"  # POST {"key", "collection"} to read ranger/user memory
 
-__all__ = ["service_name", "bridge_ids"]
+__all__ = ["service_name", "bridge_ids", "WireFormat", "Client"]
 
 prebuilt_prompt_bridge_id = [
     "optimze_prompt",
