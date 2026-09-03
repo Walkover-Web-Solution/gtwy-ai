@@ -76,7 +76,7 @@ bridge_ids = {
     "ranger_user_memory": "6a97f2a6caa7adebbf5a8611",  # writer agent for both ranger + user memory
 }
 
-RANGER_FOLDER_ID = "6a9931cc36d9161588eb1886"  # folder every Ranger is filed into; gates the memory feature
+RANGER_FOLDER_ID = "6a759880bb5238a667057e72"  # folder every Ranger is filed into; gates the memory feature
 
 RANGER_MEMORY_TURNS_PER_CYCLE = 3  # turns per Ranger before the memory writer agent fires
 
