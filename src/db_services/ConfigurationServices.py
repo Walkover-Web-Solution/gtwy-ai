@@ -7,6 +7,7 @@ from globals import BadRequestException, logger
 from models.mongo_connection import db
 from src.configs.constant import redis_keys
 from typing import Dict, Any, Set
+from src.configs.model_configuration import model_config_document
 
 from ..services.cache_service import delete_in_cache, find_in_cache, store_in_cache
 from ..services.cache_utils import extract_cache_tags, store_in_cache_with_tags
@@ -20,13 +21,10 @@ version_model = db["configuration_versions"]
 threadsModel = db["threads"]
 foldersModel = db["folders"]
 prompt_wrappersModel = db["prompt_wrappers"]
-skillsModel = db["skills"]
 
 
 def get_advanced_param_keys(service: str, model: str) -> Set[str]:
     """Get advanced parameter keys for a service/model combination"""
-    from src.configs.model_configuration import model_config_document
-    
     if not service or not model:
         return set()
     
@@ -763,52 +761,6 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     },
                 }
             }] if version_id or use_env_resolution else []),
-            # Stage 10.1: Extract skill IDs from connected_tools where type is "skills"
-            {
-                "$addFields": {
-                    "skill_ids_to_fetch": {
-                        "$map": {
-                            "input": {
-                                "$filter": {
-                                    "input": {"$ifNull": ["$connected_tools", []]},
-                                    "as": "tool",
-                                    "cond": {"$eq": ["$$tool.type", "skills"]},
-                                }
-                            },
-                            "as": "skill_tool",
-                            "in": {
-                                "$convert": {
-                                    "input": "$$skill_tool.id",
-                                    "to": "objectId",
-                                    "onError": None,
-                                    "onNull": None,
-                                }
-                            },
-                        }
-                    }
-                }
-            },
-            # Stage 10.2: Lookup skills from skills collection
-            {
-                "$lookup": {
-                    "from": "skills",
-                    "let": {
-                        "skill_ids": {
-                            "$filter": {
-                                "input": "$skill_ids_to_fetch",
-                                "as": "id",
-                                "cond": {"$ne": ["$$id", None]},
-                            }
-                        }
-                    },
-                    "pipeline": [
-                        {"$match": {"$expr": {"$in": ["$_id", "$$skill_ids"]}}},
-                        {"$project": {"_id": 1, "name": 1, "description": 1}},
-                        {"$addFields": {"_id": {"$toString": "$_id"}}},
-                    ],
-                    "as": "connected_skills",
-                }
-            },
             # Stage 10: Remove temporary fields to clean up the output
             {
                 "$project": {
@@ -821,7 +773,6 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "template_ids_to_fetch": 0,
                     "templates_docs": 0,
                     "agent_names_docs": 0,
-                    "skill_ids_to_fetch": 0,
                     **({"parent_bridge_oid": 0, "parent_bridge_docs": 0} if version_id or use_env_resolution else {}),
                     **({"_env_resolved_version_oid": 0, "_env_version_docs": 0, "_env_resolved": 0} if use_env_resolution else {}),
                 }
@@ -1368,30 +1319,3 @@ async def get_prompt_wrapper_by_id(wrapper_id: str, org_id: str | None = None):
     except Exception as error:
         logger.error("Failed to fetch prompt wrapper %s: %s", wrapper_id, str(error))
         return None
-
-
-async def get_skill_content_by_id(skill_id: str, skill_name: str = "", org_id: str = ""):
-    """
-    Fetch skill content from MongoDB by skill_id.
-    Returns a {"status", "response"} envelope formatted for the AI tool-call response.
-    """
-    if not ObjectId.is_valid(skill_id):
-        logger.warning(f"Invalid skill_id provided: {skill_id}")
-        return {"status": 0, "response": f"Error: Could not fetch skill '{skill_name}' content"}
-
-    try:
-        _t = _time.time()
-        skill = await with_timeout(skillsModel.find_one({"_id": ObjectId(skill_id), "org_id": org_id}))
-        log_slow_call(f"Mongo find_one skills {skill_id}", _time.time() - _t, SLOW_CALL_THRESHOLDS["mongo"])
-
-        if not skill or not skill.get("content"):
-            logger.warning(f"Skill not found: {skill_id}")
-            return {"status": 0, "response": f"Error: Could not fetch skill '{skill_name}' content"}
-
-        return {
-            "status": 1,
-            "response": f"Skill '{skill_name}' instructions:\n\n{skill['content']}"
-        }
-    except Exception as error:
-        logger.error(f"Failed to fetch skill {skill_id}: {str(error)}")
-        return {"status": 0, "response": f"Error: Could not fetch skill '{skill_name}' content"}

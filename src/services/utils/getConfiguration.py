@@ -9,7 +9,6 @@ from src.db_services.ConfigurationServices import transform_agent_config_to_fron
 
 from .getConfiguration_utils import (
     add_connected_agents,
-    add_connected_skills,
     add_rag_tool,
     add_web_crawling_tool,
     get_bridge_data,
@@ -235,7 +234,6 @@ async def _prepare_configuration_response(
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
     add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag, variables_path_bridge)
-    add_connected_skills(bridges, tools, tool_id_and_name_mapping)
     web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
 
     # Fetch reviewer tools definitions if configured

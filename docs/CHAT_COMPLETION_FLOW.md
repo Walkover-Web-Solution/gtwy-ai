@@ -90,7 +90,6 @@ This document provides a comprehensive flow of the Completion API from request i
   - `apikeycredentials` (API keys)
   - `pre_tools` (pre-tool scripts)
   - `connected_agent_details` (agent overrides)
-  - `skills` (connected skills — only `_id`/`name`/`description` joined here; full `content` is fetched lazily on tool call via `get_skill_content_by_id`)
 - Folder-level API key resolution when `folder_id` exists
 - Redis caching for performance optimization
 - Converts ObjectIds to strings for JSON serialization
@@ -462,8 +461,6 @@ This document provides a comprehensive flow of the Completion API from request i
 - **Regular Tools**: HTTP calls to external APIs
 - **RAG Tools**: Vector database queries
 - **Agent Tools**: Calls to other AI agents (includes thread/version context)
-- **MCP Tools**: Calls routed through the MCP gateway (`call_mcp_tool`)
-- **Skill Tools**: Fetches full skill instructions from the `skills` collection by `skill_id` only when the AI calls that skill (`get_skill_content_by_id`); only the skill's name/description are sent upfront so the AI can decide whether to invoke it
 - **Built-in Tools**: Internal system functions (e.g., web search)
 
 **Concurrent Execution:**
