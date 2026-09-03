@@ -3,7 +3,7 @@ import json
 import uuid
 
 from src.configs.constant import service_name
-from src.configs.service_registry import has_openai_choices_shape
+from src.configs.service_registry import has_anthropic_shape, has_gemini_shape, has_openai_choices_shape, has_openai_responses_shape
 from src.services.utils.batch_script_utils import get_batch_result_data
 
 # Per-service response formatters. Each service owns all of its response variants
@@ -100,11 +100,11 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
                     pass
 
     formatted = None
-    if service == service_name["gemini"]:
+    if has_gemini_shape(service):
         formatted = format_gemini(response, tools_data, images, type, isBatch)
-    elif service == service_name["anthropic"]:
+    elif has_anthropic_shape(service):
         formatted = format_anthropic(response, tools_data, images, isBatch)
-    elif service == service_name["openai"]:
+    elif has_openai_responses_shape(service):
         formatted = format_openai(response, tools_data, images, type)
     elif service == service_name["groq"]:
         formatted = format_groq(response, tools_data, images)
@@ -179,7 +179,7 @@ async def process_batch_results(results, service, batch_id, batch_variables, mes
                 "message_id": message_id,
                 "batch_id": batch_id,
                 "error": result_data.get("error", result_data),
-                "status_code": status_code if service in ["openai", "groq"] else 400,
+                "status_code": status_code if status_code is not None else 400,
             }
         else:
             # Format successful response

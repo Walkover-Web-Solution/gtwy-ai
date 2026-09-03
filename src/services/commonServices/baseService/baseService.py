@@ -8,7 +8,15 @@ import pydash as _
 from config import Config
 from globals import logger
 from src.configs.serviceKeys import get_service_keys
-from src.configs.service_registry import has_openai_choices_shape, supports_tool_calls, uses_openai_sdk
+from src.configs.service_registry import (
+    extra_body as service_extra_body,
+    has_anthropic_shape,
+    has_gemini_shape,
+    has_openai_choices_shape,
+    has_openai_responses_shape,
+    supports_tool_calls,
+    uses_openai_sdk,
+)
 
 from ....configs.constant import service_name, tool_types
 from ....db_services import metrics_service
@@ -119,6 +127,8 @@ class BaseService:
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
         self.created_at = params.get("created_at")
+        self.run_testcase = params.get("run_testcase", False)
+        self.testcase_tools_response = params.get("testcase_tools_response") or {}
         self.tool_call_limit_error = None
         self.maximum_iteration_limit_reached = False
         self.stream_mode = params.get("customConfig", {}).get("stream") is True
@@ -167,7 +177,7 @@ class BaseService:
         return func_response_data, mapping_response_data, tools_call_data
 
     def update_configration(self, response, function_responses, configuration, mapping_response_data, service, tools, tools_call_data=None):
-        if service == "anthropic":
+        if has_anthropic_shape(service):
             configuration["messages"].append({"role": "assistant", "content": response["content"]})
             configuration["messages"].append({"role": "user", "content": []})
 
@@ -193,7 +203,7 @@ class BaseService:
                     configuration['messages'].append(assistant_msg)
                     tool_calls_id = assistant_tool_calls['id']
                     configuration['messages'].append(mapping_response_data[tool_calls_id])
-                case 'openai':
+                case s if has_openai_responses_shape(s):
                     should_sanitize_openai_items = bool(self.stream_mode)
 
                     # First, add all reasoning outputs to the configuration
@@ -222,12 +232,12 @@ class BaseService:
                             "call_id": output['call_id'],
                             "output": mapping_response_data[tool_calls_id]['content']
                         })
-                case 'anthropic':
-                    ordered_json = {"type":"tool_result",  
+                case s if has_anthropic_shape(s):
+                    ordered_json = {"type":"tool_result",
                                                  "tool_use_id": function_response['tool_call_id'],
                                                  "content": function_response['content']}
                     configuration['messages'][-1]['content'].append(ordered_json)
-                case 'gemini':
+                case s if has_gemini_shape(s):
                     from google.genai import types
 
                     if index == 0:
@@ -363,7 +373,7 @@ class BaseService:
             functionCallRes = {}
         funcModelResponse = functionCallRes.get("modelResponse", {})
         if supports_tool_calls(self.service):
-            if funcModelResponse and self.service != service_name["openai"]:
+            if funcModelResponse and not has_openai_responses_shape(self.service):
                 _.set_(
                     model_response,
                     self.modelOutputConfig["message"],
@@ -390,11 +400,11 @@ class BaseService:
                 final_reason = _.get(funcModelResponse, "choices.0.finish_reason")
                 if final_reason is not None:
                     _.set_(model_response, "choices.0.finish_reason", final_reason)
-            elif self.service == service_name["anthropic"]:
+            elif has_anthropic_shape(self.service):
                 final_reason = funcModelResponse.get("stop_reason")
                 if final_reason is not None:
                     model_response["stop_reason"] = final_reason
-            elif self.service == service_name["gemini"]:
+            elif has_gemini_shape(self.service):
                 final_reason = _.get(funcModelResponse, "candidates.0.finish_reason")
                 if final_reason is not None:
                     _.set_(model_response, "candidates.0.finish_reason", final_reason)
@@ -457,7 +467,11 @@ class BaseService:
             ],
             "AiConfig": self.customConfig,
             "firstAttemptError": model_response.get("firstAttemptError") or "",
-            "annotations": _.get(model_response, self.modelOutputConfig.get("annotations")) or [],
+            "annotations": (
+                response.get("data", {}).get("annotations")
+                or _.get(model_response, self.modelOutputConfig.get("annotations"))
+                or []
+            ),
             "fallback_model": (
                 self.bridge_configurations.get(self.bridge_id, {}).get("fall_back")
                 if self.bridge_configurations and self.bridge_id
@@ -484,9 +498,10 @@ class BaseService:
             if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
 
-            if service == service_name["minimax"]:
+            static_extra_body = service_extra_body(service)
+            if static_extra_body:
                 extra_body = dict(new_config.get("extra_body") or {})
-                extra_body["reasoning_split"] = True
+                extra_body.update(static_extra_body)
                 new_config["extra_body"] = extra_body
 
             mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
@@ -496,7 +511,7 @@ class BaseService:
                 client_mcp_config(service, configuration, mcp_config, self.tool_id_and_name_mapping)
 
             if configuration.get("tools", ""):
-                if service == service_name["anthropic"]:
+                if has_anthropic_shape(service):
                     new_config["tool_choice"] = configuration.get("tool_choice", {"type": "auto"})
                 elif (
                     service == service_name["openai_completion"]
@@ -518,11 +533,11 @@ class BaseService:
                 del new_config["tool_choice"]
             if "tools" in new_config and len(new_config["tools"]) == 0:
                 del new_config["tools"]
-            if service == service_name["openai"] and "text" in new_config:
+            if has_openai_responses_shape(service) and "text" in new_config:
                 data = new_config["text"]
                 new_config["text"] = {"format": data}
-            
-            if new_config.get("verbosity") and service == service_name["openai"]:
+
+            if new_config.get("verbosity") and has_openai_responses_shape(service):
                 verbosity = new_config.pop("verbosity", {})
 
                 if isinstance(verbosity, dict) and "level" in verbosity:

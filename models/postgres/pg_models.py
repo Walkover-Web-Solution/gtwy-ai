@@ -78,6 +78,7 @@ class ConversationLog(Base):
     error = Column(Text, nullable=True)
     user_feedback = Column(Integer, nullable=True, default=0)
     tools_call_data = Column(JSON, nullable=True, default=[])
+    annotations = Column(JSON, nullable=True, default=[])
     message_id = Column(String, nullable=True)
     sub_thread_id = Column(String, nullable=True)
     thread_id = Column(String, nullable=True)

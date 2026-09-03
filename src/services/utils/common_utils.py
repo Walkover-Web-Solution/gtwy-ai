@@ -760,9 +760,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             memory = parse_memory(raw_memory)
             parsed_data["memory"] = memory
-        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-            configuration.get("prompt") or "", variables
-        )
+        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(configuration.get("prompt") or "", variables, parsed_data["service"], configuration)
 
         if template:
             system_prompt = template
@@ -864,6 +862,8 @@ def build_service_params(
         "api_collection": parsed_data.get("api_collection"),
         "meta": parsed_data.get("meta"),
         "created_at": parsed_data.get("created_at"),
+        "run_testcase": parsed_data.get("testcase_data", {}).get("run_testcase", False),
+        "testcase_tools_response": parsed_data.get("testcase_data", {}).get("tools_response") or {},
     }
 
 
@@ -1311,6 +1311,8 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "files": parsed_data.get("files", []),
         "version_id": parsed_data.get("version_id", ""),
         "meta": parsed_data.get("meta"),
+        "built_in_tools": parsed_data.get("built_in_tools") or [],
+        "web_search_filters": parsed_data.get("web_search_filters")
     }
 
 

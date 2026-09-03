@@ -179,6 +179,7 @@ async def fetch_testcases_from_request(
             "matching_type": testcase_data.get("matching_type", "cosine"),
             "type": "response",
             "user_urls": testcase_data.get("user_urls", []),
+            "tools_response": testcase_data.get("tools_response") or {},
         }
 
         return [testcase]
@@ -321,6 +322,7 @@ async def process_single_testcase(
                     "type": testcase.get("type", "response"),
                     "skip_testcase_creation": True,  # Don't create new testcases during execution
                     "is_overridden": bool(db_config.get("_testcase_model_overridden")),
+                    "tools_response": testcase.get("tools_response") or {},
                 },
                 **db_config,
                 "bridge_configurations": {primary_bridge_id: db_config} if primary_bridge_id else {},

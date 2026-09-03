@@ -132,7 +132,14 @@ class Helper:
         return prev_configuration
 
     @staticmethod
-    def replace_variables_in_prompt(prompt, Aviliable_variables):
+    def replace_variables_in_prompt(prompt, Aviliable_variables, service=None, configuration=None):
+        # Split prompt for Anthropic if service and configuration are provided
+        if service == service_name["anthropic"] and configuration is not None:
+            from ..commonServices.anthropic.anthropic_utils import split_prompt_for_anthropic
+            missing_vars = split_prompt_for_anthropic(configuration.get("prompt"), Aviliable_variables, configuration, service)
+            # Return early after splitting - no variable replacement needed
+            return configuration.get("prompt"), missing_vars
+
         missing_variables = {}
         placeholders = re.findall(r"\{\{(.*?)\}\}", prompt)
         flattened_json = Helper.custom_flatten(Aviliable_variables)
