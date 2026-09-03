@@ -365,7 +365,7 @@ async def apply_billing_events(events: dict | list[dict] | None) -> None:
 
 
 async def reserve_credits_and_api_key_setup(
-    org_id: str, db_config: dict, reserve_hold: bool = True
+    org_id: str, db_config: dict, is_batch: bool = False
 ) -> tuple[str | None, dict | None]:
     """Fill in the platform apikey and hold credits for it, in one place.
 
@@ -374,9 +374,11 @@ async def reserve_credits_and_api_key_setup(
     without one it gets the platform key and wallet=True, so only its usage is
     debited. One hold covers the request whenever any bridge runs on wallet.
 
-    reserve_hold=False fills keys and wallet flags but never places a hold —
-    used for request types that are not billed per-event yet (embedding, batch)
-    so their holds cannot leak.
+    Only chat-type requests get a hold. Embedding/image/batch are not billed
+    per-event yet and nothing on those paths releases a hold, so one placed for
+    them could only leak — they still get keys, wallet flags and attribution.
+    The request type is read off the primary config here; `is_batch` has to be
+    passed because the batch payload lives on the request body, not db_config.
 
     Returns (hold_token, error). A non-None token means a hold was actually
     placed — the caller owes exactly one release_credits(org_id, token).
@@ -449,19 +451,8 @@ async def reserve_credits_and_api_key_setup(
                     "error_code": "FREE_PLAN_MODEL_RESTRICTED",
                 }
 
-    # Per-user credit cap (embeds): runs AFTER the folder/bridge/apikey limits
-    # (those blocked inside getConfiguration already) and only against the
-    # PRIMARY agent's owner — the whole run bills to them, so connected agents
-    # need no separate check.
-    attribution = db_config["billing_attribution"]
-    if attribution.get("is_embed") and attribution.get("user_id") and attribution.get("folder_id"):
-        from src.services.billing.user_credit_limits import check_user_credit_limit
-
-        user_error = await check_user_credit_limit(org_id, attribution["folder_id"], attribution["user_id"])
-        if user_error:
-            return None, user_error
-
-    if not reserve_hold:
+    request_type = (primary.get("configuration") or {}).get("type")
+    if is_batch or request_type in ("embedding", "image"):
         return None, None
 
     admitted, token = await reserve_credits(org_id)

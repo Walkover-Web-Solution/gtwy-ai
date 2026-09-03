@@ -8,7 +8,6 @@ from src.services.utils.getConfiguration import getConfiguration
 
 async def add_configuration_data_to_body(request: Request):
     credit_hold_token = None
-    org_id = None
     try:
         body = await request.json()
         org_id = request.state.profile["org"]["id"]
@@ -50,16 +49,8 @@ async def add_configuration_data_to_body(request: Request):
             # Return the actual error from getConfiguration directly
             raise HTTPException(status_code=400, detail=db_config)
 
-        # Only chat-type requests place a hold: embedding and batch are not
-        # billed per-event yet, so a hold for them could only leak (nothing on
-        # those paths releases it). API keys and wallet flags are still filled
-        # for every type.
-        primary_cfg = (db_config.get("bridge_configurations") or {}).get(db_config.get("primary_bridge_id")) or {}
-        request_type = (primary_cfg.get("configuration") or {}).get("type")
-        reserve_hold = request_type not in ("embedding", "image") and not body.get("batch")
-
         credit_hold_token, credit_error = await reserve_credits_and_api_key_setup(
-            org_id, db_config, reserve_hold=reserve_hold
+            org_id, db_config, is_batch=bool(body.get("batch"))
         )
         if credit_error:
             raise HTTPException(status_code=400, detail=credit_error)
