@@ -21,7 +21,6 @@ from src.configs.service_registry import (
     uses_string_tool_choice,
 )
 from src.controllers.rag_controller import get_text_from_vectorsQuery
-from src.db_services.ConfigurationServices import get_skill_content_by_id
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
 from src.services.mcp_gateway.client import call_mcp_tool
@@ -575,10 +574,6 @@ async def process_data_and_run_tools(codes_mapping, self):
 
 
                     task = call_gtwy_agent(agent_args)
-                elif self.tool_id_and_name_mapping[name].get("type") == tool_types["SKILL"]:
-                    skill_id = self.tool_id_and_name_mapping[name]["skill_id"]
-                    skill_name = self.tool_id_and_name_mapping[name]["skill_name"]
-                    task = get_skill_content_by_id(skill_id, skill_name, self.org_id)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
                     task = call_firecrawl_scrape(tool_data.get("args"))
                 elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
