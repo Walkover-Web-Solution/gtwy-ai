@@ -71,11 +71,18 @@ bridge_ids = {
     "generate_description": "6800d48f7dfc8ddcc495f918",
     "improve_prompt_optimizer": "68e4ac02739a8b89ba27b22a",
     "generate_test_cases": "68e8d1fbf8c9ba2043cf7afd",
-    "canonicalizer": "6973200cf60dd5bf64eeb325", 
+    "canonicalizer": "6973200cf60dd5bf64eeb325",
     "query_refiner": "69ae598263c3cc88af31170b",
+    "ranger_user_memory": "6a97f2a6caa7adebbf5a8611",  # writer agent for both ranger + user memory
 }
 
-__all__ = ["service_name", "bridge_ids", "WireFormat", "Client"]
+RANGER_FOLDER_ID = "6a9931cc36d9161588eb1886"  # folder every Ranger is filed into; gates the memory feature
+
+RANGER_MEMORY_TURNS_PER_CYCLE = 3  # turns per Ranger before the memory writer agent fires
+
+RANGER_MEMORY_SOKT_FLOW_URL = "https://flow.sokt.io/func/scriKwUMohaI"  # POST {"key", "collection"} to read ranger/user memory
+
+__all__ = ["service_name", "bridge_ids"]
 
 prebuilt_prompt_bridge_id = [
     "optimze_prompt",

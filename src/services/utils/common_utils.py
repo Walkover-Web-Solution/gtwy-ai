@@ -22,7 +22,8 @@ from src.db_services.metrics_service import (
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
-from src.configs.constant import bridge_ids, redis_keys, alert_types
+from src.services.utils.scoped_memory import compose_memory_context, get_ranger_memory, get_user_memory
+from src.configs.constant import bridge_ids, redis_keys, alert_types, RANGER_FOLDER_ID
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
@@ -205,6 +206,9 @@ def parse_request_body(request_body):
         "gpt_memory": body.get("gpt_memory"),
         "version_id": body.get("version_id"),
         "gpt_memory_context": body.get("gpt_memory_context"),
+        # No ranger_memory/user_memory booleans — both scopes are always on for a Ranger (is_ranger).
+        "ranger_memory_context": body.get("ranger_memory_context"),
+        "user_memory_context": body.get("user_memory_context"),
         "usage": {},
         "type": body.get("configuration", {}).get("type"),
         "apikey_object_id": body.get("apikey_object_id"),
@@ -760,6 +764,21 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             memory = parse_memory(raw_memory)
             parsed_data["memory"] = memory
+
+        try:
+            # Ranger/user memory is on by default for every Ranger, gated on folder_id.
+            is_ranger = parsed_data.get("folder_id") == RANGER_FOLDER_ID
+            ranger_memory_text = None
+            user_memory_text = None
+            if is_ranger:
+                ranger_memory_text = await get_ranger_memory(parsed_data.get("bridge_id"))
+                user_memory_text = await get_user_memory(parsed_data.get("user_id"))
+            if ranger_memory_text or user_memory_text:
+                memory = compose_memory_context(memory, ranger_memory_text, user_memory_text)
+                parsed_data["memory"] = memory
+        except Exception as scoped_memory_err:
+            logger.error(f"Error composing ranger/user memory context: {str(scoped_memory_err)}")
+
         configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(configuration.get("prompt") or "", variables, parsed_data["service"], configuration)
 
         if template:
