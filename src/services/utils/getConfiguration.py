@@ -212,6 +212,9 @@ async def _prepare_configuration_response(
     rag_data = bridges.get("doc_ids")
     gpt_memory_context = bridges.get("gpt_memory_context")
     gpt_memory = bridges.get("gpt_memory")
+    # No ranger_memory/user_memory booleans — both scopes are always on for a Ranger, gated by folder_id.
+    ranger_memory_context = bridges.get("ranger_memory_context")
+    user_memory_context = bridges.get("user_memory_context")
 
     tone = bridges.get("settings", {}).get("tone", {})
     responseStyle = bridges.get("settings", {}).get("responseStyle", {})
@@ -268,6 +271,8 @@ async def _prepare_configuration_response(
         "gpt_memory": gpt_memory,
         "version_id": version_id or bridges.get("published_version_id"),
         "gpt_memory_context": gpt_memory_context,
+        "ranger_memory_context": ranger_memory_context,
+        "user_memory_context": user_memory_context,
         "bridge_summary": bridges.get("bridge_summary") or "",
         "settings": bridges.get("settings", {}),
         "variables": variables,

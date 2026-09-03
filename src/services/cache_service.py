@@ -78,6 +78,45 @@ async def delete_in_cache(identifiers: str | list[str]) -> bool:
         return False
 
 
+async def push_to_cache_list(identifier: str, items: list, ttl: int = DEFAULT_REDIS_TTL) -> bool:
+    """RPUSH a list of JSON-serializable items onto a Redis list, refreshing its TTL."""
+    try:
+        if not items:
+            return True
+        key = f"{REDIS_PREFIX}{identifier}"
+        serialized_items = [json.dumps(make_json_serializable(item)) for item in items]
+        _t = _time.time()
+        await client.rpush(key, *serialized_items)
+        await client.expire(key, int(ttl))
+        log_slow_call(f"Redis RPUSH {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
+        return True
+    except Exception as e:
+        logger.error(f"Error pushing to cache list: {str(e)}")
+        return False
+
+
+async def drain_cache_list(identifier: str) -> list:
+    """LRANGE the full list then DEL it, returning the deserialized items (empty list on any failure)."""
+    try:
+        key = f"{REDIS_PREFIX}{identifier}"
+        _t = _time.time()
+        raw_items = await client.lrange(key, 0, -1)
+        await client.delete(key)
+        log_slow_call(f"Redis LRANGE+DEL {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
+        items = []
+        for raw_item in raw_items:
+            if isinstance(raw_item, bytes):
+                raw_item = raw_item.decode("utf-8")
+            try:
+                items.append(json.loads(raw_item))
+            except (TypeError, json.JSONDecodeError):
+                items.append(raw_item)
+        return items
+    except Exception as e:
+        logger.error(f"Error draining cache list: {str(e)}")
+        return []
+
+
 async def verify_ttl(identifier: str) -> int:
     try:
         if await client.ping():
@@ -208,6 +247,8 @@ __all__ = [
     "store_in_cache",
     "find_in_cache",
     "find_in_cache_with_prefix",
+    "push_to_cache_list",
+    "drain_cache_list",
     "verify_ttl",
     "clear_cache",
     "acquire_lock",

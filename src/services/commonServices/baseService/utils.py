@@ -10,7 +10,7 @@ from google.genai import types
 
 from globals import *
 from globals import logger, traceback
-from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, tool_types
+from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, RANGER_FOLDER_ID, RANGER_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, tool_types
 from src.configs.service_registry import (
     has_anthropic_shape,
     has_gemini_shape,
@@ -22,7 +22,15 @@ from src.configs.service_registry import (
 )
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
-from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
+from src.services.cache_service import (
+    REDIS_PREFIX,
+    client,
+    drain_cache_list,
+    find_in_cache,
+    incr_in_cache,
+    push_to_cache_list,
+    store_in_cache,
+)
 from src.services.mcp_gateway.client import call_mcp_tool
 from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
@@ -755,6 +763,30 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
                 pending_turns.append({"role": "user", "content": user_message})
             pending_turns.append({"role": "assistant", "content": assistant_message})
 
+    # Ranger/user memory: one counter + turn-buffer per bridge_id, on by default for every Ranger.
+    is_ranger = parsed_data.get("folder_id") == RANGER_FOLDER_ID
+    should_fire_ranger_memory = False
+    ranger_memory_pending_turns: list = []
+    bridge_id_for_memory = parsed_data.get("bridge_id")
+    try:
+        if is_ranger and bridge_id_for_memory:
+            await push_to_cache_list(
+                f"{redis_keys['ranger_memory_pending_turns_']}{bridge_id_for_memory}",
+                [
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": assistant_message},
+                ],
+            )
+            count = await incr_in_cache(f"{redis_keys['ranger_memory_counter_']}{bridge_id_for_memory}")
+            should_fire_ranger_memory = count > 0 and count % RANGER_MEMORY_TURNS_PER_CYCLE == 0
+            if should_fire_ranger_memory:
+                ranger_memory_pending_turns = await drain_cache_list(
+                    f"{redis_keys['ranger_memory_pending_turns_']}{bridge_id_for_memory}"
+                )
+    except Exception as ranger_memory_err:
+        logger.error(f"Error in ranger/user memory write-trigger path: {str(ranger_memory_err)}")
+        should_fire_ranger_memory = False
+
     data = {
         "metrics_service": {
             "dataset": [parsed_data.get("usage", {})],
@@ -795,6 +827,18 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
         "check_handle_gpt_memory": {
             "gpt_memory": gpt_memory_enabled and should_fire_gpt_memory,
             "type": parsed_data.get("configuration", {}).get("type"),
+        },
+        "handle_ranger_user_memory": {
+            "bridge_id": bridge_id_for_memory,
+            "user_id": parsed_data.get("user_id"),
+            "pending_turns": ranger_memory_pending_turns,
+            "ranger_memory": is_ranger,
+            "ranger_memory_context": parsed_data.get("ranger_memory_context"),
+            "user_memory": is_ranger,
+            "user_memory_context": parsed_data.get("user_memory_context"),
+        },
+        "check_handle_ranger_user_memory": {
+            "fire": is_ranger and should_fire_ranger_memory,
         },
         "check_chatbot_suggestions": {
             "bridgeType": parsed_data.get("bridgeType"),
