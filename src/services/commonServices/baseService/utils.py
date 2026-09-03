@@ -117,6 +117,30 @@ def apply_variable_path_filters(
     return transformed_properties
 
 
+def get_variable_path_keys(variable_path):
+    """Collect the variable keys that a child agent fills from its ``variable_path``.
+
+    ``variable_path`` has the shape ``{function_name: {field_key: path}}`` (see
+    ``bridge_configurations[bridge_id]["variables_path"]``). The inner ``field_key``
+    entries are the variables the gateway resolves from the child's configured value
+    / default, so on a nested agent call the parent model's AI-generated value for
+    those keys must not pre-fill the slot (otherwise ``process_variable_state`` skips
+    the configured default). Nested/dotted keys are surfaced to the model under their
+    top-level key, so match on that too. Returns an empty set for missing/None/empty
+    input, which keeps the prior copy-everything behaviour.
+    """
+    keys = set()
+    if not isinstance(variable_path, dict):
+        return keys
+    for function_paths in variable_path.values():
+        if not isinstance(function_paths, dict):
+            continue
+        for field_key in function_paths.keys():
+            keys.add(field_key)
+            keys.add(field_key.split(".")[0])
+    return keys
+
+
 def validate_tool_call(service, response):
     match service: # TODO: Fix validation process.
         case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
@@ -529,11 +553,24 @@ async def process_data_and_run_tools(codes_mapping, self):
                         resource_to_collection_mapping=resource_to_collection_mapping,
                     )
                 elif self.tool_id_and_name_mapping[name].get("type") == tool_types["AGENT"]:
+                    target_bridge_id = self.tool_id_and_name_mapping[name].get("bridge_id")
+                    # Skip copying the parent model's AI-generated value for variables listed in the
+                    # child agent's variable_path: those are gateway-filled, so leaving the slot empty
+                    # lets process_variable_state apply the child's configured default. Keys that are
+                    # NOT in variable_path keep the AI value (AI value takes preference).
+                    child_variable_path = {}
+                    if hasattr(self, "bridge_configurations") and self.bridge_configurations:
+                        child_variable_path = (self.bridge_configurations.get(target_bridge_id) or {}).get("variables_path") or {}
+                    variable_path_keys = get_variable_path_keys(child_variable_path)
                     agent_args = {
                         "org_id": self.org_id,
-                        "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
+                        "bridge_id": target_bridge_id,
                         "user": tool_data.get("args").get("_query"),
-                        "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
+                        "variables": {
+                            key: value
+                            for key, value in tool_data.get("args").items()
+                            if key != "user" and key not in variable_path_keys
+                        },
                         "message_id": self.message_id
                     }
 
