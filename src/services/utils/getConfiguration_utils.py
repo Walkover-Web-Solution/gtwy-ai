@@ -229,11 +229,6 @@ def setup_api_key(service, bridges, apikey, chatbot):
             # Use Config.OPENAI_API_KEY only if model is gpt-5-nano
             if model == "gpt-5-nano":
                 apikey = Config.OPENAI_API_KEY_GPT_5_NANO
-            else:
-                raise Exception("Could not find api key or Agent is not Published")
-
-    if not (apikey or db_api_key):
-        raise Exception("Could not find api key or Agent is not Published")
 
     # Handle fallback configuration
     fallback_config = bridges.get("settings", {}).get("fall_back")
@@ -248,8 +243,9 @@ def setup_api_key(service, bridges, apikey, chatbot):
             bridges["settings"]["fall_back"]["apikey"] = Helper.decrypt(fallback_apikey)
             bridges["settings"]["fall_back"]["apikey_object_id"] = db_apikeys_object_id.get(fallback_service)
 
-    # Use provided API key or decrypt from database
-    return apikey if apikey else Helper.decrypt(db_api_key)
+    if apikey:
+        return apikey
+    return Helper.decrypt(db_api_key) if db_api_key else None
 
 
 def setup_pre_tools(bridge, agent_data, variables):

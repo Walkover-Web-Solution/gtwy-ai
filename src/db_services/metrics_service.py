@@ -136,7 +136,7 @@ async def create_batch_conversation_logs(batch_id, messages, parsed_data, proces
         logger.error(f'Error publishing batch conversation logs: {str(error)}')
         logger.error(traceback.format_exc())
 
-def build_history_and_metrics_payload(dataset, history_params, version_id):
+def build_queue_payload(dataset, history_params, version_id):
     """
     Build conversation log and metrics payload without saving to DB.
     Used to prepare data for publishing to the log queue for Node.js to save.
@@ -451,7 +451,7 @@ async def publish_plan_history_update(
         thread_id = parsed_data.get("thread_id")
         sub_thread_id = parsed_data.get("sub_thread_id") or thread_id
 
-        # Synthesize the single-element `dataset` that build_history_and_metrics_payload expects.
+        # Synthesize the single-element `dataset` that build_queue_payload expects.
         dataset = [{
             "orgId": parsed_data.get("org_id"),
             "service": metrics.get("service") or parsed_data.get("service"),
@@ -501,10 +501,10 @@ async def publish_plan_history_update(
             },
         }
 
-        payload = build_history_and_metrics_payload(dataset, history_params, version_id)
+        payload = build_queue_payload(dataset, history_params, version_id)
         conversation_log_data = payload["conversation_log_data"]
 
-        # build_history_and_metrics_payload derives `status` from dataset[0].success;
+        # build_queue_payload derives `status` from dataset[0].success;
         # honor an explicit override if the caller provided one.
         if "status" in extra:
             conversation_log_data["status"] = extra["status"]
@@ -526,4 +526,4 @@ async def publish_plan_history_update(
 
 
 # Exporting functions
-__all__ = ["find", "find_one", "find_one_pg", "create_batch_conversation_logs", "build_history_and_metrics_payload", "build_orchestrator_log_data", "publish_plan_history_update"]
+__all__ = ["find", "find_one", "find_one_pg", "create_batch_conversation_logs", "build_queue_payload", "build_orchestrator_log_data", "publish_plan_history_update"]

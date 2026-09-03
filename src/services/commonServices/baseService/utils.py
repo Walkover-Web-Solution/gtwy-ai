@@ -22,6 +22,7 @@ from src.configs.service_registry import (
 )
 from src.controllers.rag_controller import get_text_from_vectorsQuery
 from src.db_services.ConfigurationServices import get_skill_content_by_id
+from src.services.billing.billing_utils import build_llm_usage_event
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
 from src.services.mcp_gateway.client import call_mcp_tool
@@ -551,7 +552,9 @@ async def process_data_and_run_tools(codes_mapping, self):
                         "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
                         "user": tool_data.get("args").get("_query"),
                         "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
-                        "message_id": self.message_id
+                        "message_id": self.message_id,
+                        # The child agent bills to the SAME owner as this run.
+                        "billing_attribution": getattr(self, "billing_attribution", None) or {},
                     }
 
                     if self.stream_mode and self.streamer:
@@ -752,6 +755,32 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
     suggestion_content = {"data": {"content": {}}}
     suggestion_content["data"]["content"] = result.get("historyParams", {}).get("message")
 
+    history_params = result.get("historyParams", {})
+
+    billing_events = []
+    if parsed_data.get("wallet"):
+        billing_events.append(
+            build_llm_usage_event(
+                parsed_data.get("usage"),
+                history_params.get("message_id") or parsed_data.get("message_id"),
+                parsed_data.get("org_id"),
+                parsed_data.get("bridge_id"),
+            )
+        )
+    if parsed_data.get("_wallet_primary_cost"):
+        # The failed primary attempt ran on the platform key before falling back
+        # to the customer's own key (wallet flipped False) — its tokens are
+        # still ours to bill.
+        billing_events.append(
+            build_llm_usage_event(
+                {"expectedCost": parsed_data["_wallet_primary_cost"]},
+                history_params.get("message_id") or parsed_data.get("message_id"),
+                parsed_data.get("org_id"),
+                parsed_data.get("bridge_id"),
+            )
+        )
+    billing_events = [event for event in billing_events if event]
+
     # Extract user and assistant messages for Hippocampus
     user_message = parsed_data.get("user", "")
     assistant_message = result.get("historyParams", {}).get("message", "")
@@ -850,6 +879,21 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "thread_id": parsed_data.get("thread_id"),
             "service": parsed_data.get("service"),
         },
+        "billing": [
+            {
+                "model": history_params.get("model") or parsed_data.get("model"),
+                "service": parsed_data.get("service"),
+                "bridge_id": parsed_data.get("bridge_id"),
+                "thread_id": parsed_data.get("thread_id"),
+                # Who pays: the first agent's owner (attribution), falling back
+                # to this frame's own agent owner for direct requests.
+                "user_id": (parsed_data.get("billing_attribution") or {}).get("user_id") or parsed_data.get("user_id"),
+                "folder_id": (parsed_data.get("billing_attribution") or {}).get("folder_id") or parsed_data.get("folder_id"),
+                "is_embed": bool((parsed_data.get("billing_attribution") or {}).get("is_embed")),
+                **event,
+            }
+            for event in billing_events
+        ] if billing_events else None,
     }
 
     return data

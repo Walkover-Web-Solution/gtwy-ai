@@ -494,6 +494,10 @@ class Helper:
 def build_rerun_queue_message(log, data_to_send):
     """Build an independent queue message for a single rerun from the conversation log."""
     body = copy.deepcopy(data_to_send.get("body", {}))
+    # The middleware's hold belongs to the /rerun request itself, not to the N
+    # queued copies — carrying it here made every consumer release the same
+    # hold (free credits). The route releases it once after queueing.
+    body.pop("credit_hold_token", None)
     original_thread_id = log.get("thread_id")
     original_sub_thread_id = log.get("sub_thread_id")
     rerun_suffix = uuid.uuid4().hex[:8]

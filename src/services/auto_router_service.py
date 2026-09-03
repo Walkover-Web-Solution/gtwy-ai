@@ -34,7 +34,8 @@ async def apply_auto_model_selection(parsed_data, timer):
         conversation=configuration.get("conversation", []),
         timer=timer,
         execution_time_logs=execution_time_logs,
-        tradeoff=tradeoff
+        tradeoff=tradeoff,
+        free_tier_only=bool(parsed_data.get("wallet") and parsed_data.get("org_billing_plan") == "free"),
     )
 
     if not best_model or not best_service:
@@ -49,8 +50,12 @@ async def apply_auto_model_selection(parsed_data, timer):
     selected_apikey = parsed_data.get("service_apikeys", {}).get(best_service)
     if selected_apikey:
         parsed_data["apikey"] = selected_apikey
+        # The run now executes on the org's OWN key — it must not also be
+        # debited from the wallet (that would double-charge: provider bill +
+        # wallet credits for the same tokens).
+        parsed_data["wallet"] = False
 
-async def find_best_model(service_apikeys, prompt, user_message, conversation, timer, execution_time_logs=None, tradeoff=None):
+async def find_best_model(service_apikeys, prompt, user_message, conversation, timer, execution_time_logs=None, tradeoff=None, free_tier_only=False):
     available_services = list(service_apikeys.keys())
 
     conversation_messages = [
@@ -72,6 +77,8 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation, t
                 and config.get("status") == 1
                 and config.get("validationConfig", {}).get("type") == "chat"
                 and (supported_models and model in supported_models)
+                # Free-plan wallet runs may only be routed to free models.
+                and (not free_tier_only or config.get("free_tier"))
             ):
                 providers.append({"provider": notdiamond_provider, "model": model})
 

@@ -122,6 +122,7 @@ class BaseService:
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
+        self.billing_attribution = params.get("billing_attribution") or {}
         self.is_embed = params.get("is_embed")
         self.user_id = params.get("user_id")
         self.api_collection = params.get("api_collection")
@@ -357,7 +358,7 @@ class BaseService:
             "actor": "user" if self.user else "tool",
             "message_id": self.message_id,
         }
-        payload = metrics_service.build_history_and_metrics_payload([usage], history_params, None)
+        payload = metrics_service.build_queue_payload([usage], history_params, None)
         history_data = payload["conversation_log_data"]
         history_data["thread_flag"] = self.thread_flag
         history_data["response_format"] = self.response_format

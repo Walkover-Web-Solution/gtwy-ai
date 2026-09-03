@@ -26,7 +26,7 @@ queue publish, JSON parsing, token math) live in reviewer_service_helpers.
 import uuid
 
 from globals import logger
-from src.db_services.metrics_service import build_history_and_metrics_payload
+from src.db_services.metrics_service import build_queue_payload
 from src.services.commonServices.reviewer_service_helpers import (
     _add_tokens,
     _build_review_user_message,
@@ -389,7 +389,7 @@ async def run_review_loop(
             record, parsed_data, reviewer_cfg, round_history_params
         )
         try:
-            history_payload = build_history_and_metrics_payload(
+            history_payload = build_queue_payload(
                 [round_dataset_entry],
                 round_history_params,
                 (record["parsed_data"].get("version_id") if record["parsed_data"] else None)
