@@ -171,6 +171,12 @@ usage_alert_config = {
     "daily_bucket_ttl_days": 8,     # how long each per-day bucket lives (window + buffer)
 }
 
+alert_webhook = {
+    "default_webhook_url" : "https://flow.sokt.io/func/scriYP8m551q",
+    "rabbit_mq_failure_url" : "https://flow.sokt.io/func/scrimCFAKPWg"
+}
+
+
 auto_model_tradeoff = {
     "quality": None,
     "cost": "cost",
