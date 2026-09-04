@@ -530,18 +530,24 @@ async def chat(request_body):
                     # Fallback runs on the customer's own key — never billed.
                     parsed_data["wallet"] = False
                 elif parsed_data.get("wallet"):
-                    # Still on wallet: swap to the fallback service's platform key —
-                    # keeping the original service's key would hit the wrong
-                    # provider's SDK with the wrong credential.
-                    from src.services.billing.billing_utils import get_platform_apikey
-                    fallback_platform_key = get_platform_apikey(fallback_service)
-                    if fallback_platform_key:
-                        parsed_data["apikey"] = fallback_platform_key
-                    else:
+                    # Still on wallet: re-check the plan and swap to the fallback
+                    # service's platform key. A fallback is a service+model switch
+                    # that never passes back through the per-agent gate, so both
+                    # checks live in resolve_wallet_fallback_key. Refusing by
+                    # raising (rather than the old warn-and-continue) is the honest
+                    # outcome: running on the ORIGINAL service's credential at best
+                    # fails auth and at worst reaches the wrong provider.
+                    from src.services.billing.billing_utils import resolve_wallet_fallback_key
+                    fallback_platform_key, skip_reason = resolve_wallet_fallback_key(
+                        parsed_data, fallback_service, fallback_model
+                    )
+                    if skip_reason:
                         logger.warning(
-                            f"[billing] no platform api key for fallback service '{fallback_service}' — "
-                            f"fallback will run with the original service's key and likely fail"
+                            f"[billing] refusing wallet fallback: {skip_reason} "
+                            f"(org {parsed_data.get('org_id')})"
                         )
+                        raise RuntimeError(f"Fallback not available: {skip_reason}")
+                    parsed_data["apikey"] = fallback_platform_key
 
                 # Always rebuild fallback handler/config to avoid stale customConfig/model reuse
                 (

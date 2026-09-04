@@ -2,6 +2,8 @@ from config import Config
 from notdiamond import AsyncNotDiamond
 from globals import logger
 from src.configs.model_configuration import model_config_document
+from src.configs.plan_registry import allowed_models_for
+from src.services.utils.load_plan_configs import ALL_MODELS
 from src.configs.constant import auto_model_tradeoff
 from src.services.utils.auto_router_utils import (
     PROVIDER_NAME_OVERRIDES,
@@ -35,7 +37,10 @@ async def apply_auto_model_selection(parsed_data, timer):
         timer=timer,
         execution_time_logs=execution_time_logs,
         tradeoff=tradeoff,
-        free_tier_only=bool(parsed_data.get("wallet") and parsed_data.get("org_billing_plan") == "free"),
+        # None means "not wallet-billed", i.e. unrestricted. See the
+        # org_billing_plan-presence invariant in reserve_credits_and_api_key_setup:
+        # the plan is only stamped when the request needed the wallet.
+        plan_code=parsed_data.get("org_billing_plan") if parsed_data.get("wallet") else None,
     )
 
     if not best_model or not best_service:
@@ -55,7 +60,7 @@ async def apply_auto_model_selection(parsed_data, timer):
         # wallet credits for the same tokens).
         parsed_data["wallet"] = False
 
-async def find_best_model(service_apikeys, prompt, user_message, conversation, timer, execution_time_logs=None, tradeoff=None, free_tier_only=False):
+async def find_best_model(service_apikeys, prompt, user_message, conversation, timer, execution_time_logs=None, tradeoff=None, plan_code=None):
     available_services = list(service_apikeys.keys())
 
     conversation_messages = [
@@ -70,6 +75,12 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation, t
     providers = []
     for service_name in candidate_services:
         supported_models = supported_models_by_provider.get(service_name)
+        # Resolve the plan's allowlist ONCE per service, not per model — this
+        # inner loop scans every chat model of the service. None means the plan
+        # does not include the service at all.
+        allowed = allowed_models_for(plan_code, service_name) if plan_code else ALL_MODELS
+        if allowed is None:
+            continue
         notdiamond_provider = INTERNAL_TO_NOTDIAMOND_PROVIDER.get(service_name, service_name)
         for model, config in model_config_document.get(service_name, {}).items():
             if (
@@ -77,8 +88,8 @@ async def find_best_model(service_apikeys, prompt, user_message, conversation, t
                 and config.get("status") == 1
                 and config.get("validationConfig", {}).get("type") == "chat"
                 and (supported_models and model in supported_models)
-                # Free-plan wallet runs may only be routed to free models.
-                and (not free_tier_only or config.get("free_tier"))
+                # A wallet-billed run may only be routed inside its plan.
+                and (allowed is ALL_MODELS or model in allowed)
             ):
                 providers.append({"provider": notdiamond_provider, "model": model})
 

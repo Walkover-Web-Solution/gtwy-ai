@@ -737,6 +737,37 @@ async def _execute_single_task(task_id, task, org_id, bridge_id, thread_id, sub_
         # body.configuration.response_type into parsed_data.
         fall_back = (current_agent_config.get("settings") or {}).get("fall_back") or {}
         if fall_back.get("is_enable") and fall_back.get("model"):
+            # This pre-swap happens AFTER reserve_credits_and_api_key_setup gated
+            # the ORIGINAL model, and the gate never re-runs — so without this
+            # check a wallet-billed plan restriction is simply bypassed. Two
+            # things to get right when the entry is wallet-billed:
+            #   * the target must be inside the org's plan;
+            #   * swapping `service` while keeping the deepcopied ORIGINAL
+            #     service's platform apikey would reach the wrong provider.
+            # If either fails, leave the agent on its original model rather than
+            # failing the task — the fallback is an optimisation here, not the
+            # thing the user asked for.
+            fb_service = fall_back.get("service") or scoped_agent_entry.get("service")
+            if scoped_agent_entry.get("wallet") and not fall_back.get("apikey"):
+                from src.services.billing.billing_utils import resolve_wallet_fallback_key
+
+                fb_key, skip_reason = resolve_wallet_fallback_key(
+                    {
+                        "org_billing_plan": scoped_agent_entry.get("org_billing_plan"),
+                        "wallet": True,
+                    },
+                    fb_service,
+                    fall_back["model"],
+                )
+                if skip_reason:
+                    logger.warning(
+                        f"[billing] todo worker keeping '{scoped_agent_config.get('model')}' — "
+                        f"fallback refused: {skip_reason}"
+                    )
+                    fall_back = {}
+                else:
+                    scoped_agent_entry["apikey"] = fb_key
+        if fall_back.get("is_enable") and fall_back.get("model"):
             scoped_agent_config["model"] = fall_back["model"]       # parsed_data["model"] reads from body.configuration.model
             if fall_back.get("service"):
                 scoped_agent_entry["service"] = fall_back["service"]  # parsed_data["service"] reads from body.service (top-level)

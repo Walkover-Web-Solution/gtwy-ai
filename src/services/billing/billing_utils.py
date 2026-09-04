@@ -6,6 +6,7 @@ from globals import logger
 from models.mongo_connection import db
 
 from src.configs.constant import billing_config
+from src.configs.plan_registry import DEFAULT_PLAN_CODE, plan_allows, plan_display_name, plan_exists
 from src.services.billing.lago_service import get_wallet_balance
 from src.services.cache_service import REDIS_PREFIX, client
 
@@ -170,11 +171,20 @@ def _no_wallet_key(org_id: str) -> str:
     return f"{REDIS_PREFIX}{_NO_WALLET_KEY}{org_id}"
 
 
-# --- Org billing plan (free / paid) ---------------------------------------
-# Written by Node (org_billing collection + Redis key) on provision and topup;
-# read here on the hot path. "free" restricts wallet-paid agents to models
-# flagged free_tier. Fail-closed: an org we cannot classify is treated as
-# free — worst case a paid org briefly sees "upgrade", never the reverse.
+# --- Org billing plan -----------------------------------------------------
+# Which plan an org is on. Written by Node (org_billing collection + the Redis
+# key) on provision and plan change; read here on the hot path. WHAT a plan
+# includes lives in the billing_plans collection (src/configs/plan_registry.py),
+# not here — this only resolves the code.
+#
+# Fail-closed: an org we cannot classify, or one pointing at a plan that does
+# not exist, is treated as DEFAULT_PLAN_CODE (the most restrictive plan we
+# ship). Worst case a paid org briefly sees "upgrade", never the reverse.
+#
+# The plan code is validated against the LIVE registry rather than a hardcoded
+# tuple. The old ("free","paid") literals here silently coerced any other value
+# to "free" — so adding a plan in Node without shipping Python first would have
+# restricted every org on it.
 _ORG_PLAN_KEY = "nd_org_billing_plan_"
 _ORG_PLAN_CACHE_TTL = 3600
 _org_billing_collection = db["org_billing"]
@@ -184,20 +194,31 @@ def _org_plan_key(org_id: str) -> str:
     return f"{REDIS_PREFIX}{_ORG_PLAN_KEY}{org_id}"
 
 
+def _resolve_plan_code(raw, org_id: str) -> str:
+    """Accept a plan code only if the registry actually defines it."""
+    if plan_exists(raw):
+        return raw
+    if raw:
+        logger.error(
+            f"[billing] org {org_id} is on unknown plan '{raw}' — no such document in "
+            f"billing_plans. Falling back to '{DEFAULT_PLAN_CODE}'; insert the plan "
+            "document before pointing an org at it."
+        )
+    return DEFAULT_PLAN_CODE
+
+
 async def get_org_plan(org_id: str) -> str:
-    """Return "free" or "paid" for the org. Defaults to "free" when unknown."""
+    """Return the org's plan code, or DEFAULT_PLAN_CODE when it cannot be resolved."""
     try:
         cached = await client.get(_org_plan_key(org_id))
         if cached is not None:
-            plan = _decode(cached)
-            return plan if plan in ("free", "paid") else "free"
+            return _resolve_plan_code(_decode(cached), org_id)
     except Exception as e:
         logger.error(f"[billing] org plan cache read failed for org {org_id}: {e}")
-    plan = "free"
+    plan = DEFAULT_PLAN_CODE
     try:
         doc = await _org_billing_collection.find_one({"org_id": str(org_id)}, {"plan": 1})
-        if doc and doc.get("plan") in ("free", "paid"):
-            plan = doc["plan"]
+        plan = _resolve_plan_code(doc.get("plan") if doc else None, org_id)
         await client.set(_org_plan_key(org_id), plan, ex=_ORG_PLAN_CACHE_TTL)
     except Exception as e:
         logger.error(f"[billing] org plan lookup failed for org {org_id}: {e}")
@@ -213,7 +234,8 @@ def get_platform_apikey(service: str | None) -> str | None:
     before wallet traffic can run — there is no env fallback.
     """
     try:
-        # Call-time import for the same reason as is_free_tier_model below.
+        # Call-time import: model_configuration imports baseService.utils, which
+        # imports this module — a top-level import closes that loop at startup.
         from src.configs.model_configuration import platform_apikey_document
 
         return platform_apikey_document.get(service)
@@ -221,39 +243,59 @@ def get_platform_apikey(service: str | None) -> str | None:
         return None
 
 
-def is_free_tier_model(service: str | None, model: str | None) -> bool:
-    """True when the model is flagged free_tier in the model registry."""
-    try:
-        # Imported at call time: model_configuration imports baseService.utils,
-        # which imports this module — a top-level import here closes that loop
-        # and breaks startup.
-        from src.configs.model_configuration import model_config_document
-
-        return bool(model_config_document.get(service, {}).get(model, {}).get("free_tier"))
-    except Exception:
-        return False
-
-
 def fallback_allowed_on_plan(parsed_data: dict) -> bool:
-    """A free-plan wallet run must not fall back onto a paid model.
+    """A wallet-paid run must not fall back onto a model outside its plan.
 
-    Fallbacks with their own (customer) apikey are never restricted — they
-    don't spend wallet credits.
+    Fallbacks with their own (customer) apikey are never restricted — they do
+    not spend wallet credits, so they short-circuit before the plan is read.
+    That short-circuit is also what makes an ABSENT org_billing_plan safe:
+    reserve_credits_and_api_key_setup stamps the plan only when the request
+    actually needed the wallet, so absent implies wallet=False everywhere and
+    we already returned above. Do not "helpfully" default the plan here.
+
+    Fail-closed on the allowlist. The single fail-open condition (the registry
+    never loaded) is decided once, inside plan_allows.
     """
     fallback = (parsed_data.get("settings") or {}).get("fall_back") or {}
     if not parsed_data.get("wallet") or fallback.get("apikey"):
         return True
-    if parsed_data.get("org_billing_plan") != "free":
-        return True
-    service = fallback.get("service", parsed_data.get("service"))
-    model = fallback.get("model", parsed_data.get("model"))
-    if is_free_tier_model(service, model):
+    plan = parsed_data.get("org_billing_plan")
+    # `or`, not a two-arg .get: getConfiguration_utils writes the fall_back keys
+    # unconditionally, so service/model can be present-but-None and .get(k, d)
+    # would hand None straight to the predicate.
+    service = fallback.get("service") or parsed_data.get("service")
+    model = fallback.get("model") or parsed_data.get("model")
+    if plan_allows(plan, service, model):
         return True
     logger.warning(
-        f"[billing] skipping fallback to paid model '{model}' ({service}) for free-plan org "
-        f"{parsed_data.get('org_id')}"
+        f"[billing] skipping fallback to '{model}' ({service}) — not included in plan "
+        f"'{plan}' for org {parsed_data.get('org_id')}"
     )
     return False
+
+
+def resolve_wallet_fallback_key(parsed_data: dict, fallback_service, fallback_model):
+    """For a fallback that STAYS on the wallet, return (platform_apikey, skip_reason).
+
+    A fallback is a service+model switch that never passes back through the
+    per-agent gate in reserve_credits_and_api_key_setup, so both checks happen
+    here. Two independent reasons to refuse, both of which used to be soft:
+
+      * the target is outside the org's plan;
+      * we have no platform key for the target service — the old code logged a
+        warning and ran anyway with the ORIGINAL service's credential, which at
+        best fails auth and at worst reaches the wrong provider.
+    """
+    plan = parsed_data.get("org_billing_plan")
+    if not plan_allows(plan, fallback_service, fallback_model):
+        return None, (
+            f"'{fallback_model}' ({fallback_service}) is not included in plan "
+            f"'{plan_display_name(plan)}'"
+        )
+    key = get_platform_apikey(fallback_service)
+    if not key:
+        return None, f"no platform api key for fallback service '{fallback_service}'"
+    return key, None
 
 
 def _decode(value) -> str:
@@ -446,26 +488,66 @@ async def reserve_credits_and_api_key_setup(
     if not wallet_needed:
         return None, None
 
-    # Free-plan orgs may spend wallet credits only on models flagged free_tier.
-    # Checked per agent, so a paid model can't hide behind a free front agent.
-    # Agents on the customer's OWN key (wallet=False) are never restricted.
+    # A plan is an ALLOWLIST of services, optionally narrowed to specific models
+    # per service (src/configs/plan_registry.py, editable via the billing_plans
+    # collection). Checked PER AGENT, so a disallowed model cannot hide behind an
+    # allowed front agent. Agents on the customer's OWN key (wallet=False) are
+    # never restricted.
+    #
+    # This is the ONLY pre-execution gate and the only loop over every entry in
+    # bridge_configurations, which is exactly what makes nested / connected /
+    # transfer agents covered: a transfer can only target an agent already in
+    # this map. Anything that ever introduces an agent config MID-request would
+    # bypass the plan entirely.
     plan = await get_org_plan(org_id)
     db_config["org_billing_plan"] = plan
-    if plan == "free":
-        for cfg in configs.values():
-            if not cfg.get("wallet"):
-                continue
-            cfg_model = (cfg.get("configuration") or {}).get("model")
-            if not is_free_tier_model(cfg.get("service"), cfg_model):
-                return None, {
-                    "success": False,
-                    "error": (
-                        f"Model '{cfg_model}' needs a paid plan. On the free plan you can use "
-                        "the free models, or add your own API key to use any model. "
-                        "Top up your wallet to unlock all models."
-                    ),
-                    "error_code": "FREE_PLAN_MODEL_RESTRICTED",
-                }
+    for cfg in configs.values():
+        # Stamp the plan on EVERY agent config, wallet or not. bridge_configurations
+        # is the object that travels into connected-agent, transfer, todo-executor
+        # and testcase frames — each rebuilds its request body from scratch but
+        # merges its primary cfg into it — so this one assignment is what makes the
+        # plan visible in those frames. Invariant that follows, and that the
+        # fail-closed predicates below depend on:
+        #
+        #   org_billing_plan is present on a cfg IFF the request needed the wallet.
+        #   Absent implies wallet=False everywhere, and every plan predicate
+        #   short-circuits on `wallet` before reading the plan.
+        cfg["org_billing_plan"] = plan
+        if not cfg.get("wallet"):
+            continue
+        cfg_service = cfg.get("service")
+        cfg_model = (cfg.get("configuration") or {}).get("model")
+
+        # Existence BEFORE plan, so a typo'd model never reports as a plan
+        # problem and the plan error can't double as an existence oracle for
+        # another org's private models. Same deliberately opaque message the
+        # middleware uses (getDataUsingBridgeId.py) — and unlike that copy, this
+        # covers every agent, not just the primary. Runs before reserve_credits,
+        # so no hold is placed for a request that was never going to run.
+        from src.configs.model_configuration import model_config_document  # lazy: import cycle
+
+        entry = (model_config_document.get(cfg_service) or {}).get(cfg_model)
+        if not entry or (entry.get("org_id") and str(entry["org_id"]) != str(org_id)):
+            return None, {"success": False, "error": "model or service does not exist!"}
+
+        if not plan_allows(plan, cfg_service, cfg_model):
+            plan_name = plan_display_name(plan)
+            return None, {
+                "success": False,
+                "error": (
+                    f"Model '{cfg_model}' ({cfg_service}) isn't included in your {plan_name} "
+                    "plan. Add your own API key to use this model, or upgrade your plan to "
+                    "unlock it."
+                ),
+                # Kept verbatim: the frontend (not in either repo) branches on it.
+                # Node never reads error_code, so the new fields are additive.
+                "error_code": "FREE_PLAN_MODEL_RESTRICTED",
+                "plan_error_code": "PLAN_MODEL_NOT_ALLOWED",
+                "plan": plan,
+                "plan_name": plan_name,
+                "service": cfg_service,
+                "model": cfg_model,
+            }
 
     request_type = (primary.get("configuration") or {}).get("type")
     if is_batch or request_type in ("embedding", "image"):

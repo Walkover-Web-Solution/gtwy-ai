@@ -23,7 +23,11 @@ from src.db_services.metrics_service import (
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
 from src.configs.constant import bridge_ids, redis_keys, alert_types
-from src.services.billing.billing_utils import apply_billing_events
+from src.services.billing.billing_utils import (
+    apply_billing_events,
+    fallback_allowed_on_plan,
+    resolve_wallet_fallback_key,
+)
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
@@ -1723,7 +1727,13 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")
             fall_back = parsed_data.get("fall_back")
 
-            if fall_back and fall_back.get("is_enable", False):
+            # Streaming is the common chat path and this fallback used to skip
+            # every billing check the non-streaming one at common.py does: no plan
+            # check, no platform-key swap, no wallet flag flip and no capture of
+            # the failed primary's cost. So a wallet run could fall back onto any
+            # configured model, billed to the wallet, on the ORIGINAL service's
+            # credential. Kept in lockstep with common.py from here.
+            if fall_back and fall_back.get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
                 try:
                     fallback_model = fall_back.get("model", parsed_data["model"])
                     fallback_service = fall_back.get("service", parsed_data["service"])
@@ -1732,6 +1742,23 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                     parsed_data["configuration"]["model"] = fallback_model
                     if fall_back.get("apikey"):
                         parsed_data["apikey"] = fall_back["apikey"]
+                        if parsed_data.get("wallet"):
+                            # The failed primary ran on the platform key and may have
+                            # burned real tokens before failing; still ours to bill.
+                            parsed_data["_wallet_primary_cost"] = parsed_data.get("tokens", {}).get("total_cost", 0)
+                        # Fallback runs on the customer's own key — never billed.
+                        parsed_data["wallet"] = False
+                    elif parsed_data.get("wallet"):
+                        fallback_platform_key, skip_reason = resolve_wallet_fallback_key(
+                            parsed_data, fallback_service, fallback_model
+                        )
+                        if skip_reason:
+                            logger.warning(
+                                f"[billing] refusing wallet fallback: {skip_reason} "
+                                f"(org {parsed_data.get('org_id')})"
+                            )
+                            raise RuntimeError(f"Fallback not available: {skip_reason}")
+                        parsed_data["apikey"] = fallback_platform_key
 
                     fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
                         parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
