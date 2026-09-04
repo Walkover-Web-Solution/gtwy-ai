@@ -421,6 +421,25 @@ async def send_message(cred, data):
         logger.error(f"Unexpected send message error=>, {str(e)}")
 
 
+def strip_usage_for_embed(payload, is_embed=False):
+    """Drop token/cost usage from a client-facing payload for embed users.
+
+    Usage sits under "usage" — at the top level of a completion response and
+    nested inside history entries (e.g. historyParams["response"]) — hence the
+    recursive walk. Called with is_embed falsy the payload is returned as-is,
+    so call sites don't need their own guard.
+
+    Embed clients must not see token counts or cost, but internal bookkeeping
+    (usage metrics, history rows, billing) still needs the real numbers — so
+    this returns a new structure and never mutates the caller's payload.
+    """
+    if not is_embed:
+        return payload
+    if isinstance(payload, dict):
+        return {k: strip_usage_for_embed(v) for k, v in payload.items() if k != "usage"}
+    return payload
+
+
 async def sendResponse(response_format, data, success=False, variables=None, meta=None):
     if variables is None:
         variables = {}
