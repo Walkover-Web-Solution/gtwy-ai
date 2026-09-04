@@ -796,6 +796,23 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "is_cache_hit": parsed_data.get("is_cache_hit", False),
             "resource_id": parsed_data.get("cache_hit_resource_id", None)
         },
+        # Who pays for the background AI jobs this response triggers (chatbot
+        # suggestions, gpt memory, agent-memory canonicalizer, sub-thread title).
+        # Those run in Node on OUR platform agents with OUR key, so Node needs the
+        # payer and the message_id to attribute the charge. One block for all of
+        # them: same payer, same request — copying this into each job payload
+        # would drift, and save_agent_memory carries no org_id at all today.
+        # Gated on `wallet`: a customer on their own API key is never charged for
+        # background work. None tells Node to skip billing entirely.
+        "background_billing": {
+            "org_id": parsed_data.get("org_id"),
+            "message_id": history_params.get("message_id") or parsed_data.get("message_id"),
+            # Same attribution precedence as the `billing` block below: the first
+            # agent's owner pays, falling back to this frame's own owner.
+            "user_id": (parsed_data.get("billing_attribution") or {}).get("user_id") or parsed_data.get("user_id"),
+            "folder_id": (parsed_data.get("billing_attribution") or {}).get("folder_id") or parsed_data.get("folder_id"),
+            "is_embed": bool((parsed_data.get("billing_attribution") or {}).get("is_embed")),
+        } if parsed_data.get("wallet") else None,
         "type": parsed_data.get("type"),
         "save_files_to_redis": {
             "thread_id": parsed_data.get("thread_id"),

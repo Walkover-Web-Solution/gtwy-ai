@@ -69,3 +69,9 @@ class Config:
     LAGO_API_URL = os.getenv("LAGO_API_URL")
     LAGO_CREDIT_RATE_USD = os.getenv("LAGO_CREDIT_RATE_USD")
     LAGO_API_KEY = os.getenv("LAGO_API_KEY")
+    # Org that owns GTWY_PAUTH_KEY. Node's background jobs (suggestions, gpt
+    # memory, canonicalizer, thread titles) call our own platform agents with
+    # that key, so those requests authenticate AS this org. Their cost is
+    # charged to the triggering customer in Node — this org must never be
+    # wallet-billed or gated for its own internal traffic.
+    GTWY_PLATFORM_ORG_ID = os.getenv("GTWY_PLATFORM_ORG_ID")

@@ -427,6 +427,22 @@ async def reserve_credits_and_api_key_setup(
             "error": "Could not find api key or Agent is not Published",
         }
 
+    # Internal platform traffic: Node's background jobs (suggestions, gpt memory,
+    # canonicalizer, thread titles) call our OWN agents over the public API with
+    # GTWY_PAUTH_KEY, so they arrive authenticated as the platform org. Those runs
+    # must never be wallet-billed or gated here — the cost is charged to the
+    # triggering customer in Node instead. Without this, two of those agents
+    # (gpt_memory, canonicalizer) have no key of their own, so they take the
+    # platform key, flip wallet=True, and bill the platform org: today Lago drops
+    # the events because that org has no wallet, but the moment it is provisioned
+    # the platform pays for every customer's background jobs AND an empty platform
+    # wallet blocks them for everyone. Keyed off the authenticated org, never off a
+    # request field, so a customer cannot forge it.
+    if Config.GTWY_PLATFORM_ORG_ID and str(org_id) == str(Config.GTWY_PLATFORM_ORG_ID):
+        for cfg in configs.values():
+            cfg["wallet"] = False
+        return None, None
+
     if not wallet_needed:
         return None, None
 
