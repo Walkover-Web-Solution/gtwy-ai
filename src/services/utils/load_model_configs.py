@@ -1,6 +1,5 @@
 from globals import logger
 from models.mongo_connection import db
-from src.services.utils.crypto_utils import decrypt
 from src.services.utils.time import with_timeout
 
 modelConfigModel = db["modelconfigurations"]
@@ -12,8 +11,16 @@ async def get_platform_apikeys():
 
     Stored encrypted in the platform_apikeys collection (written by Node's
     admin API with Helper.encrypt — the same method customer apikeys use) and
-    decrypted here once at load; the gate then does plain dict lookups.
+    decrypted here once at load with the very same Helper.decrypt; the gate then
+    does plain dict lookups.
     """
+    # Lazy import, and it MUST stay lazy. helper.py imports
+    # src.configs.model_configuration, which imports this module — so importing
+    # Helper at the top of this file closes that loop and breaks startup. By the
+    # time this function is CALLED (from the lifespan, after every module is
+    # loaded) the cycle is long since resolved, so the import is safe here.
+    from src.services.utils.helper import Helper
+
     keys = {}
     try:
         docs = await with_timeout(platformApikeyModel.find({}, {"_id": 0, "service": 1, "apikey": 1}).to_list(length=None))
@@ -22,7 +29,7 @@ async def get_platform_apikeys():
             if not (service and encrypted):
                 continue
             try:
-                keys[service] = decrypt(encrypted)
+                keys[service] = Helper.decrypt(encrypted)
             except Exception as e:
                 logger.error(f"Could not decrypt platform apikey for service '{service}': {e}")
     except Exception as error:
