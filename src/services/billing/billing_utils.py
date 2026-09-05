@@ -3,7 +3,6 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from config import Config
 from globals import logger
-from models.mongo_connection import db
 
 from src.configs.constant import billing_config
 from src.configs.plan_registry import DEFAULT_PLAN_CODE, plan_allows, plan_display_name, plan_exists
@@ -217,22 +216,30 @@ def _no_wallet_key(org_id: str) -> str:
 
 
 # --- Org billing plan -----------------------------------------------------
-# Which plan an org is on. Written by Node (org_billing collection + the Redis
-# key) on provision and plan change; read here on the hot path. WHAT a plan
-# includes lives in the billing_plans collection (src/configs/plan_registry.py),
-# not here — this only resolves the code.
+# Which plan an org is on. LAGO IS THE SOURCE OF TRUTH: the org's active
+# subscription names a plan_code, which maps to our slug. Redis caches the
+# answer; a miss asks Lago. There is deliberately no local copy in Mongo —
+# one place to be wrong instead of two, at the cost of putting Lago on the
+# request path when the cache misses.
 #
-# Fail-closed: an org we cannot classify, or one pointing at a plan that does
-# not exist, is treated as DEFAULT_PLAN_CODE (the most restrictive plan we
-# ship). Worst case a paid org briefly sees "upgrade", never the reverse.
+# WHAT a plan includes still lives in the billing_plans collection
+# (src/configs/plan_registry.py); this only resolves which plan.
 #
-# The plan code is validated against the LIVE registry rather than a hardcoded
-# tuple. The old ("free","paid") literals here silently coerced any other value
-# to "free" — so adding a plan in Node without shipping Python first would have
-# restricted every org on it.
+# Fail-closed: an org we cannot classify — no subscription, an unrecognised
+# plan code, or Lago unreachable — is treated as DEFAULT_PLAN_CODE, the most
+# restrictive plan we ship. Worst case a paid org briefly sees "upgrade", never
+# the reverse.
+#
+# Two TTLs, because the two outcomes have very different costs:
+#   * a good answer is cached for a DAY. The plan changes a couple of times a
+#     year and Node deletes the key on every change, so the TTL is only a
+#     safety net for a missed invalidation — an hour just meant needless Lago
+#     traffic.
+#   * a failure is cached for a minute, so a Lago outage costs one call per org
+#     per minute instead of one per request. Same guard as _NO_WALLET_TTL.
 _ORG_PLAN_KEY = "nd_org_billing_plan_"
-_ORG_PLAN_CACHE_TTL = 3600
-_org_billing_collection = db["org_billing"]
+_ORG_PLAN_CACHE_TTL = 86400
+_ORG_PLAN_FAILURE_TTL = 60
 
 
 def _org_plan_key(org_id: str) -> str:
@@ -253,20 +260,46 @@ def _resolve_plan_code(raw, org_id: str) -> str:
 
 
 async def get_org_plan(org_id: str) -> str:
-    """Return the org's plan code, or DEFAULT_PLAN_CODE when it cannot be resolved."""
+    """Return the org's plan code, or DEFAULT_PLAN_CODE when it cannot be resolved.
+
+    Redis first; on a miss, ask Lago and cache the answer. Both outcomes are
+    cached — a failure briefly, so an unreachable Lago cannot turn into one API
+    call per request.
+    """
     try:
         cached = await client.get(_org_plan_key(org_id))
         if cached is not None:
             return _resolve_plan_code(_decode(cached), org_id)
     except Exception as e:
         logger.error(f"[billing] org plan cache read failed for org {org_id}: {e}")
-    plan = DEFAULT_PLAN_CODE
+
+    plan, ttl = DEFAULT_PLAN_CODE, _ORG_PLAN_FAILURE_TTL
     try:
-        doc = await _org_billing_collection.find_one({"org_id": str(org_id)}, {"plan": 1})
-        plan = _resolve_plan_code(doc.get("plan") if doc else None, org_id)
-        await client.set(_org_plan_key(org_id), plan, ex=_ORG_PLAN_CACHE_TTL)
+        # Call-time import: lago_service imports config only, but keeping this
+        # local matches the other lazy imports here and keeps the module's
+        # import graph flat.
+        from src.services.billing.lago_service import get_subscription_plan_slug
+
+        slug = await get_subscription_plan_slug(org_id)
+        if slug:
+            plan, ttl = _resolve_plan_code(slug, org_id), _ORG_PLAN_CACHE_TTL
+        else:
+            # Lago answered, but with nothing usable: no active subscription, or
+            # a plan_code neither service recognises. Short TTL — an org mid
+            # provisioning should not be stuck on the default for a day.
+            logger.warning(
+                f"[billing] Lago has no recognised plan for org {org_id} — using "
+                f"'{DEFAULT_PLAN_CODE}' for {_ORG_PLAN_FAILURE_TTL}s"
+            )
     except Exception as e:
-        logger.error(f"[billing] org plan lookup failed for org {org_id}: {e}")
+        # Lago unreachable. Fail closed and cache briefly so the outage costs
+        # one call per org per minute, not one per request.
+        logger.error(f"[billing] org plan lookup from Lago failed for org {org_id}: {e}")
+
+    try:
+        await client.set(_org_plan_key(org_id), plan, ex=ttl)
+    except Exception as e:
+        logger.error(f"[billing] org plan cache write failed for org {org_id}: {e}")
     return plan
 
 

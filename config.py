@@ -69,6 +69,11 @@ class Config:
     LAGO_API_URL = os.getenv("LAGO_API_URL")
     LAGO_CREDIT_RATE_USD = os.getenv("LAGO_CREDIT_RATE_USD")
     LAGO_API_KEY = os.getenv("LAGO_API_KEY")
+    # Lago plan codes -> our slugs. Python now resolves an org's plan from Lago
+    # directly (Redis cache, Lago on miss), so it needs the same mapping Node
+    # has. Both services must point at the same two plans.
+    LAGO_PLAN_CODE_FREE = os.getenv("LAGO_PLAN_CODE_FREE")
+    LAGO_PLAN_CODE_PAID = os.getenv("LAGO_PLAN_CODE_PAID")
     # Org that owns GTWY_PAUTH_KEY. Node's background jobs (suggestions, gpt
     # memory, canonicalizer, thread titles) call our own platform agents with
     # that key, so those requests authenticate AS this org. Their cost is
