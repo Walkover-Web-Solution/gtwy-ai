@@ -29,9 +29,10 @@ from src.configs.constant import (
     usage_mail_types,
 )
 
-from ..cache_service import acquire_lock, find_in_cache, store_in_cache
+from ..cache_service import acquire_lock, find_in_cache, get_float_in_cache, store_in_cache
 from .apiservice import fetch
 from .limit_ttl_utils import calculate_limit_ttl
+from .period_key import period_key, redis_ttl_for
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ async def _bump_daily_bucket(scope: str, identifier: str, cost: float) -> float:
     return new_total
 
 
-async def _current_usage(scope: str, identifier: str, redis_usage: dict) -> float:
+async def _current_usage(scope: str, identifier: str, redis_usage: dict, reset_period: str | None = None) -> float:
     """Authoritative cumulative usage for the scope (from redis_usage, else cache)."""
     data = redis_usage.get(scope)
     if isinstance(data, dict) and data.get("usage_value") is not None:
@@ -82,6 +83,13 @@ async def _current_usage(scope: str, identifier: str, redis_usage: dict) -> floa
             return float(data["usage_value"])
         except (TypeError, ValueError):
             pass
+
+    # apikey counters are period-keyed and hold a bare number; bridge and folder
+    # still store the legacy JSON blob.
+    if scope == "apikey":
+        counter = f"{redis_keys['apikeyperiodcost_']}{identifier}_{period_key(reset_period)}"
+        return await get_float_in_cache(counter) or 0.0
+
     cached = await find_in_cache(f"{redis_keys[f'{scope}usedcost_']}{identifier}")
     if cached:
         try:
@@ -162,8 +170,10 @@ async def _check_threshold_and_limit(
 ) -> None:
     """Send a threshold (e.g. 80%) email, then a limit-reached (100%) email."""
     percent = (usage_value / limit_value) if limit_value > 0 else 0.0
-    # Markers re-arm each new period: TTL = time until the limit resets.
-    ttl = calculate_limit_ttl(reset_period, setup_date)
+    # Markers re-arm each new period: TTL = time until the limit resets. apikey
+    # windows are calendar-anchored now, so calculate_limit_ttl (which anchors to
+    # the configured start date) would be misaligned for that scope.
+    ttl = redis_ttl_for(reset_period) if scope == "apikey" else calculate_limit_ttl(reset_period, setup_date)
     avg_daily_spend = await _avg_daily_spend(scope, identifier, usage_alert_config["spike_window_days"])
     details = {
         "current_usage": round(usage_value, 6),
@@ -265,7 +275,7 @@ async def evaluate_usage_alerts(parsed_data: dict, redis_usage: dict | None = No
 
             reset_period = scope_limit.get("limit_reset_period") or "monthly"
             setup_date = scope_limit.get("limit_start_date")
-            usage_value = await _current_usage(scope, identifier, redis_usage)
+            usage_value = await _current_usage(scope, identifier, redis_usage, reset_period)
 
             # TEMP debug: shows why an alert did / didn't fire. Remove once verified.
             logger.info(
