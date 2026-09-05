@@ -75,3 +75,9 @@ class Config:
     # charged to the triggering customer in Node — this org must never be
     # wallet-billed or gated for its own internal traffic.
     GTWY_PLATFORM_ORG_ID = os.getenv("GTWY_PLATFORM_ORG_ID")
+    # GTWY's cut, as a percentage added on top of the provider cost when a call
+    # is charged. 10 => a call costing 100 credits at provider prices is billed
+    # as 110. Applied at charge time, so changing it needs no migration and
+    # never rewrites past charges. MUST match Node's GTWY_COMMISSION_PCT, or
+    # background AI jobs are billed at a different rate from main calls.
+    GTWY_COMMISSION_PCT = os.getenv("GTWY_COMMISSION_PCT")

@@ -39,6 +39,39 @@ def _load_credit_rate() -> Decimal | None:
 _CREDIT_RATE = _load_credit_rate()
 
 
+def _load_commission_pct() -> Decimal:
+    """GTWY's cut, as a percentage on top of the provider cost. 0 = charge at cost.
+
+    Unlike the credit rate, an unset value is a legitimate choice (bill at cost),
+    so this defaults to 0 rather than refusing to start. A value that is set but
+    nonsensical DOES refuse: silently falling back to 0 would mean quietly
+    billing at cost for however long it took someone to notice.
+
+    Node applies the identical formula in backgroundJobBilling.service.js. The
+    two MUST hold the same value or background jobs and main calls are priced
+    differently — hence the startup log below, so a mismatch is visible.
+    """
+    raw = Config.GTWY_COMMISSION_PCT
+    if raw is None or str(raw).strip() == "":
+        return Decimal(0)
+    try:
+        pct = Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        raise RuntimeError(f"GTWY_COMMISSION_PCT is not a number ({raw!r})")
+    if pct < 0 or pct > 100:
+        raise RuntimeError(f"GTWY_COMMISSION_PCT must be between 0 and 100 ({raw!r})")
+    return pct
+
+
+_COMMISSION_PCT = _load_commission_pct()
+_COMMISSION_MULTIPLIER = Decimal(1) + (_COMMISSION_PCT / Decimal(100))
+
+logger.info(
+    f"[billing] credit rate ${_CREDIT_RATE} per credit, GTWY commission {_COMMISSION_PCT}% "
+    f"(multiplier {_COMMISSION_MULTIPLIER}). Node must match."
+)
+
+
 def build_llm_usage_event(usage: dict, message_id: str, org_id: str, bridge_id: str | None = None) -> dict | None:
     try:
         raw = (usage or {}).get("expectedCost")
@@ -51,7 +84,13 @@ def build_llm_usage_event(usage: dict, message_id: str, org_id: str, bridge_id: 
                 f"(cost_usd={cost_usd})"
             )
             return None
-        credits = (cost_usd / _CREDIT_RATE).quantize(_CREDIT_QUANTUM, rounding=ROUND_HALF_UP)
+        # Two-step on purpose. base_credits is the provider cost in credits;
+        # credits is what actually leaves the wallet. Rounding base FIRST means
+        # the charged figure is reproducible from base + pct alone, which is what
+        # makes a charge auditable six months later — and it is the same order
+        # Node uses, so the two services cannot disagree by a rounding step.
+        base_credits = (cost_usd / _CREDIT_RATE).quantize(_CREDIT_QUANTUM, rounding=ROUND_HALF_UP)
+        credits = (base_credits * _COMMISSION_MULTIPLIER).quantize(_CREDIT_QUANTUM, rounding=ROUND_HALF_UP)
         # bridge_id keeps ids unique across agent-to-agent frames (which share the
         # request-level message_id); the random suffix keeps them unique when the
         # SAME agent runs more than once in one request (tool loops, A→B→A
@@ -71,8 +110,14 @@ def build_llm_usage_event(usage: dict, message_id: str, org_id: str, bridge_id: 
         "transaction_id": transaction_id,
         "message_id": message_id,
         "org_id": org_id,
+        # What leaves the wallet.
         "credits": str(credits),
+        # The three numbers that explain it. cost_usd stays the REAL provider
+        # cost — metrics, spend alerts and analytics all read it, so the
+        # commission must never be folded into it.
         "cost_usd": str(cost_usd),
+        "base_credits": str(base_credits),
+        "commission_pct": str(_COMMISSION_PCT),
     }
 
 
