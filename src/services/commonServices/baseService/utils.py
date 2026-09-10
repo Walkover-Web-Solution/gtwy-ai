@@ -21,7 +21,6 @@ from src.configs.service_registry import (
     uses_string_tool_choice,
 )
 from src.controllers.rag_controller import get_text_from_vectorsQuery
-from src.db_services.ConfigurationServices import get_skill_content_by_id
 from src.services.billing.billing_utils import build_llm_usage_event
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
