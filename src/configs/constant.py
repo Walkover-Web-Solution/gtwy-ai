@@ -124,6 +124,9 @@ redis_keys = {
     "billing_no_wallet_": "nd_billing_no_wallet_",
     "org_billing_plan_": "nd_org_billing_plan_",
     "blocked_orgs_": "nd_blocked_orgs_",
+    # Gtwy_Browser: which tab belongs to which conversation, and that tab's page refs
+    "gtwy_browser_registry": "nd_gtwy_browser_registry",
+    "gtwy_browser_thread_": "nd_gtwy_browser_thread_",
 }
 
 tag_keys = {
@@ -139,7 +142,7 @@ tag_keys = {
 
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
 
-inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
+inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search", "Gtwy_Browser": "Gtwy_Browser"}
 
 tool_types = {"AGENT": "AGENT"}
 
