@@ -8,6 +8,7 @@ from src.services.utils.common_utils import updateVariablesWithTimeZone
 from src.db_services.ConfigurationServices import transform_agent_config_to_frontend
 
 from .getConfiguration_utils import (
+    add_browser_tool,
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
@@ -228,6 +229,7 @@ async def _prepare_configuration_response(
         built_in_tools or bridges.get("built_in_tools"),
         gtwy_web_search_filters,
     )
+    add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools or bridges.get("built_in_tools"))
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
 

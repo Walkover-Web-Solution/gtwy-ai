@@ -62,6 +62,15 @@ class StreamingService:
             payload["type"] = type
         await self._emit(payload)
 
+    async def emit_browser_handoff(self, live_url: str, message: str, call_id: str = None, session_id: str = None):
+        """Gtwy_Browser asked the user to act in the live browser view (e.g. log in)."""
+        payload = {"event": "browser_handoff", "live_url": live_url, "message": message}
+        if call_id:
+            payload["call_id"] = call_id
+        if session_id:
+            payload["session_id"] = session_id
+        await self._emit(payload)
+
     async def emit_template_response(self, message_id: str, content: dict, metadata: dict | None = None):
         payload = {
             "event": "template_response",
