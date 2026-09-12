@@ -194,10 +194,25 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     }
                 }
             }] if use_env_resolution else []),
+            # Stage 2: Lookup apiCalls directly from connected_tools where type="tools"
             {
                 "$lookup": {
                     "from": "apicalls",
-                    "let": {"fids": {"$ifNull": ["$function_ids", []]}},
+                    "let": {
+                        "fids": {
+                            "$map": {
+                                "input": {
+                                    "$filter": {
+                                        "input": {"$ifNull": ["$connected_tools", []]},
+                                        "as": "ct",
+                                        "cond": {"$eq": ["$$ct.type", "tools"]},
+                                    }
+                                },
+                                "as": "ct",
+                                "in": {"$toString": "$$ct.id"},
+                            }
+                        }
+                    },
                     "pipeline": [
                         {"$match": {"$expr": {"$and": [
                             {"$gt": [{"$size": "$$fids"}, 0]},
@@ -365,7 +380,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     },
                 }
             },
-            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using function_id from config
+            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in 'pre_tools'
             {
                 "$lookup": {
                     "from": "apicalls",
@@ -373,15 +388,10 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                         "pre_tools_ids": {
                             "$map": {
                                 "input": "$pre_tools",
-                                "as": "entry",
+                                "as": "id",
                                 "in": {
-                                    "$convert": {
-                                        "input": "$$entry.config.function_id",
-                                        "to": "objectId",
-                                        "onError": None,
-                                        "onNull": None,
-                                    }
-                                }
+                                    "$convert": {"input": "$$id", "to": "objectId", "onError": None, "onNull": None}
+                                },
                             }
                         }
                     },
@@ -389,139 +399,23 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "as": "pre_tools_data",
                 }
             },
-            # Stage 6.1: Merge title from pre_tools_data into pre_tools entries
+            # Stage 7: Extract agent IDs from connected_tools where type="agent" (temp field, projected out at end)
             {
                 "$addFields": {
-                    "pre_tools": {
+                    "_connected_agent_ids": {
                         "$map": {
-                            "input": "$pre_tools",
-                            "as": "entry",
+                            "input": {
+                                "$filter": {
+                                    "input": {"$ifNull": ["$connected_tools", []]},
+                                    "as": "ct",
+                                    "cond": {"$eq": ["$$ct.type", "agent"]}
+                                }
+                            },
+                            "as": "agent",
                             "in": {
-                                "$mergeObjects": [
-                                    "$$entry",
-                                    {
-                                        "title": {
-                                            "$let": {
-                                                "vars": {
-                                                    "matched_data": {
-                                                        "$arrayElemAt": [
-                                                            {
-                                                                "$filter": {
-                                                                    "input": "$pre_tools_data",
-                                                                    "as": "data",
-                                                                    "cond": {
-                                                                        "$eq": [
-                                                                            "$$data._id",
-                                                                            {"$convert": {"input": "$$entry.config.function_id", "to": "objectId", "onError": None, "onNull": None}}
-                                                                        ]
-                                                                    }
-                                                                }
-                                                            },
-                                                            0
-                                                        ]
-                                                    }
-                                                },
-                                                "in": "$$matched_data.title"
-                                            }
-                                        }
-                                    }
-                                ]
+                                "$convert": {"input": "$$agent.id", "to": "objectId", "onError": None, "onNull": None}
                             }
                         }
-                    }
-                }
-            },
-            # Stage 6.2: Lookup 'reviewer_tools' data from 'apicalls' collection using the ObjectIds in 'settings.reviewer_tools'
-            {
-                "$lookup": {
-                    "from": "apicalls",
-                    "let": {
-                        "reviewer_tools_ids": {
-                            "$map": {
-                                "input": {"$ifNull": ["$settings.review_agent.reviewer_tools", []]},
-                                "as": "id",
-                                "in": {
-                                    "$convert": {"input": "$$id", "to": "objectId", "onError": None, "onNull": None}
-                                }
-                            }
-                        }
-                    },
-                    "pipeline": [{"$match": {"$expr": {"$in": ["$_id", {"$ifNull": ["$$reviewer_tools_ids", []]}]}}}],
-                    "as": "reviewer_tools_data",
-                }
-            },
-            # Stage 6.6: Lookup title from apicalls collection for post_tool.
-            # Match by _id using post_tool.id converted to ObjectId.
-            {
-                "$lookup": {
-                    "from": "apicalls",
-                    "let": {
-                        "post_tool_id_obj": {
-                            "$convert": {
-                                "input": "$post_tool.id",
-                                "to": "objectId",
-                                "onError": None,
-                                "onNull": None,
-                            }
-                        }
-                    },
-                    "pipeline": [
-                        {"$match": {"$expr": {"$and": [
-                            {"$ne": ["$$post_tool_id_obj", None]},
-                            {"$eq": ["$_id", "$$post_tool_id_obj"]},
-                        ]}}},
-                        {"$project": {"_id": 0, "title": 1}},
-                        {"$limit": 1},
-                    ],
-                    "as": "post_tool_meta",
-                }
-            },
-            # Stage 6.7: Merge title into post_tool
-            {
-                "$addFields": {
-                    "post_tool": {
-                        "$cond": [
-                            {"$and": [
-                                {"$ne": ["$post_tool", None]},
-                                {"$gt": [{"$size": "$post_tool_meta"}, 0]}
-                            ]},
-                            {"$mergeObjects": [
-                                "$post_tool",
-                                {"title": {"$arrayElemAt": ["$post_tool_meta.title", 0]}}
-                            ]},
-                            "$post_tool"
-                        ]
-                    }
-                }
-            },
-            # Stage 7: Extract bridge_ids from connected_agents if it exists
-            {
-                "$addFields": {
-                    "connected_agents_bridge_ids": {
-                        "$cond": [
-                            {
-                                "$and": [
-                                    {"$ne": ["$connected_agents", None]},
-                                    {"$ne": ["$connected_agents", {}]},
-                                    {"$eq": [{"$type": "$connected_agents"}, "object"]},
-                                ]
-                            },
-                            {
-                                "$map": {
-                                    "input": {"$objectToArray": "$connected_agents"},
-                                    "as": "agent",
-                                    "in": {
-                                        "$convert": {
-                                            "input": "$$agent.v.bridge_id",
-                                            "to": "objectId",
-                                            "onError": None,
-                                            "onNull": None,
-                                        }
-                                    },
-                                }
-                            },
-                            [],
-                        ]
                     }
                 }
             },
@@ -530,13 +424,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                 "$lookup": {
                     "from": "configurations",
                     "let": {
-                        "bridge_ids": {
-                            "$filter": {
-                                "input": "$connected_agents_bridge_ids",
-                                "as": "id",
-                                "cond": {"$ne": ["$$id", None]},
-                            }
-                        }
+                        "bridge_ids": {"$ifNull": ["$_connected_agent_ids", []]}
                     },
                     "pipeline": [
                         {
@@ -581,13 +469,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                 "$lookup": {
                     "from": "configurations",
                     "let": {
-                        "bridge_ids": {
-                            "$filter": {
-                                "input": "$connected_agents_bridge_ids",
-                                "as": "id",
-                                "cond": {"$ne": ["$$id", None]},
-                            }
-                        }
+                        "bridge_ids": {"$ifNull": ["$_connected_agent_ids", []]}
                     },
                     "pipeline": [
                         {"$match": {"$expr": {"$in": ["$_id", "$$bridge_ids"]}}},
@@ -768,7 +650,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "apikeys_docs": 0,
                     "apikey_object_id_safe": 0,
                     "has_apikeys": 0,
-                    "connected_agents_bridge_ids": 0,
+                    "_connected_agent_ids": 0,
                     "agent_details_docs": 0,
                     "template_ids_to_fetch": 0,
                     "templates_docs": 0,
@@ -1116,8 +998,12 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     bridge_data["pre_tools_data"].append(folder_pre_tool)
                     bridge_data["pre_tools"].append(pre_tool_data_entry)
 
-            # Merge folder_post_tool into bridge_data
-            if folder_result and folder_result[0].get("folder_post_tool"):
+            # Merge folder_post_tool into bridge_data — a bridge/version-level post_tool
+            # (a connected_tools entry of type "post_tool") takes precedence over the folder's.
+            has_version_post_tool = any(
+                isinstance(ct, dict) and ct.get("type") == "post_tool" for ct in bridge_data.get("connected_tools", [])
+            )
+            if not has_version_post_tool and folder_result and folder_result[0].get("folder_post_tool"):
                 bridge_data["post_tool"] = folder_result[0]["folder_post_tool"]
 
             # Merge folder variables_path into bridge's variables_path
