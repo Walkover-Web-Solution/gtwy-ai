@@ -72,8 +72,11 @@ async def open_or_reuse_tab(tkey: str, org_id, bridge_id) -> tuple[object, objec
                 tab = touch_tab(registry, tkey)
                 await save_registry(registry)
                 return browser, page, registry, tab
-            # The tab was closed (reaper, crash, user). Start a clean one for this conversation.
-            logger.info(f"Gtwy_Browser: tab for thread {tkey} is gone; opening a new one")
+            # The tab was closed (reaper, crash, or Steel relaunching Chrome). Start a clean one.
+            # Log the target id so a tab that vanishes mid-conversation can be traced in Steel's logs.
+            logger.info(
+                f"Gtwy_Browser: tab {tab['target_id'][-6:]} for thread {tkey} is gone; opening a new one"
+            )
             drop_tab(registry, tkey)
             await clear_thread_state(tkey)
 

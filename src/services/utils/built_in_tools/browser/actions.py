@@ -29,6 +29,11 @@ class BrowserActionError(Exception):
     """User-facing failure of a single action (bad args, refused input, ...)."""
 
 
+def _is_download(error: Exception) -> bool:
+    text = str(error).lower()
+    return "download is starting" in text or "net::err_aborted" in text
+
+
 class StaleRefError(BrowserActionError):
     pass
 
@@ -73,7 +78,16 @@ async def do_navigate(page, url: str | None):
     if not url:
         raise BrowserActionError("url is required for navigate")
     await ensure_url_allowed(url)
-    await page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATE_TIMEOUT_MS)
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATE_TIMEOUT_MS)
+    except Exception as exc:
+        if _is_download(exc):
+            raise BrowserActionError(
+                "that URL returned a file download instead of a page, which often means the site is "
+                "blocking automated access. Try a different page, or call request_user_action so the "
+                "user can open it themselves"
+            ) from exc
+        raise
     try:
         await page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT_MS)
     except Exception:
