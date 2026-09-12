@@ -71,7 +71,7 @@ async def _request(method: str, path: str, json_body: dict | None = None) -> dic
         async with httpx.AsyncClient(timeout=STEEL_HTTP_TIMEOUT) as client:
             response = await client.request(method, url, json=json_body)
     except httpx.HTTPError as exc:
-        raise SteelError(f"steel unreachable: {exc.__class__.__name__}") from exc
+        raise SteelError(f"steel unreachable: {exc.__class__.__name__}: {str(exc)[:120]}") from exc
     if response.status_code >= 400:
         raise SteelError(f"steel {method} {path} returned {response.status_code}")
     if not response.content:

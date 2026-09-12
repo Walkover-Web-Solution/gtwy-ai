@@ -138,8 +138,18 @@ async def create_isolated_tab(browser) -> tuple[str, str]:
             "Target.createTarget", {"url": "about:blank", "browserContextId": browser_context_id}
         )
         target_id = target["targetId"]
+        # Refuse downloads in this tab. Some sites answer a normal-looking URL with a file, which
+        # would otherwise abort the navigation and leave the agent stuck on that page.
+        try:
+            await cdp.send(
+                "Browser.setDownloadBehavior", {"behavior": "deny", "browserContextId": browser_context_id}
+            )
+        except Exception as exc:
+            logger.warning(f"Gtwy_Browser: could not disable downloads: {exc.__class__.__name__}")
     except Exception as exc:
-        raise BrowserConnectionError(f"could not open a browser tab: {exc.__class__.__name__}") from exc
+        raise BrowserConnectionError(
+            f"could not open a browser tab: {str(exc).strip().splitlines()[0][:160] if str(exc).strip() else exc.__class__.__name__}"
+        ) from exc
 
     deadline = asyncio.get_event_loop().time() + TAB_APPEAR_TIMEOUT_SECONDS
     while asyncio.get_event_loop().time() < deadline:
