@@ -424,8 +424,9 @@ async def _call_reviewer(
             result["historyParams"] = {}
 
     if reviewer_parsed_data.get("type") != "image":
-        reviewer_parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-            reviewer_model, reviewer_service
+        reviewer_parsed_data["tokens"] = await params["token_calculator"].calculate_total_cost(
+            reviewer_model, reviewer_service,
+            provider=((reviewer_parsed_data.get("configuration") or {}).get("provider_config") or {}).get("provider")
         )
         result.setdefault("response", {}).setdefault("usage", {})
         result["response"]["usage"]["cost"] = reviewer_parsed_data["tokens"].get("total_cost") or 0
@@ -511,8 +512,9 @@ async def _rerun_main_agent(
     result.pop("transfer_agent_config", None)
 
     if parsed_data.get("type") != "image":
-        parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(
-            parsed_data["model"], parsed_data["service"]
+        parsed_data["tokens"] = await params["token_calculator"].calculate_total_cost(
+            parsed_data["model"], parsed_data["service"],
+            provider=((parsed_data.get("configuration") or {}).get("provider_config") or {}).get("provider")
         )
         result["response"].setdefault("usage", {})
         result["response"]["usage"]["cost"] = parsed_data["tokens"].get("total_cost") or 0

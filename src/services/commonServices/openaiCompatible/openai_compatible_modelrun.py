@@ -23,8 +23,9 @@ from ..api_executor import execute_api_call
 
 async def openai_compatible_stream(configuration, apiKey, service):
     """Async generator yielding normalised delta dicts for any openai_sdk service."""
-    client = AsyncOpenAI(base_url=base_url(service), api_key=apiKey)
     config = {**configuration}
+    override_base_url = config.pop("base_url_override", None)
+    client = AsyncOpenAI(base_url=override_base_url or base_url(service), api_key=apiKey)
     if supports_stream_usage(service):
         config["stream_options"] = {"include_usage": True}
     emit_reasoning = supports_reasoning(service)
@@ -83,10 +84,12 @@ async def openai_compatible_modelrun(
     api_collection=None,
 ):
     try:
-        client = AsyncOpenAI(base_url=base_url(service), api_key=apiKey)
+        override_base_url = configuration.pop("base_url_override", None) if isinstance(configuration, dict) else None
+        client = AsyncOpenAI(base_url=override_base_url or base_url(service), api_key=apiKey)
 
         async def api_call(config):
             try:
+                config.pop("base_url_override", None)
                 chat_completion = await client.chat.completions.create(**config)
                 return {"success": True, "response": chat_completion.to_dict()}
             except Exception as error:
