@@ -30,6 +30,7 @@ from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
 from src.services.utils.time import SERVICE_TIMEOUTS
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
+from src.services.utils.built_in_tools.browser.tool import call_gtwy_browser
 
 
 def clean_json(data):
@@ -502,6 +503,48 @@ def merge_nested_agent_usage(content, tool_log):
     return merged
 
 
+def _browser_ctx(self, tool_call_key):
+    """Request context handed to the browser tool so it can scope the session per conversation."""
+    return {
+        "org_id": getattr(self, "org_id", None),
+        "bridge_id": getattr(self, "bridge_id", None),
+        "thread_id": getattr(self, "thread_id", None),
+        "sub_thread_id": getattr(self, "sub_thread_id", None),
+        "message_id": getattr(self, "message_id", None),
+        "tool_call_id": tool_call_key,
+        "streamer": getattr(self, "streamer", None) if getattr(self, "stream_mode", False) else None,
+    }
+
+
+async def _run_tool_tasks(tasks):
+    """Run tool coroutines and return results in the order of ``tasks``.
+
+    Everything runs concurrently except Gtwy_Browser actions: they share one browser,
+    so they run one after another while the other tools proceed in parallel.
+    Exceptions are returned in place of results, like ``gather(return_exceptions=True)``.
+    """
+    browser_type = inbuild_tools["Gtwy_Browser"]
+    results = [None] * len(tasks)
+    sequential = []
+    parallel = []
+    for index, (_, tool_data, coroutine) in enumerate(tasks):
+        if tool_data.get("type") == browser_type:
+            sequential.append((index, coroutine))
+        else:
+            parallel.append((index, coroutine))
+
+    gather_task = asyncio.gather(*[c for _, c in parallel], return_exceptions=True) if parallel else None
+    for index, coroutine in sequential:
+        try:
+            results[index] = await coroutine
+        except Exception as exc:
+            results[index] = exc
+    if gather_task is not None:
+        for (index, _), result in zip(parallel, await gather_task, strict=True):
+            results[index] = result
+    return results
+
+
 async def process_data_and_run_tools(codes_mapping, self):
     try:
         self.timer.start()
@@ -589,6 +632,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
                     task = call_firecrawl_scrape(tool_data.get("args"))
+                elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Browser"]:
+                    task = call_gtwy_browser(tool_data.get("args"), _browser_ctx(self, tool_call_key))
                 elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
                     task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 else:
@@ -610,9 +655,7 @@ async def process_data_and_run_tools(codes_mapping, self):
 
         # Execute all tasks concurrently if any exist
         if tasks:
-            task_results = await asyncio.gather(
-                *[task[2] for task in tasks], return_exceptions=True
-            )  # return_exceptions use for the handle the error occurs from the task
+            task_results = await _run_tool_tasks(tasks)
 
             # Process each result
             for i, (tool_call_key, tool_data, _) in enumerate(tasks):
