@@ -166,15 +166,18 @@ async def _prepare_configuration_response(
     # Tool choice
     configuration["tool_choice"] = setup_tool_choice(configuration, bridges, service)
 
-    variables_path_bridge = bridges.get("variables_path", {})
-
-    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(bridges, variables_path_bridge, extra_tools)
+    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(bridges, {}, extra_tools)
     configuration.pop("tools", None)
     configuration["tools"] = tools
 
     RTLayer = True if configuration and "RTLayer" in configuration else False
 
     template_content = await ConfigurationService.get_template_by_id(template_id) if template_id else None
+    
+    connected_tools = bridges.get("connected_tools", [])
+    pre_tools_data_map = {
+        str(pt.get("_id")): pt for pt in bridges.get("pre_tools_data", [])
+    }
 
     # Pre-tools — build list for later processing in chat_multiple_agents
     # Title is already merged into pre_tools entries by the MongoDB pipeline
@@ -195,21 +198,61 @@ async def _prepare_configuration_response(
                 "args": tool_args,
                 "title": entry_title,
             })
-    
-    # Handle post_tool: single field with bridge-level taking precedence over folder-level
-    # The merge is handled in ConfigurationServices pipeline
-    raw_post_tool = bridges.get("post_tool") or {}
+
+    # New format: a connected_tools entry of type "pre_tool"/"custom_function" carries its
+    # own url directly (no apiCalls DB lookup needed) and takes precedence over the legacy list.
+    version_pre_tool_entry = next(
+        (ct for ct in connected_tools if ct.get("type") == "pre_tool" and ct.get("pre_tool_type") == "custom_function"),
+        None,
+    )
+    if version_pre_tool_entry:
+        variable_path = version_pre_tool_entry.get("variable_path", {}) or {}
+        pre_tools_data_for_later.insert(0, {
+            "_type": "custom_function",
+            "config": {
+                "script_id": version_pre_tool_entry.get("id"),
+                "url": version_pre_tool_entry.get("url"),
+                "required": list(variable_path.keys()),
+            },
+            "args": variable_path,
+            "title": version_pre_tool_entry.get("title"),
+        })
+
+    # Handle post_tool: a connected_tools entry of type "post_tool" (bridge/version-level)
+    # carries its own url directly (no apiCalls DB lookup needed) and takes precedence
+    # over the folder-level post_tool merged in by ConfigurationServices.
+    post_tool_entry = next((ct for ct in connected_tools if ct.get("type") == "post_tool"), None)
 
     post_tool_data = None
-    if raw_post_tool:
+    if post_tool_entry:
         post_tool_data = {
-            "script_id": raw_post_tool.get("script_id"),
-            "args": raw_post_tool.get("args", {}),
-            "_id": raw_post_tool.get("id") or raw_post_tool.get("_id"),
-            "title": raw_post_tool.get("title"),
+            "script_id": post_tool_entry.get("id"),
+            "url": post_tool_entry.get("url"),
+            "args": post_tool_entry.get("args", {}),
+            "_id": post_tool_entry.get("id"),
+            "title": post_tool_entry.get("title"),
         }
+    else:
+        # Legacy/folder-level shape: a plain object with script_id/url embedded directly.
+        raw_post_tool = bridges.get("post_tool") or {}
+        if raw_post_tool:
+            post_tool_data = {
+                "script_id": raw_post_tool.get("script_id"),
+                "url": raw_post_tool.get("url"),
+                "args": raw_post_tool.get("args", {}),
+                "_id": raw_post_tool.get("id") or raw_post_tool.get("_id"),
+                "title": raw_post_tool.get("title"),
+            }
 
-    rag_data = bridges.get("doc_ids")
+    # Docs — read directly from connected_tools where type="docs"
+    rag_data = []
+    for entry in connected_tools:
+        if not isinstance(entry, dict) or entry.get("type") != "docs":
+            continue
+        eid = str(entry.get("id", ""))
+        doc = {**entry}
+        doc.setdefault("resource_id", eid)
+        rag_data.append(doc)
     gpt_memory_context = bridges.get("gpt_memory_context")
     gpt_memory = bridges.get("gpt_memory")
 
@@ -221,11 +264,18 @@ async def _prepare_configuration_response(
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
 
-    gtwy_web_search_filters = web_search_filters or bridges.get("gtwy_web_search_filters") or {}
+    # Built-in tools — read directly from connected_tools where type="built_in_tools"
+    built_in_entry = next((ct for ct in connected_tools if ct.get("type") == "built_in_tools"), {}) or {}
+    built_in_from_connected = built_in_entry.get("built_in_tools") or []
+    if isinstance(built_in_from_connected, str):
+        built_in_from_connected = [built_in_from_connected]
+    effective_built_in_tools = built_in_tools or built_in_from_connected
+
+    gtwy_web_search_filters = web_search_filters or built_in_entry.get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
         tools,
         tool_id_and_name_mapping,
-        built_in_tools or bridges.get("built_in_tools"),
+        effective_built_in_tools,
         gtwy_web_search_filters,
     )
     if rag_data:
@@ -234,7 +284,7 @@ async def _prepare_configuration_response(
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
     add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag, variables_path_bridge)
-    web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
+    web_search_filters_value = web_search_filters or built_in_entry.get("web_search_filters") or {}
 
     # Fetch reviewer tools definitions if configured
     reviewer_tools_data = bridges.get("reviewer_tools_data") or []
@@ -245,6 +295,7 @@ async def _prepare_configuration_response(
         if script_id:
             reviewer_tools_resolved.append({
                 "script_id": script_id,
+                "url": tool_doc.get("url"),
                 "title": tool_doc.get("title") or script_id,
                 "_id": str(tool_doc.get("_id", "")),
             })
@@ -278,7 +329,7 @@ async def _prepare_configuration_response(
         "bridge_id": bridges.get("parent_id", bridges.get("_id")),
         "agent_info": bridges.get("agent_info", {}),
         "ai_matching_custom_prompt": bridges.get("agent_info", {}).get("ai_matching_custom_prompt", ""),
-        "built_in_tools": built_in_tools or bridges.get("built_in_tools"),
+        "built_in_tools": effective_built_in_tools,
         "is_embed": bridges.get("folder_type") == "embed",
         "user_id": bridges.get("user_id"),
         "folder_id": bridges.get("folder_id"),

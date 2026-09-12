@@ -1,3 +1,4 @@
+from config import Config
 import asyncio
 import datetime
 import json

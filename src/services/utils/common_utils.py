@@ -68,7 +68,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
                 resolved[param] = agent_variables[param]
         return resolved
 
-    resolved_tools = []
+    # pre_tools: list with single tool at index 0 — resolve args if they contain variable references
     if isinstance(tool_data, list):
         tool = tool_data[0]
     else:
@@ -80,6 +80,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
             "args": resolved_args,
             "config": tool_config
         }
+    resolved_tools = []
     tool_type = tool.get("_type")
     tool_config = tool.get("config", {})
     tool_args_mapping = tool.get("args", {})
@@ -89,6 +90,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
         resolved_tools.append({
             "type": "custom_function",
             "name": tool_config.get("script_id"),
+            "url": tool_config.get("url"),
             "title": tool.get("title"),
             "args": resolved_args,
         })
@@ -99,9 +101,9 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
             "config": tool_config,
             "title": tool.get("title"),
         })
-    
+
     return resolved_tools
-    
+
 async def handle_agent_transfer(
     result, request_body, bridge_configurations, chat_function, current_bridge_id=None, transfer_request_id=None
 ):
@@ -483,16 +485,20 @@ async def handle_pre_tools(parsed_data, custom_config, timer = None):
             timer.start()
 
         tool_type = tool.get("type")
+        tool_id = tool.get("id") or tool.get("name")
         args = dict(tool.get("args", {}))
         args["user"] = parsed_data["user"]
         args["_response_type"] = parsed_data["configuration"]["response_type"]
+
+        # Initialize entry with id for all tool types
+        entry = {"id": tool_id, "type": "pre_tool"}
 
         if tool_type == "custom_function":
             try:
                 _pre_t = _time.time()
                 pre_tool_response = await axios_work(
                     args,
-                    {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
+                    {"url": tool.get("url")},
                 )
                 log_slow_call(f"pre_function {tool.get('name')}", _time.time() - _pre_t, SLOW_CALL_THRESHOLDS["pre_function"])
                 if pre_tool_response.get("status") == 0:
@@ -631,6 +637,8 @@ async def handle_post_tool(parsed_data, result):
         logger.warning("post_tool configured but no script_id / function_name found; skipping")
         return
 
+    tool_url = post_tool_data.get("url")
+
     try:
         args = {
             **dict(post_tool_data.get("args", {})),
@@ -646,7 +654,7 @@ async def handle_post_tool(parsed_data, result):
 
         post_tool_response = await axios_work(
             args,
-            {"url": f"https://flow.sokt.io/func/{script_id}"},
+            {"url": tool_url},
         )
     except Exception as err:
         logger.error(f"post_tool execution error (script_id={script_id}): {err}")
