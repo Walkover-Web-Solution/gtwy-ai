@@ -118,7 +118,15 @@ redis_keys = {
     "dailyusedcost_": "nd_dailyusedcost_",
     "usagealertsent_": "nd_usagealertsent_",
     "usagespikealert_": "nd_usagespikealert_",
+    "billing_credit_balance_": "nd_billing_credit_balance_",
+    "billing_credit_applied_": "nd_billing_credit_applied_",
+    "billing_credit_hold_": "nd_billing_credit_hold_",
+    "billing_no_wallet_": "nd_billing_no_wallet_",
+    "org_billing_plan_": "nd_org_billing_plan_",
     "blocked_orgs_": "nd_blocked_orgs_",
+    # Gtwy_Browser: which tab belongs to which conversation, and that tab's page refs
+    "gtwy_browser_registry": "nd_gtwy_browser_registry",
+    "gtwy_browser_thread_": "nd_gtwy_browser_thread_",
 }
 
 tag_keys = {
@@ -134,7 +142,7 @@ tag_keys = {
 
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
 
-inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search"}
+inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search", "Gtwy_Browser": "Gtwy_Browser"}
 
 tool_types = {"AGENT": "AGENT"}
 
@@ -175,6 +183,11 @@ usage_alert_config = {
     "spike_window_days": 7,         # trailing window used to compute the average daily spend
     "spike_min_history_days": 3,    # require this many past days of data before spike can fire
     "daily_bucket_ttl_days": 8,     # how long each per-day bucket lives (window + buffer)
+}
+
+billing_config = {
+    "reserve_credits_per_request": 50,
+    "reserve_overdraft_floor": -100,
 }
 
 auto_model_tradeoff = {

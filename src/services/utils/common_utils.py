@@ -22,7 +22,12 @@ from src.db_services.metrics_service import (
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
-from src.configs.constant import bridge_ids, redis_keys, alert_types
+from src.configs.constant import bridge_ids, inbuild_tools, redis_keys, alert_types
+from src.services.billing.billing_utils import (
+    apply_billing_events,
+    apply_wallet_fallback,
+    fallback_allowed_on_plan,
+)
 from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
@@ -146,6 +151,22 @@ async def handle_agent_transfer(
     return transfer_result
 
 
+GTWY_BROWSER_MIN_ITERATIONS = 25
+
+
+def _resolve_maximum_iterations(body):
+    """Tool-loop limit for this request.
+
+    Default is 3. When Gtwy_Browser is enabled the browser needs many snapshot/act
+    rounds, so the limit is raised to at least 25 even if the bridge stores the UI
+    default of 3; a larger explicit value still wins.
+    """
+    configured = (body.get("settings") or {}).get("maximum_iterations") or 3
+    if inbuild_tools["Gtwy_Browser"] in (body.get("built_in_tools") or []):
+        return max(int(configured), GTWY_BROWSER_MIN_ITERATIONS)
+    return configured
+
+
 def parse_request_body(request_body):
     body = request_body.get("body", {})
     state = request_body.get("state", {})
@@ -170,6 +191,11 @@ def parse_request_body(request_body):
         "thread_id": body.get("thread_id"),
         "sub_thread_id": body.get("sub_thread_id") or body.get("thread_id"),
         "org_id": state.get("profile", {}).get("org", {}).get("id", "") or body.get("org_id"),
+        "wallet": body.get("wallet", False),
+        # Who the run is billed to (the FIRST agent's owner) — propagated
+        # unchanged into nested/transfer frames.
+        "billing_attribution": body.get("billing_attribution") or {},
+        "org_billing_plan": body.get("org_billing_plan"),
         "user": body.get("user"),
         "original_user": body.get("user"),
         "tools": body.get("configuration", {}).get("tools"),
@@ -221,7 +247,7 @@ def parse_request_body(request_body):
             for url in body.get("user_urls", [])
             if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
         ],
-        "maximum_iterations": body.get("settings", {}).get("maximum_iterations") or 3,
+        "maximum_iterations": _resolve_maximum_iterations(body),
         "tokens": {},
         "memory": "",
         "bridge_summary": body.get("bridge_summary"),
@@ -836,6 +862,7 @@ def build_service_params(
         "variables_path": parsed_data["variables_path"],
         "message_id": parsed_data["message_id"],
         "bridgeType": parsed_data["bridgeType"],
+        "billing_attribution": parsed_data.get("billing_attribution") or {},
         "tool_id_and_name_mapping": parsed_data["tool_id_and_name_mapping"],
         "reasoning_model": parsed_data["reasoning_model"],
         "memory": memory,
@@ -935,9 +962,12 @@ async def _update_history_redis(dataset, history_params, version_id, thread_info
 
     thread_id = thread_info.get("thread_id")
     sub_thread_id = thread_info.get("sub_thread_id")
-    conversations = thread_info.get("result", [])
+    conversations = thread_info.get("result", []) or []
 
-    if dataset and "error" not in dataset[0] and conversations:
+    # Seed the cache on the first turn too. Previously an empty history skipped this, so a brand
+    # new thread cached nothing and its second turn had to come from Postgres, which is only
+    # written by the Node log-queue worker. Without that worker the thread lost all memory.
+    if dataset and "error" not in dataset[0] and thread_id:
         await save_conversations_to_redis(conversations, version_id, thread_id, sub_thread_id, history_params)
 
     if history_params and history_params.get("bridge_id"):
@@ -1188,6 +1218,9 @@ async def process_background_tasks(
     await sub_queue_obj.publish_message(data)
 
     await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_entries}))
+
+    if data.get("billing"):
+        await apply_billing_events(data["billing"])
 
 async def process_background_tasks_for_error(parsed_data, error):
     # Primary-agent sub-tasks inside plan mode skip per-call history.
@@ -1713,15 +1746,21 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")
             fall_back = parsed_data.get("fall_back")
 
-            if fall_back and fall_back.get("is_enable", False):
+            # Streaming is the common chat path and this fallback used to skip
+            # every billing check the non-streaming one at common.py does: no plan
+            # check, no platform-key swap, no wallet flag flip and no capture of
+            # the failed primary's cost. So a wallet run could fall back onto any
+            # configured model, billed to the wallet, on the ORIGINAL service's
+            # credential. Kept in lockstep with common.py from here.
+            if fall_back and fall_back.get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
                 try:
                     fallback_model = fall_back.get("model", parsed_data["model"])
                     fallback_service = fall_back.get("service", parsed_data["service"])
                     parsed_data["model"] = fallback_model
                     parsed_data["service"] = fallback_service
                     parsed_data["configuration"]["model"] = fallback_model
-                    if fall_back.get("apikey"):
-                        parsed_data["apikey"] = fall_back["apikey"]
+                    # Same helper as common.py — the two paths cannot drift.
+                    apply_wallet_fallback(parsed_data, fall_back, fallback_service, fallback_model)
 
                     fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
                         parsed_data["model"], parsed_data["configuration"], parsed_data["service"]

@@ -92,7 +92,8 @@ async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMe
             "actions": actions,
             "bridge_summary": bridges.get("bridge_summary"),
         }
-        db_config = await add_configuration_data_to_body(request=request)
+        # Body already validated as ChatbotSendMessageRequest; skip schema re-validation.
+        db_config = await add_configuration_data_to_body(schema_class=None)(request=request)
 
         return await chat_completion(request=request, db_config=db_config)
     except HTTPException as http_error:
