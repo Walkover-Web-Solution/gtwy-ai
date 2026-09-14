@@ -40,6 +40,12 @@ HANDOFF_INSTRUCTIONS = (
 )
 
 
+def _reason(exc: Exception) -> str:
+    """A short, readable cause. Playwright calls every error "Error", so use its message."""
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+    return text[:200]
+
+
 def _err(message: str, **extra) -> dict:
     return {"response": {"error": message, **extra}, "metadata": {"type": "function"}, "status": 0}
 
@@ -55,7 +61,7 @@ async def call_gtwy_browser(args: dict | None, ctx: dict | None) -> dict:
         return _err(f"browser action timed out after {TOOL_TIMEOUT_SECONDS}s; try snapshot again")
     except Exception as exc:  # the tool loop expects a dict, never an exception
         logger.error(f"Gtwy_Browser: unexpected failure: {exc.__class__.__name__}: {exc}")
-        return _err(f"browser tool failed: {exc.__class__.__name__}")
+        return _err(f"browser tool failed: {_reason(exc)}")
 
 
 async def _run(args: dict, ctx: dict) -> dict:
@@ -125,7 +131,7 @@ async def _run(args: dict, ctx: dict) -> dict:
         if is_timeout_error(exc):
             return _err("timeout: the page did not respond in time; call snapshot to see its current state")
         logger.error(f"Gtwy_Browser: action {action} failed: {exc.__class__.__name__}: {exc}")
-        return _err(f"browser action failed: {exc.__class__.__name__}")
+        return _err(f"browser action failed: {_reason(exc)}")
 
     if new_ref_map is not None:
         state["ref_map"] = new_ref_map
