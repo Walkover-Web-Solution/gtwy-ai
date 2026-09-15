@@ -189,6 +189,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
             }),
             "expected_cost": data_object.get("expectedCost", 0),
             "cost": data_object.get("cost_breakdown") or {},
+            "credits": data_object.get("credits", 0),
         },
         "variables": data_object.get("variables") or {},
         "latency": latency_data,
