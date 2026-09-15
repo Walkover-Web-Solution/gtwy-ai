@@ -10,9 +10,20 @@ from google.genai import types
 
 from globals import *
 from globals import logger, traceback
-from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, service_name
-from src.configs.service_registry import has_openai_choices_shape, uses_string_tool_choice
+from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, tool_types
+from src.configs.service_registry import (
+    has_anthropic_shape,
+    has_gemini_shape,
+    has_openai_choices_shape,
+    has_openai_responses_shape,
+    reasoning_extra_body,
+    reasoning_param_style,
+    uses_string_tool_choice,
+)
 from src.controllers.rag_controller import get_text_from_vectorsQuery
+from decimal import Decimal
+
+from src.services.billing.billing_utils import build_hit_fee_event, build_llm_usage_event
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
 from src.services.mcp_gateway.client import call_mcp_tool
@@ -20,6 +31,7 @@ from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
 from src.services.utils.time import SERVICE_TIMEOUTS
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
+from src.services.utils.built_in_tools.browser.tool import call_gtwy_browser
 
 
 def clean_json(data):
@@ -114,11 +126,11 @@ def validate_tool_call(service, response):
         case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
             tool_calls = response.get('choices', [])[0].get('message', {}).get("tool_calls", [])
             return len(tool_calls) > 0 if tool_calls is not None else False
-        case "openai":
+        case s if has_openai_responses_shape(s):
             return any(output.get("type") == "function_call" for output in response.get("output", []))
-        case "anthropic":
+        case s if has_anthropic_shape(s):
             return response.get('stop_reason') == 'tool_use'
-        case 'gemini':
+        case s if has_gemini_shape(s):
             candidates = response.get('candidates', [])
             if not candidates:
                 return False
@@ -164,6 +176,25 @@ def resolve_url_params(url, method, data, query_param_keys=None):
     return resolved_url, query_params or None, data or None
 
 
+def get_saved_tool_response(self, tool_name, args):
+    """
+    Look up a saved tool response for a testcase run instead of hitting the real tool.
+    Matches on tool name + args and returns the first saved response that matches every
+    time (repeated calls with the same args get the same response). If nothing matches,
+    returns an error payload so the model sees a tool failure (same shape a real tool
+    error would have) and the run continues instead of aborting.
+    """
+    saved_tool_entry = (self.testcase_tools_response or {}).get(tool_name) or {}
+    saved_responses = saved_tool_entry.get("recordings") or []
+    requested_args = args or {}
+
+    for saved_response in saved_responses:
+        if (saved_response.get("args") or {}) == requested_args:
+            return saved_response.get("response")
+
+    return {"error": f"No saved tool response found for '{tool_name}' with args {args}"}
+
+
 async def axios_work(data, function_payload):
     try:
         method = function_payload.get("method", "POST")
@@ -192,7 +223,7 @@ def disable_tool_call(configuration: dict, service: str):
     if uses_string_tool_choice(service):
         configuration["tool_choice"] = "none"
 
-    elif service == service_name["gemini"]:
+    elif has_gemini_shape(service):
         # Disabling Tool Call
         configuration["config"].tool_config = types.ToolConfig(
             function_calling_config=types.FunctionCallingConfig(
@@ -204,7 +235,7 @@ def disable_tool_call(configuration: dict, service: str):
             disable=True
         )
 
-    elif service == service_name["anthropic"]:
+    elif has_anthropic_shape(service):
         configuration["tool_choice"] = {"type": "none"}
 
 def tool_call_formatter(configuration: dict, service: str, variables: dict, variables_path: dict) -> dict:  # changes
@@ -239,7 +270,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
         ]
         return data_to_send
 
-    elif service == service_name['gemini']:
+    elif has_gemini_shape(service):
         gemini_tools = []
         function_declarations = [
             {
@@ -265,7 +296,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             gemini_tools.append(types.Tool(function_declarations=function_declarations))
 
         return gemini_tools
-    elif service == service_name['openai']:
+    elif has_openai_responses_shape(service):
         data_to_send =  [
             {
                 "type": "function",
@@ -290,7 +321,7 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
         return data_to_send
-    elif service == service_name["anthropic"]:
+    elif has_anthropic_shape(service):
         return [
             transformed_tool
             if transformed_tool["name"] == "JSON_Schema_Response_Format"
@@ -314,43 +345,58 @@ def tool_call_formatter(configuration: dict, service: str, variables: dict, vari
             for transformed_tool in configuration.get("tools", [])
         ]
 
+def _apply_summary_flag_reasoning(service: str, new_config: dict) -> None:
+    if isinstance(new_config.get("reasoning"), dict):
+        new_config["reasoning"]["summary"] = "auto"
+
+
+def _apply_thinking_config_reasoning(service: str, new_config: dict) -> None:
+    effort = new_config["reasoning"].get("effort", "medium")
+    new_config["thinking_config"] = types.ThinkingConfig(
+        include_thoughts=True,
+        thinking_level=effort
+    )
+    new_config.pop("reasoning", None)
+
+
+def _apply_output_config_effort_reasoning(service: str, new_config: dict) -> None:
+    new_config["thinking"] = {"type": "adaptive"}
+    effort = new_config["reasoning"].get("effort", "medium")
+    if new_config.get("output_config"):
+        new_config["output_config"]["effort"] = effort
+    else:
+        new_config["output_config"] = {"effort": effort}
+    new_config.pop("reasoning", None)
+
+
+def _apply_reasoning_effort(service: str, new_config: dict) -> None:
+    effort = new_config["reasoning"].get("effort", "medium")
+    new_config["reasoning_effort"] = effort
+    new_config.pop("reasoning", None)
+
+
+def _apply_reasoning_effort_extra_body(service: str, new_config: dict) -> None:
+    _apply_reasoning_effort(service, new_config)
+    extra_body = dict(new_config.get("extra_body") or {})
+    extra_body.update(reasoning_extra_body(service))
+    new_config["extra_body"] = extra_body
+
+
+_REASONING_STYLE_HANDLERS = {
+    "summary_flag": _apply_summary_flag_reasoning,
+    "thinking_config": _apply_thinking_config_reasoning,
+    "output_config_effort": _apply_output_config_effort_reasoning,
+    "reasoning_effort": _apply_reasoning_effort,
+    "reasoning_effort_extra_body": _apply_reasoning_effort_extra_body,
+}
+
+
 def reasoning_formatter(service: str, new_config: dict) -> None:
-    if service == service_name["openai"]:
-        if isinstance(new_config.get("reasoning"), dict):
-            new_config["reasoning"]["summary"] = "auto"
-
-    elif service == service_name["gemini"]:
-        effort = new_config["reasoning"].get("effort", "medium")
-        new_config["thinking_config"] = types.ThinkingConfig(
-            include_thoughts=True,
-            thinking_level=effort
-        )
-        new_config.pop("reasoning", None)
-
-    elif service == service_name["anthropic"]:
-        new_config["thinking"] = {"type": "adaptive"}
-        effort = new_config["reasoning"].get("effort", "medium")
-        if new_config.get("output_config"):
-            new_config["output_config"]["effort"] = effort
-        else:
-            new_config["output_config"] = {"effort": effort}
-
-        new_config.pop("reasoning", None)
-
-    elif service == service_name["groq"]:
-        effort = new_config["reasoning"].get("effort", "medium")
-        new_config["reasoning_effort"] = effort
-        new_config.pop("reasoning", None)
-
-    elif service in (service_name["deepseek"], service_name["minimax"]):
-        effort = new_config["reasoning"].get("effort", "medium")
-        new_config["reasoning_effort"] = effort
-        extra_body = dict(new_config.get("extra_body") or {})
-        extra_body["thinking"] = {"type": "enabled"}
-        new_config["extra_body"] = extra_body
-        new_config.pop("reasoning", None)
-
-    # Grok, OpenRouter, Mistral, AI-ML do not support Reasoning from our side
+    """Apply the service's reasoning/thinking param shape, driven by its
+    DB-configured `reasoning_param_style` (None means unsupported)."""
+    handler = _REASONING_STYLE_HANDLERS.get(reasoning_param_style(service))
+    if handler:
+        handler(service, new_config)
 
 
 async def send_request(url, data, method, headers):
@@ -390,7 +436,114 @@ async def sendResponse(response_format, data, success=False, variables=None, met
             data_to_send["variables"] = variables
             if meta:
                 data_to_send["meta"] = meta
-            return await send_request(**response_format["cred"], method="POST", data=data_to_send)
+            webhook_response = await send_request(**response_format["cred"], method="POST", data=data_to_send)
+            _attach_webhook_response(response_format, webhook_response)
+            return webhook_response
+
+
+def _attach_webhook_response(response_format, webhook_response):
+    """Keep what the customer's webhook replied, on the response_format dict.
+
+    Mutates the caller's dict by design: callers pass parsed_data["response_format"],
+    which _attach_sub_thread_extras copies into conversation_log_data, so the reply
+    reaches the row of whichever path sent it. A locally built response_format
+    (alerts, batch) just drops it.
+
+    `webhook_response` is send_request's result: fetch's (body, headers) on a 2xx,
+    else {"error", "details"} — non-2xx included, since fetch raises on >=300.
+    Headers are noise for a log row, so only the body is kept.
+    """
+    try:
+        # A webhook that replies with a non-JSON body (bare "OK", empty 200)
+        # makes fetch raise inside send_request, so the error dict lands here
+        # too — worth storing as-is: it says the delivery result either way.
+        response_format["webhook_response"] = (
+            webhook_response[0] if isinstance(webhook_response, tuple) else webhook_response
+        )
+    except Exception as e:
+        logger.error(f"Failed to record webhook response: {e}")
+
+
+def merge_nested_agent_usage(content, tool_log):
+    """Fold a nested agent's own tokens/cost into its tools_data entry.
+
+    Call only for AGENT tools. A nested agent runs a full completion of its own, so
+    it has tokens, cost and a service/model of its own that the parent's
+    token_calculator never sees. `tool_log` is this agent's entry from the
+    tools_call_data run_tool just returned, whose "data" still holds the untrimmed
+    call_gtwy_agent result: reply, service/model, usage and the agent's own
+    tools_data. `content` is what the model was told, returned unchanged as the
+    fallback when the log has no usable reply to build on.
+
+    Usage is passed along whole rather than field-picked, so cached/reasoning/
+    cache-write tokens and anything a future service starts reporting come along
+    for free; it is empty whenever the nested run reported none.
+    """
+    # "data" is `result or response`, so a gathered exception lands there as the
+    # Exception itself, and a failed agent returns "response" as a plain error
+    # string — neither is a mapping. Fall back to what the model was told.
+    data = tool_log.get("data")
+    reply = data.get("response") if isinstance(data, dict) else None
+    if not isinstance(reply, dict):
+        return content
+
+    # service/model say what the usage below was priced against — a nested agent
+    # can run on a different pair than its caller. type marks the entry as an agent
+    # so a reader can tell it apart from an ordinary tool result.
+    merged = {
+        **reply,
+        "type": tool_log.get("type"),
+        "service": data.get("service"),
+        "model": data.get("model"),
+        "usage": dict(data.get("usage") or {}),
+    }
+    # An agent that called agents of its own carries them in its own tools_data;
+    # keep that tree so cost stays attributable per level.
+    if data.get("tools_data"):
+        merged["tools_data"] = data["tools_data"]
+    return merged
+
+
+def _browser_ctx(self, tool_call_key):
+    """Request context handed to the browser tool so it can scope the session per conversation."""
+    return {
+        "org_id": getattr(self, "org_id", None),
+        "bridge_id": getattr(self, "bridge_id", None),
+        "thread_id": getattr(self, "thread_id", None),
+        "sub_thread_id": getattr(self, "sub_thread_id", None),
+        "message_id": getattr(self, "message_id", None),
+        "tool_call_id": tool_call_key,
+        "streamer": getattr(self, "streamer", None) if getattr(self, "stream_mode", False) else None,
+    }
+
+
+async def _run_tool_tasks(tasks):
+    """Run tool coroutines and return results in the order of ``tasks``.
+
+    Everything runs concurrently except Gtwy_Browser actions: they share one browser,
+    so they run one after another while the other tools proceed in parallel.
+    Exceptions are returned in place of results, like ``gather(return_exceptions=True)``.
+    """
+    browser_type = inbuild_tools["Gtwy_Browser"]
+    results = [None] * len(tasks)
+    sequential = []
+    parallel = []
+    for index, (_, tool_data, coroutine) in enumerate(tasks):
+        if tool_data.get("type") == browser_type:
+            sequential.append((index, coroutine))
+        else:
+            parallel.append((index, coroutine))
+
+    gather_task = asyncio.gather(*[c for _, c in parallel], return_exceptions=True) if parallel else None
+    for index, coroutine in sequential:
+        try:
+            results[index] = await coroutine
+        except Exception as exc:
+            results[index] = exc
+    if gather_task is not None:
+        for (index, _), result in zip(parallel, await gather_task, strict=True):
+            results[index] = result
+    return results
 
 
 async def process_data_and_run_tools(codes_mapping, self):
@@ -416,7 +569,24 @@ async def process_data_and_run_tools(codes_mapping, self):
             display_tool_name = tool_mapping.get("mcp_tool") if tool_mapping.get("type") == "MCP" else display_mcp_tool_name(name)
             tool_data = {**tool, **tool_mapping, "name": name, "model_tool_name": original_name, "display_tool_name": display_tool_name}
 
-            if not tool_data.get("response"):
+            if self.run_testcase and name in (self.testcase_tools_response or {}):
+                # Testcase run with a saved response for this tool: replay it instead
+                # of hitting the real tool (DB write / Sheet update / webhook, etc.).
+                saved_response = get_saved_tool_response(self, name, tool_data.get("args") or {})
+                responses.append(
+                    {
+                        "tool_call_id": tool_call_key,
+                        "role": "tool",
+                        "name": tool["name"],
+                        "content": json.dumps(saved_response),
+                    }
+                )
+                tool_call_logs[tool_call_key] = {
+                    **tool,
+                    "name": tool_data.get("display_tool_name"),
+                    "response": saved_response,
+                }
+            elif not tool_data.get("response"):
                 # if function is present in db/NO response, create task for async processing
                 if self.tool_id_and_name_mapping[name].get("type") == "RAG":
                     # Get the resource_to_collection_mapping from tool_id_and_name_mapping
@@ -429,13 +599,15 @@ async def process_data_and_run_tools(codes_mapping, self):
                         owner_id=self.owner_id,
                         resource_to_collection_mapping=resource_to_collection_mapping,
                     )
-                elif self.tool_id_and_name_mapping[name].get("type") == "AGENT":
+                elif self.tool_id_and_name_mapping[name].get("type") == tool_types["AGENT"]:
                     agent_args = {
                         "org_id": self.org_id,
                         "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
                         "user": tool_data.get("args").get("_query"),
                         "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
-                        "message_id": self.message_id
+                        "message_id": self.message_id,
+                        # The child agent bills to the SAME owner as this run.
+                        "billing_attribution": self.billing_attribution,
                     }
 
                     if self.stream_mode and self.streamer:
@@ -461,6 +633,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
                     task = call_firecrawl_scrape(tool_data.get("args"))
+                elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Browser"]:
+                    task = call_gtwy_browser(tool_data.get("args"), _browser_ctx(self, tool_call_key))
                 elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
                     task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 else:
@@ -482,9 +656,7 @@ async def process_data_and_run_tools(codes_mapping, self):
 
         # Execute all tasks concurrently if any exist
         if tasks:
-            task_results = await asyncio.gather(
-                *[task[2] for task in tasks], return_exceptions=True
-            )  # return_exceptions use for the handle the error occurs from the task
+            task_results = await _run_tool_tasks(tasks)
 
             # Process each result
             for i, (tool_call_key, tool_data, _) in enumerate(tasks):
@@ -553,7 +725,7 @@ def make_code_mapping_by_service(responses, service):
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
 
-        case 'gemini':
+        case s if has_gemini_shape(s):
             for part in responses['candidates'][0]["content"]["parts"]:
                 function_call = part.get('function_call') if isinstance(part, dict) else None
                 if function_call:
@@ -567,7 +739,7 @@ def make_code_mapping_by_service(responses, service):
                     }
                     function_list.append(name)
 
-        case 'openai':
+        case s if has_openai_responses_shape(s):
 
             for tool_call in [output for output in responses['output'] if output.get('type') == 'function_call']:
                 name = tool_call['name']
@@ -579,7 +751,7 @@ def make_code_mapping_by_service(responses, service):
                     error = True
                 codes_mapping[tool_call["id"]] = {"name": name, "args": args, "error": error}
                 function_list.append(name)
-        case "anthropic":
+        case s if has_anthropic_shape(s):
             for tool_call in [
                 item for item in responses["content"] if item["type"] == "tool_use"
             ]:  # Skip the first item
@@ -628,9 +800,51 @@ async def make_request_data(request: Request):
     return result
 
 
+def compute_billing_events(parsed_data, history_params):
+    cached = parsed_data.get("_billing")
+    if cached is not None:
+        return cached
+
+    billing_message_id = history_params.get("message_id") or parsed_data.get("message_id")
+
+    attribution = parsed_data.get("billing_attribution") or {}
+    payer = {
+        "user_id": attribution.get("user_id") or parsed_data.get("user_id"),
+        "folder_id": attribution.get("folder_id") or parsed_data.get("folder_id"),
+        "is_embed": bool(attribution.get("is_embed")),
+    }
+
+    billable_usages = []
+    if parsed_data.get("wallet"):
+        billable_usages.append(parsed_data.get("usage"))
+    if parsed_data.get("_wallet_primary_cost"):
+        billable_usages.append({"expectedCost": parsed_data["_wallet_primary_cost"]})
+    billing_events = [
+        event
+        for usage in billable_usages
+        if (event := build_llm_usage_event(usage, billing_message_id, parsed_data.get("org_id"), parsed_data.get("bridge_id")))
+    ]
+
+    if parsed_data.get("wallet") or parsed_data.get("_wallet_primary_cost"):
+        hit_type = "embed" if payer["is_embed"] else ("chatbot" if parsed_data.get("bridgeType") else "api")
+        fee_event = build_hit_fee_event(billing_message_id, parsed_data.get("org_id"), hit_type)
+        if fee_event:
+            billing_events.append(fee_event)
+
+    if isinstance(parsed_data.get("usage"), dict):
+        parsed_data["usage"]["credits"] = float(sum((Decimal(e["credits"]) for e in billing_events), Decimal(0)))
+
+    parsed_data["_billing"] = {"events": billing_events, "payer": payer, "message_id": billing_message_id}
+    return parsed_data["_billing"]
+
+
 async def make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info=None):
     suggestion_content = {"data": {"content": {}}}
     suggestion_content["data"]["content"] = result.get("historyParams", {}).get("message")
+
+    history_params = result.get("historyParams", {})
+    billing = compute_billing_events(parsed_data, history_params)
+    billing_events, payer, billing_message_id = billing["events"], billing["payer"], billing["message_id"]
 
     # Extract user and assistant messages for Hippocampus
     user_message = parsed_data.get("user", "")
@@ -710,6 +924,19 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "is_cache_hit": parsed_data.get("is_cache_hit", False),
             "resource_id": parsed_data.get("cache_hit_resource_id", None)
         },
+        # Who pays for the background AI jobs this response triggers (chatbot
+        # suggestions, gpt memory, agent-memory canonicalizer, sub-thread title).
+        # Those run in Node on OUR platform agents with OUR key, so Node needs the
+        # payer and the message_id to attribute the charge. One block for all of
+        # them: same payer, same request — copying this into each job payload
+        # would drift, and save_agent_memory carries no org_id at all today.
+        # Gated on `wallet`: a customer on their own API key is never charged for
+        # background work. None tells Node to skip billing entirely.
+        "background_billing": {
+            "org_id": parsed_data.get("org_id"),
+            "message_id": billing_message_id,
+            **payer,
+        } if parsed_data.get("wallet") else None,
         "type": parsed_data.get("type"),
         "save_files_to_redis": {
             "thread_id": parsed_data.get("thread_id"),
@@ -730,6 +957,17 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "thread_id": parsed_data.get("thread_id"),
             "service": parsed_data.get("service"),
         },
+        "billing": [
+            {
+                "model": history_params.get("model") or parsed_data.get("model"),
+                "service": parsed_data.get("service"),
+                "bridge_id": parsed_data.get("bridge_id"),
+                "thread_id": parsed_data.get("thread_id"),
+                **payer,
+                **event,
+            }
+            for event in billing_events
+        ] if billing_events else None,
     }
 
     return data
@@ -776,10 +1014,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
                                 service_tier=None, accumulated_reasoning=None):
     """Build a complete response dict from streamed data, matching the shape of each service's non-stream response."""
     full_text = "".join(accumulated_content)
-    if service in [service_name["groq"], service_name["grok"], service_name["deepseek"], 
-                   service_name["open_router"], service_name["mistral"],
-                   service_name["neev_cloud"], service_name["moonshot"],
-                   service_name["minimax"]]:
+    if has_openai_choices_shape(service):
         message = {"role": "assistant", "content": full_text, "tool_calls": final_tool_calls or []}
         if accumulated_reasoning:
             message["reasoning_content"] = "".join(accumulated_reasoning)
@@ -792,7 +1027,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
             "model": configuration.get("model", ""),
             "usage": final_usage,
         }
-    elif service == service_name["anthropic"]:
+    elif has_anthropic_shape(service):
         content = [{"type": "text", "text": full_text}] if full_text else []
         if final_tool_calls:
             content += final_tool_calls
@@ -806,7 +1041,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
             "stop_sequence": None,
             "usage": final_usage,
         }
-    elif service == service_name["gemini"]:
+    elif has_gemini_shape(service):
         parts = [{"text": full_text}] if full_text else []
         if final_tool_calls:
             parts += [{"function_call": tc} for tc in final_tool_calls]
@@ -814,7 +1049,7 @@ def build_accumulated_response(service, configuration, message_id, accumulated_c
             "candidates": [{"content": {"parts": parts, "role": "model"}, "finish_reason": final_finish_reason}],
             "usage_metadata": final_usage,
         }
-    elif service == service_name["openai"]:
+    elif has_openai_responses_shape(service):
         output = list((last_delta or {}).get("output") or [])
         if not output:
             output = [{"type": "message", "content": [{"type": "output_text", "text": full_text}]}]

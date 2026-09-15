@@ -84,6 +84,10 @@ async def call_gtwy_agent(args):
         request_body["variables"] = variables
         request_body["org_id"] = org_id
         request_body["bridge_configurations"] = bridge_configurations
+        # Placed AFTER the config merge so the parent's attribution (who pays
+        # for the whole run) survives into the child frame.
+        if args.get("billing_attribution"):
+            request_body["billing_attribution"] = args["billing_attribution"]
         request_body["configuration"] = {**(request_body.get("configuration") or {})}
         request_body["configuration"]["stream"] = True if nested_stream_call else False
         if nested_stream_call:
@@ -112,7 +116,8 @@ async def call_gtwy_agent(args):
         if not response_data.get("success", True):
             raise Exception(response_data.get("message", "Unknown error"))
 
-        data_section = response_data.get("response", {}).get("data", {})
+        response_section = response_data.get("response", {}) or {}
+        data_section = response_section.get("data", {})
         result = data_section.get("content", "")
         message_id = data_section.get("message_id", "")
         resolved_version_id = primary_config.get("version_id", None)
@@ -132,8 +137,23 @@ async def call_gtwy_agent(args):
             else:
                 parsed_result = {"data": parsed_result, "image_urls": image_urls}
 
+        # The nested agent runs a full completion of its own, so it carries its own
+        # token/cost usage, the service/model that produced it, and its own
+        # tools_data if it called agents/tools in turn. Surface all of it so the
+        # parent can fold it into its tools_data entry for this agent. Embed callers
+        # get usage stripped upstream, so it can legitimately come back empty.
+        #
+        # The agent may run on a different service/model than its caller, and that
+        # is what its cost was priced against — so report the pair, not just tokens.
+        # The response is stamped with the model actually sent to the provider (see
+        # set_request_model), which is what auto model select / per-request overrides
+        # resolve to — prefer it over the configured one.
         return {
             "response": parsed_result,
+            "service": primary_config.get("service"),
+            "model": data_section.get("model"),
+            "usage": response_section.get("usage") or {},
+            "tools_data": data_section.get("tools_data") or {},
             "metadata": {
                 "agent_id": bridge_id,
                 "version_id": resolved_version_id,

@@ -61,8 +61,38 @@ class Config:
     HIPPOCAMPUS_API_KEY = os.getenv("HIPPOCAMPUS_API_KEY")
     HIPPOCAMPUS_COLLECTION_ID = os.getenv("HIPPOCAMPUS_COLLECTION_ID")
     FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
+    # Gtwy_Browser (self-hosted Steel browser)
+    STEEL_API_URL = os.getenv("STEEL_API_URL")
     OTEL_SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME")
     PROFILES_SERVER_ADDRESS = os.getenv("PROFILES_SERVER_ADDRESS")
     OTEL_EXPORTER_OTLP_PROTOCOL = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
     OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
     NOT_DIAMOND_API_KEY = os.getenv("NOT_DIAMOND_API_KEY")
+    LAGO_API_URL = os.getenv("LAGO_API_URL")
+    LAGO_CREDIT_RATE_USD = os.getenv("LAGO_CREDIT_RATE_USD")
+    LAGO_API_KEY = os.getenv("LAGO_API_KEY")
+    # Lago plan codes -> our slugs. Python now resolves an org's plan from Lago
+    # directly (Redis cache, Lago on miss), so it needs the same mapping Node
+    # has. Both services must point at the same two plans.
+    LAGO_PLAN_CODE_FREE = os.getenv("LAGO_PLAN_CODE_FREE")
+    LAGO_PLAN_CODE_PAID = os.getenv("LAGO_PLAN_CODE_PAID")
+    # Org that owns GTWY_PAUTH_KEY. Node's background jobs (suggestions, gpt
+    # memory, canonicalizer, thread titles) call our own platform agents with
+    # that key, so those requests authenticate AS this org. Their cost is
+    # charged to the triggering customer in Node — this org must never be
+    # wallet-billed or gated for its own internal traffic.
+    GTWY_PLATFORM_ORG_ID = os.getenv("GTWY_PLATFORM_ORG_ID")
+    # GTWY's cut, as a percentage added on top of the provider cost when a call
+    # is charged. 10 => a call costing 100 credits at provider prices is billed
+    # as 110. Applied at charge time, so changing it needs no migration and
+    # never rewrites past charges. MUST match Node's GTWY_COMMISSION_PCT, or
+    # background AI jobs are billed at a different rate from main calls.
+    GTWY_COMMISSION_PCT = os.getenv("GTWY_COMMISSION_PCT")
+    # Flat fee, in USD, charged once per HIT on top of the model cost and the
+    # commission above. Every wallet-billed hit pays one; embed traffic has its
+    # own rate, everything else (direct API calls and chatbot hits) pays the
+    # standard one. Unset or 0 disables that fee. Applied at charge time like the
+    # commission, so changing either needs no migration and never rewrites past
+    # charges.
+    GTWY_HIT_FEE_USD = os.getenv("GTWY_HIT_FEE_USD")
+    GTWY_EMBED_HIT_FEE_USD = os.getenv("GTWY_EMBED_HIT_FEE_USD")

@@ -1,8 +1,7 @@
 import asyncio
 import copy
 import traceback
-from src.configs.constant import service_name
-from src.configs.service_registry import has_openai_choices_shape
+from src.configs.service_registry import has_anthropic_shape, has_gemini_shape, has_openai_choices_shape, has_openai_responses_shape
 from src.services.commonServices.baseService.utils import serialize_config
 from src.exceptions import ApiCallError
 
@@ -87,16 +86,16 @@ async def check_space_issue(response, service=None):
     if has_openai_choices_shape(service):
         content = response.get("choices", [{}])[0].get("message", {}).get("content", None)
 
-    elif service == service_name["gemini"]:
+    elif has_gemini_shape(service):
         content = response["candidates"][0]["content"]["parts"][0]["text"]
 
-    elif service == service_name["anthropic"]:
+    elif has_anthropic_shape(service):
         content = response.get("content", [{}])
         if content:
             content = content[0].get("text", None)
         else:
             content = None
-    elif service == service_name["openai"]:
+    elif has_openai_responses_shape(service):
         output_list = response.get("output", [])
         if output_list:
             first_output = output_list[0]
@@ -123,11 +122,11 @@ async def check_space_issue(response, service=None):
         text = "AI is Hallucinating and sending '\n' please check your prompt and configurations once"
         if has_openai_choices_shape(service):
             response["choices"][0]["message"]["content"] = text
-        elif service == service_name["gemini"]:
+        elif has_gemini_shape(service):
             response["candidates"][0]["content"]["parts"][0]["text"] = text
-        elif service == service_name["anthropic"]:
+        elif has_anthropic_shape(service):
             response["content"][0]["text"] = text
-        elif service == service_name["openai"]:
+        elif has_openai_responses_shape(service):
             if response.get("output", [{}])[0].get("type") == "function_call":
                 response["output"][0]["content"][0]["text"] = text
             else:

@@ -13,6 +13,12 @@ from src.configs.constant import alert_types, redis_keys
 from src.handler.executionHandler import handle_exceptions
 from src.send_alert import send_alert
 from src.services.auto_router_service import apply_auto_model_selection
+from src.services.billing.billing_utils import (
+    apply_wallet_fallback,
+    fallback_allowed_on_plan,
+    release_credits,
+    release_credits_after,
+)
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.todo.planner_service import prepare_planner_request
 from src.services.todo.todo_handler import handle_todo_mode
@@ -39,7 +45,7 @@ from src.services.utils.common_utils import (
     process_batch_background_tasks,
     process_variable_state,
     render_template_if_applicable,
-    restructure_json_schema,
+    normalize_response_type,
     save_error_history,
     setup_agent_tools,
     sse_stream_and_finalize,
@@ -142,6 +148,14 @@ async def chat_multiple_agents(request_body):
 
     except Exception as error:
         logger.error(f"Error in chat_multiple_agents: {str(error)}, {traceback.format_exc()}")
+        # Failures before chat() ran (empty configurations, cache trouble) would
+        # otherwise strand the middleware's hold. Release is token-idempotent, so
+        # attempting it here is safe even if chat() already released.
+        _body = request_body.get("body", {})
+        await release_credits(
+            _body.get("org_id") or request_body.get("state", {}).get("profile", {}).get("org", {}).get("id"),
+            _body.get("credit_hold_token"),
+        )
         error_object = {
             "success": False,
             "error": f"{str(error)} (Type: {type(error).__name__}). For more support contact us at support@gtwy.ai",
@@ -162,6 +176,10 @@ async def chat(request_body):
     fallback_error_code = None
     completion_success = True
     original_service = None
+    # Initialized before the try: if parse_request_body raises, the finally
+    # below still runs and must not NameError (that used to leak the hold).
+    parsed_data = {}
+    hold_token = None
     try:
         # Store bridge_configurations for potential transfer logic
         bridge_configurations = request_body.get("body", {}).get("bridge_configurations", {})
@@ -170,7 +188,11 @@ async def chat(request_body):
             request_body.setdefault("body", {})["created_at"] = datetime.now(timezone.utc).isoformat()
         # Step 1: Parse and validate request body
         parsed_data = parse_request_body(request_body)
-
+        # Single-use hold token from the middleware. Popping it makes this frame
+        # the owner; release_credits is idempotent per token, so redeliveries or
+        # overlapping cleanup paths can never release twice.
+        hold_token = request_body.get("body", {}).pop("credit_hold_token", None)
+        
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
         if isinstance(mcp_cfg, dict):
             from src.services.utils.mcp_utils import resolve_mcp_type
@@ -234,7 +256,6 @@ async def chat(request_body):
         pre_tools = bridge_configurations.get(current_agent_id, {}).get("pre_tools_data", [])
         post_tool = bridge_configurations.get(current_agent_id, {}).get("post_tool_data", {})
         parsed_data["pre_tools"] = setup_agent_tools(parsed_data, bridge_configurations, pre_tools)
-        parsed_data["post_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, post_tool)
         await apply_prompt_wrapper(parsed_data)
 
         # Initialize or retrieve transfer_request_id for tracking transfers
@@ -279,6 +300,7 @@ async def chat(request_body):
 
         # Step 7: Prepare Prompt, Variables and Memory
         memory, missing_vars = await prepare_prompt(parsed_data, thread_info, model_config, custom_config)
+        parsed_data["post_tool_data"] = setup_agent_tools(parsed_data, bridge_configurations, post_tool)
 
         missing_vars = filter_missing_vars(missing_vars, parsed_data["variables_state"])
 
@@ -325,9 +347,17 @@ async def chat(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
-            custom_config["response_type"] = restructure_json_schema(
-                custom_config["response_type"], parsed_data["service"]
+        normalize_response_type(custom_config, parsed_data["service"], model_config)
+        
+        # Append JSON schema and text instructions to the prompt in configuration
+        # This ensures all services get the updated prompt without needing to check for instruction keys
+        if custom_config.get("_json_schema_instruction"):
+            parsed_data["configuration"]["prompt"] = (
+                parsed_data["configuration"].get("prompt", "") + "\n" + custom_config["_json_schema_instruction"]
+            )
+        if custom_config.get("_text_instruction"):
+            parsed_data["configuration"]["prompt"] = (
+                parsed_data["configuration"].get("prompt", "") + "\n" + custom_config["_text_instruction"]
             )
         if parsed_data.get("mode") == "plan":
             # Executor orchestration actions keep the existing pipeline.
@@ -383,6 +413,9 @@ async def chat(request_body):
                     _transfer_task, tool_count_key_for_cleanup, tool_count_owner_token,
                 ))
                 tool_count_owner_token = None  # ownership transferred to the deferred cleanup
+                if hold_token:
+                    asyncio.create_task(release_credits_after(_transfer_task, parsed_data.get("org_id"), hold_token))
+                    hold_token = None
                 return JSONResponse(status_code=200, content={"success": True})
 
             _stream_task = asyncio.create_task(sse_stream_and_finalize(
@@ -394,6 +427,9 @@ async def chat(request_body):
                 _stream_task, tool_count_key_for_cleanup, tool_count_owner_token,
             ))
             tool_count_owner_token = None  # ownership transferred to the deferred cleanup
+            if hold_token:
+                asyncio.create_task(release_credits_after(_stream_task, parsed_data.get("org_id"), hold_token))
+                hold_token = None
             return StreamingResponse(class_obj.streamer.generator(), media_type="text/event-stream")
 
         original_exception = None
@@ -484,7 +520,7 @@ async def chat(request_body):
             result = {"success": False, "error": original_error, "response": {"usage": {}}, "modelResponse": {}}
 
         # Retry mechanism with fallback configuration
-        if execution_failed and parsed_data.get("settings", {}).get("fall_back") and parsed_data["settings"]["fall_back"].get("is_enable", False):
+        if execution_failed and parsed_data.get("settings", {}).get("fall_back") and parsed_data["settings"]["fall_back"].get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
             try:
                 # Store original configuration
                 fallback_config = parsed_data["settings"]["fall_back"]
@@ -496,8 +532,9 @@ async def chat(request_body):
                 parsed_data["model"] = fallback_model
                 parsed_data["service"] = fallback_service
                 parsed_data["configuration"]["model"] = fallback_model
-                if fallback_config.get("apikey"):
-                    parsed_data["apikey"] = fallback_config["apikey"]
+                # Credential + wallet flag for the fallback (own key → free, wallet →
+                # plan re-check + platform key swap; raises when refused).
+                apply_wallet_fallback(parsed_data, fallback_config, fallback_service, fallback_model)
 
                 # Always rebuild fallback handler/config to avoid stale customConfig/model reuse
                 (
@@ -521,13 +558,7 @@ async def chat(request_body):
                     bridge_configurations,
                 )
 
-                if (
-                    "response_type" in fallback_custom_config
-                    and fallback_custom_config["response_type"].get("type") == "json_schema"
-                ):
-                    fallback_custom_config["response_type"] = restructure_json_schema(
-                        fallback_custom_config["response_type"], parsed_data["service"]
-                    )
+                normalize_response_type(fallback_custom_config, parsed_data["service"], fallback_model_config)
 
                 class_obj = await Helper.create_service_handler(params, parsed_data["service"])
 
@@ -769,6 +800,8 @@ async def chat(request_body):
             fallback_service,
             fallback_error_code,
         )
+        if hold_token:
+            await release_credits(parsed_data.get("org_id"), hold_token)
 
 
 @handle_exceptions
@@ -819,23 +852,13 @@ async def batch(request_body):
     result = {}
     class_obj = {}
     try:
-        # Step 1: Parse and validate request body
+        # Step 1: Parse request body (batch/webhook already validated by BatchChatCompletionRequest)
         parsed_data = parse_request_body(request_body)
-        if parsed_data["batch_webhook"] is None:
-            raise ValueError("webhook is required")
 
         # Manage threads (set thread_id / sub_thread_id when not in body)
         await manage_threads(parsed_data)
 
-        # Validate batch_variables if provided
         batch_variables = parsed_data.get("batch_variables")
-        if batch_variables is not None:
-            if not isinstance(batch_variables, list):
-                raise ValueError("batch_variables must be an array")
-            if len(batch_variables) != len(parsed_data["batch"]):
-                raise ValueError(
-                    f"batch_variables array length ({len(batch_variables)}) must match batch array length ({len(parsed_data['batch'])})"
-                )
 
         # Step 2: Process prompts with variable replacement for each batch message
         original_prompt = parsed_data["configuration"].get("prompt", "")
@@ -901,10 +924,7 @@ async def batch(request_body):
         if not is_valid_schema:
             raise ValueError(schema_error)
 
-        if "response_type" in custom_config and isinstance(custom_config["response_type"], dict) and custom_config["response_type"].get("type") == "json_schema":
-            custom_config["response_type"] = restructure_json_schema(
-                custom_config["response_type"], parsed_data["service"]
-            )
+        normalize_response_type(custom_config, parsed_data["service"], model_config)
 
         # Step 8: Execute Service Handler
         params = build_service_params_for_batch(parsed_data, custom_config, model_output_config)

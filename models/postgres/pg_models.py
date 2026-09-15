@@ -78,6 +78,7 @@ class ConversationLog(Base):
     error = Column(Text, nullable=True)
     user_feedback = Column(Integer, nullable=True, default=0)
     tools_call_data = Column(JSON, nullable=True, default=[])
+    annotations = Column(JSON, nullable=True, default=[])
     message_id = Column(String, nullable=True)
     sub_thread_id = Column(String, nullable=True)
     thread_id = Column(String, nullable=True)
@@ -101,5 +102,6 @@ class ConversationLog(Base):
     prompt = Column(JSON, nullable=True)
     batch_data = Column(JSON, nullable=True)
     plans = Column(JSON, nullable=True)  # Stores the plan JSON for plan mode execution
+    response_format = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())

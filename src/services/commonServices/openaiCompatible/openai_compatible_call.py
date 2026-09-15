@@ -1,6 +1,6 @@
 from src.configs.service_registry import prompt_role
 from src.services.utils.ai_middleware_format import Response_formatter
-from src.services.utils.apiservice import fetch_images_b64
+from src.services.utils.image_compression import fetch_images_b64
 
 from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService

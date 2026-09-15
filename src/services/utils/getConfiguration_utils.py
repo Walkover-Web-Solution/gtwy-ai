@@ -1,13 +1,30 @@
 import src.db_services.ConfigurationServices as ConfigurationService
 from config import Config
+from globals import logger
 from models.mongo_connection import db
-from src.configs.constant import inbuild_tools
+from src.configs.constant import inbuild_tools, tool_types
 from src.services.commonServices.baseService.utils import makeFunctionName
+from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
 from src.services.utils.service_config_utils import tool_choice_function_name_formatter
 
 apiCallModel = db["apicalls"]
+
+
+def strip_gateway_filled_args(properties, required, tool_variables_path):
+    """Drop the args the gateway fills from what we hand the model.
+
+    An arg with a variable_path is owned by the user, so it must never reach the
+    model: it is popped from `properties` (in place) and dropped from `required`,
+    since a required name with no matching property is an invalid schema. Each
+    caller passes its own slice of variables_path, keyed by whatever identifies
+    that tool type — script_id, tool name, bridge_id.
+    """
+    gateway_filled = list((tool_variables_path or {}).keys())
+    for key in gateway_filled:
+        properties.pop(key, None)
+    return [key for key in (required or []) if key not in gateway_filled]
 
 
 async def validate_bridge(agent_data):
@@ -110,18 +127,10 @@ def process_api_call_tool(api_data, variables_path_bridge):
         "method": "POST"
     }
 
-    # Process variables filled by gateway
-    variables_fill_by_gtwy = list(variables_path_bridge.get(api_data.get("script_id"), {}).keys())
-
     properties = api_data.get("fields", {})
-
-    # Remove properties that are filled by gateway
-    for key in variables_fill_by_gtwy:
-        properties.pop(key, None)
-
-    # Filter required parameters
-    required = api_data.get("required", [])
-    required = [key for key in required if key not in variables_fill_by_gtwy]
+    required = strip_gateway_filled_args(
+        properties, api_data.get("required", []), variables_path_bridge.get(api_data.get("script_id"), {})
+    )
 
     # Create tool format
     tool_format = {
@@ -152,6 +161,9 @@ def process_extra_tool(tool):
     if not isinstance(required, list):
         required = []
 
+    variable_path = tool.get("tool_and_variable_path", {}) or {}
+    required = strip_gateway_filled_args(properties, required, variable_path)
+
     tool_format = {
         "type": "function",
         "name": makeFunctionName(tool_name),
@@ -170,11 +182,6 @@ def process_extra_tool(tool):
         "method": tool.get("method", "POST").upper(),
         "query_params": query_params,
     }
-    variable_path = tool.get("tool_and_variable_path", {}) or {}
-    # Remove properties that are filled by gateway
-    for key in variable_path:
-        properties.pop(key, None)
-
     return tool_format, tool_mapping, {tool_name: variable_path}
 
 
@@ -224,11 +231,6 @@ def setup_api_key(service, bridges, apikey, chatbot):
             # Use Config.OPENAI_API_KEY only if model is gpt-5-nano
             if model == "gpt-5-nano":
                 apikey = Config.OPENAI_API_KEY_GPT_5_NANO
-            else:
-                raise Exception("Could not find api key or Agent is not Published")
-
-    if not (apikey or db_api_key):
-        raise Exception("Could not find api key or Agent is not Published")
 
     # Handle fallback configuration
     fallback_config = bridges.get("settings", {}).get("fall_back")
@@ -243,8 +245,9 @@ def setup_api_key(service, bridges, apikey, chatbot):
             bridges["settings"]["fall_back"]["apikey"] = Helper.decrypt(fallback_apikey)
             bridges["settings"]["fall_back"]["apikey_object_id"] = db_apikeys_object_id.get(fallback_service)
 
-    # Use provided API key or decrypt from database
-    return apikey if apikey else Helper.decrypt(db_api_key)
+    if apikey:
+        return apikey
+    return Helper.decrypt(db_api_key) if db_api_key else None
 
 
 def setup_pre_tools(bridge, agent_data, variables):
@@ -358,7 +361,29 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
     }
 
 
-def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag):
+
+def _should_enable_browser_tool(built_in_tools):
+    if not built_in_tools:
+        return False
+    return inbuild_tools["Gtwy_Browser"] in built_in_tools
+
+
+def add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools):
+    """Add the Steel-backed browser tool when requested via built-in tools."""
+    if not _should_enable_browser_tool(built_in_tools):
+        return
+    if not Config.STEEL_API_URL:
+        logger.warning("Gtwy_Browser requested but STEEL_API_URL is not configured; tool not registered")
+        return
+
+    tools.append(build_browser_tool_schema())
+    tool_id_and_name_mapping[inbuild_tools["Gtwy_Browser"]] = {
+        "type": inbuild_tools["Gtwy_Browser"],
+        "name": inbuild_tools["Gtwy_Browser"],
+    }
+
+
+def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag, variables_path_bridge):
     """Add connected agents as tools"""
     connected_agents = bridges.get("connected_agents", {})
     connected_agent_details = bridges.get("connected_agent_details", {})
@@ -409,6 +434,9 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
             **fields,
         }
 
+        # Connected agents key variables_path by bridge_id.
+        required = strip_gateway_filled_args(properties, required, variables_path_bridge.get(bridge_id_value, {}))
+
         # Add action_type only if type is orchestrator
         if is_orchestrator:
             properties["action_type"] = {
@@ -435,7 +463,7 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
         )
 
         tool_id_and_name_mapping[name] = {
-            "type": "AGENT",
+            "type": tool_types["AGENT"],
             "bridge_id": bridge_id_value,
             "requires_thread_id": bridge_info.get("thread_id", False),
         }

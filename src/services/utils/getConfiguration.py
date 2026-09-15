@@ -8,6 +8,7 @@ from src.services.utils.common_utils import updateVariablesWithTimeZone
 from src.db_services.ConfigurationServices import transform_agent_config_to_frontend
 
 from .getConfiguration_utils import (
+    add_browser_tool,
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
@@ -228,12 +229,13 @@ async def _prepare_configuration_response(
         built_in_tools or bridges.get("built_in_tools"),
         gtwy_web_search_filters,
     )
+    add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools or bridges.get("built_in_tools"))
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
 
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
-    add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag)
+    add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag, variables_path_bridge)
     web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
 
     # Fetch reviewer tools definitions if configured
@@ -284,6 +286,7 @@ async def _prepare_configuration_response(
         "folder_id": bridges.get("folder_id"),
         "wrapper_id": bridges.get("wrapper_id"),
         "web_search_filters": web_search_filters_value,
+        "chatbot": chatbot,
         "chatbot_auto_answers": chatbot_auto_answers,
         "cache_on": cache_on,
         "richui_templates": bridges.get("richui_templates"),

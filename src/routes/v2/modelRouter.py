@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from config import Config
 from globals import logger
 from src.middlewares.ratelimitMiddleware import rate_limit
+from src.services.billing.billing_utils import release_credits
 from src.services.commonServices.baseService.utils import make_request_data
 from src.services.commonServices.common import batch, chat_multiple_agents, embedding, image
 from src.services.commonServices.queueService.queueService import queue_obj
@@ -15,6 +16,8 @@ from src.services.utils.helper import queue_rerun_messages
 from ...middlewares.getDataUsingBridgeId import add_configuration_data_to_body
 from ...middlewares.middleware import jwt_middleware
 from src.middlewares.openai_sdk_middleware import openai_sdk_middleware
+from src.schemas.batch_schemas import BatchChatCompletionRequest
+from src.schemas.completion_schemas import CompletionRequest
 from src.services.utils.openai_sdk_utils import run_openai_chat_and_format
 
 router = APIRouter()
@@ -29,7 +32,7 @@ async def auth_and_rate_limit(request: Request):
 
 
 @router.post("/chat/completion", dependencies=[Depends(auth_and_rate_limit)])
-async def chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+async def chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body(CompletionRequest))):
     request.state.version = 2
     data_to_send = await make_request_data(request)
     is_playground = data_to_send.get("body", {}).get("is_playground", False)
@@ -44,7 +47,14 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
     
     stream_config = db_config.get('bridge_configurations', {}).get(current_id, {}).get('configuration', {}).get('stream')
     if is_playground and (stream_config == False or stream_config is None or stream_config == 'default'):
-        channel_id = f"{data_to_send.get('state', {}).get('profile', {}).get('org', {}).get('id')}_{db_config.get('bridge_configurations', {}).get(current_id, {}).get('bridge_id')}_{db_config.get('bridge_configurations', {}).get(current_id, {}).get('version_id')}"
+        org_id = data_to_send.get('state', {}).get('profile', {}).get('org', {}).get('id')
+        bridge_id = db_config.get('bridge_configurations', {}).get(current_id, {}).get('bridge_id')
+        version_id = db_config.get('bridge_configurations', {}).get(current_id, {}).get('version_id')
+        if version_id in ["undefined", "null", None]:
+            version_id = ""
+        user_id = data_to_send.get('state', {}).get('profile', {}).get('user', {}).get('id')
+        version_part = f"_{version_id}" if version_id else ""
+        channel_id = f"{org_id}_{bridge_id}{version_part}_{user_id}"
         playground_response_format = {"type": "RTLayer", "cred": {"channel": channel_id, "ttl": 1, "apikey": Config.RTLAYER_AUTH}}
         data_to_send['body']['settings']['response_format'] = playground_response_format
     
@@ -60,6 +70,11 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         except Exception as e:
             # Log the error and return a meaningful error response
             logger.error(f"Failed to publish message: {str(e)}")
+            # The queued consumer would have released the hold after running; if
+            # the message never reached the queue, nobody downstream will.
+            _body = data_to_send.get("body", {})
+            _org_id = data_to_send.get("state", {}).get("profile", {}).get("org", {}).get("id") or _body.get("org_id")
+            await release_credits(_org_id, _body.get("credit_hold_token"))
             raise HTTPException(status_code=500, detail="Failed to publish message.") from e
     else:
         # Handle different types of requests
@@ -74,12 +89,12 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
         return result
 
 @router.post('/openai/responses', dependencies=[Depends(openai_sdk_middleware)])
-async def openai_sdk_responses(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+async def openai_sdk_responses(request: Request, db_config: dict = Depends(add_configuration_data_to_body(CompletionRequest))):
     return await run_openai_chat_and_format(request, db_config, chat_completion)
 
 
 @router.post("/batch/chat/completion", dependencies=[Depends(auth_and_rate_limit)])
-async def batch_chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+async def batch_chat_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body(BatchChatCompletionRequest))):
     data_to_send = await make_request_data(request)
     result = await batch(data_to_send)
     return result
@@ -120,7 +135,8 @@ async def run_testcases_route(request: Request):
             detail={"success": False, "error": "bridge_id is required for RTLayer-based testcase runs"},
         )
 
-    channel_id = f"{org_id}_{bridge_id}"
+    user_id = request.state.profile.get("user", {}).get("id")
+    channel_id = f"{org_id}_{bridge_id}_{user_id}"
     rtlayer_cred = build_rtlayer_cred(channel_id)
 
     async def _run():
@@ -147,7 +163,7 @@ async def run_testcases_route(request: Request):
 
 
 @router.post("/rerun", dependencies=[Depends(auth_and_rate_limit)])
-async def rerun_messages_route(request: Request, db_config: dict = Depends(add_configuration_data_to_body)):
+async def rerun_messages_route(request: Request, db_config: dict = Depends(add_configuration_data_to_body(schema_class=None))):
     """
     Rerun previous messages with current bridge configuration.
     Each message is pushed to the queue for async processing.
@@ -157,12 +173,19 @@ async def rerun_messages_route(request: Request, db_config: dict = Depends(add_c
     Option 2 – by thread (reruns the last message in the thread):
         Body: {"bridge_id": "...", "thread_id": "...", "sub_thread_id": "..."}
     """
+    _hold_org_id = None
+    _hold_token = None
     try:
         request.state.version = 2
         data_to_send = await make_request_data(request)
 
         body = data_to_send.get("body", {})
         org_id = data_to_send["state"]["profile"]["org"]["id"]
+        # The middleware's hold covers only THIS request. Each queued rerun copy
+        # has the token stripped (build_rerun_queue_message); the single release
+        # happens in the finally below, queued or not.
+        _hold_org_id = org_id
+        _hold_token = body.pop("credit_hold_token", None)
 
         thread_id = body.get("thread_id")
         sub_thread_id = body.get("sub_thread_id")
@@ -201,3 +224,5 @@ async def rerun_messages_route(request: Request, db_config: dict = Depends(add_c
     except Exception as e:
         logger.error(f"Error in rerun_messages_route: {str(e)}")
         raise HTTPException(status_code=500, detail={"success": False, "error": f"Internal server error: {str(e)}"}) from e
+    finally:
+        await release_credits(_hold_org_id, _hold_token)

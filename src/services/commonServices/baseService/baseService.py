@@ -9,9 +9,17 @@ from config import Config
 from globals import logger
 from src.configs.constant import file_lifecycle_config
 from src.configs.serviceKeys import get_service_keys
-from src.configs.service_registry import has_openai_choices_shape, supports_tool_calls, uses_openai_sdk
+from src.configs.service_registry import (
+    extra_body as service_extra_body,
+    has_anthropic_shape,
+    has_gemini_shape,
+    has_openai_choices_shape,
+    has_openai_responses_shape,
+    supports_tool_calls,
+    uses_openai_sdk,
+)
 
-from ....configs.constant import service_name
+from ....configs.constant import service_name, tool_types
 from ....db_services import metrics_service
 from ....services.cache_service import make_json_serializable
 from ....services.commonServices.queueService.queueLogService import sub_queue_obj
@@ -31,6 +39,7 @@ from ..streaming_service import StreamingService
 from .utils import (
     build_accumulated_response,
     make_code_mapping_by_service,
+    merge_nested_agent_usage,
     process_data_and_run_tools,
     run_stream_and_collect,
     sendResponse,
@@ -48,6 +57,7 @@ from src.services.utils.mcp_utils import (
     server_mcp_config,
 )
 from src.services.utils.maximum_iterations_utils import build_tool_count_key, decrement_tool_count, get_tool_count
+from src.services.utils.ai_middleware_format import set_request_model
 from src.exceptions import ApiCallError
 
 executor = ThreadPoolExecutor(max_workers=int(Config.max_workers) or 10)
@@ -72,6 +82,10 @@ class BaseService:
         self.thread_id = params.get("thread_id")
         self.sub_thread_id = params.get("sub_thread_id")
         self.model = params.get("model")
+        # Responses report the model the caller asked for, not the dated snapshot
+        # the provider echoes back. Recorded once here so every Response_formatter
+        # call in this request picks it up.
+        set_request_model(self.model)
         self.service = params.get("service")
         self.modelOutputConfig = params.get("modelOutputConfig")
         self.template = params.get("template")
@@ -109,11 +123,14 @@ class BaseService:
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
+        self.billing_attribution = params.get("billing_attribution") or {}
         self.is_embed = params.get("is_embed")
         self.user_id = params.get("user_id")
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
         self.created_at = params.get("created_at")
+        self.run_testcase = params.get("run_testcase", False)
+        self.testcase_tools_response = params.get("testcase_tools_response") or {}
         self.user_urls = params.get("user_urls") or []
         self.provider_file_map = {}
         self.tool_call_limit_error = None
@@ -200,14 +217,21 @@ class BaseService:
 
         return func_response_data, mapping_response_data, tools_call_data
 
-    def update_configration(self, response, function_responses, configuration, mapping_response_data, service, tools):
-        if service == "anthropic":
+    def update_configration(self, response, function_responses, configuration, mapping_response_data, service, tools, tools_call_data=None):
+        if has_anthropic_shape(service):
             configuration["messages"].append({"role": "assistant", "content": response["content"]})
             configuration["messages"].append({"role": "user", "content": []})
 
+        tools_call_data = tools_call_data if isinstance(tools_call_data, dict) else {}
         for index, function_response in enumerate(function_responses):
             display_tool_name = display_mcp_tool_name(function_response["name"])
-            tools[display_tool_name] = function_response["content"]
+            tool_content = function_response["content"]
+            # Only nested agents carry usage of their own; tools_call_data still holds
+            # their untrimmed result, so fold its tokens/cost into the tools_data entry.
+            tool_log = tools_call_data.get(function_response.get("tool_call_id")) or {}
+            if tool_log.get("type") == tool_types["AGENT"]:
+                tool_content = merge_nested_agent_usage(tool_content, tool_log)
+            tools[display_tool_name] = tool_content
 
             match service:
                 case s if has_openai_choices_shape(s):  # openai_chat wire format (choices[0].message)
@@ -220,7 +244,7 @@ class BaseService:
                     configuration['messages'].append(assistant_msg)
                     tool_calls_id = assistant_tool_calls['id']
                     configuration['messages'].append(mapping_response_data[tool_calls_id])
-                case 'openai':
+                case s if has_openai_responses_shape(s):
                     should_sanitize_openai_items = bool(self.stream_mode)
 
                     # First, add all reasoning outputs to the configuration
@@ -249,12 +273,12 @@ class BaseService:
                             "call_id": output['call_id'],
                             "output": mapping_response_data[tool_calls_id]['content']
                         })
-                case 'anthropic':
-                    ordered_json = {"type":"tool_result",  
+                case s if has_anthropic_shape(s):
+                    ordered_json = {"type":"tool_result",
                                                  "tool_use_id": function_response['tool_call_id'],
                                                  "content": function_response['content']}
                     configuration['messages'][-1]['content'].append(ordered_json)
-                case 'gemini':
+                case s if has_gemini_shape(s):
                     from google.genai import types
 
                     if index == 0:
@@ -329,7 +353,7 @@ class BaseService:
                 )
 
         configuration, tools = self.update_configration(
-            model_response, func_response_data, configuration, mapping_response_data, service, tools
+            model_response, func_response_data, configuration, mapping_response_data, service, tools, tools_call_data
         )
         if not self.stream_mode and self.response_format.get("type", "") != "webhook":
             asyncio.create_task(
@@ -390,7 +414,7 @@ class BaseService:
             functionCallRes = {}
         funcModelResponse = functionCallRes.get("modelResponse", {})
         if supports_tool_calls(self.service):
-            if funcModelResponse and self.service != service_name["openai"]:
+            if funcModelResponse and not has_openai_responses_shape(self.service):
                 _.set_(
                     model_response,
                     self.modelOutputConfig["message"],
@@ -417,11 +441,11 @@ class BaseService:
                 final_reason = _.get(funcModelResponse, "choices.0.finish_reason")
                 if final_reason is not None:
                     _.set_(model_response, "choices.0.finish_reason", final_reason)
-            elif self.service == service_name["anthropic"]:
+            elif has_anthropic_shape(self.service):
                 final_reason = funcModelResponse.get("stop_reason")
                 if final_reason is not None:
                     model_response["stop_reason"] = final_reason
-            elif self.service == service_name["gemini"]:
+            elif has_gemini_shape(self.service):
                 final_reason = _.get(funcModelResponse, "candidates.0.finish_reason")
                 if final_reason is not None:
                     _.set_(model_response, "candidates.0.finish_reason", final_reason)
@@ -520,9 +544,14 @@ class BaseService:
             if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
 
-            if service == service_name["minimax"]:
+            # Remove internal keys that shouldn't be passed to API
+            new_config.pop("_json_schema_instruction", None)
+            new_config.pop("_text_instruction", None)
+
+            static_extra_body = service_extra_body(service)
+            if static_extra_body:
                 extra_body = dict(new_config.get("extra_body") or {})
-                extra_body["reasoning_split"] = True
+                extra_body.update(static_extra_body)
                 new_config["extra_body"] = extra_body
 
             mcp_config = self.configuration.get("mcp_config") if isinstance(self.configuration, dict) else None
@@ -532,7 +561,7 @@ class BaseService:
                 client_mcp_config(service, configuration, mcp_config, self.tool_id_and_name_mapping)
 
             if configuration.get("tools", ""):
-                if service == service_name["anthropic"]:
+                if has_anthropic_shape(service):
                     new_config["tool_choice"] = configuration.get("tool_choice", {"type": "auto"})
                 elif (
                     service == service_name["openai_completion"]
@@ -554,11 +583,11 @@ class BaseService:
                 del new_config["tool_choice"]
             if "tools" in new_config and len(new_config["tools"]) == 0:
                 del new_config["tools"]
-            if service == service_name["openai"] and "text" in new_config:
+            if has_openai_responses_shape(service) and "text" in new_config:
                 data = new_config["text"]
                 new_config["text"] = {"format": data}
-            
-            if new_config.get("verbosity") and service == service_name["openai"]:
+
+            if new_config.get("verbosity") and has_openai_responses_shape(service):
                 verbosity = new_config.pop("verbosity", {})
 
                 if isinstance(verbosity, dict) and "level" in verbosity:
@@ -922,7 +951,7 @@ class BaseService:
             tool_mapping = tool_mapping_dict.get(value.get("name"), {})
             function_name = (
                 tool_mapping.get("bridge_id")
-                if tool_mapping.get("type") == "AGENT"
+                if tool_mapping.get("type") == tool_types["AGENT"]
                 else tool_mapping.get("name", value.get("name"))
             )
 

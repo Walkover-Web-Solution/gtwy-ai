@@ -8,13 +8,15 @@ from globals import logger
 from src.exceptions import ApiCallError
 
 from ..api_executor import execute_api_call
+from .anthropic_cache import apply_anthropic_cache_control
 
 
 async def anthropic_stream(configuration, apikey):
     """Async generator yielding normalised delta dicts for Anthropic messages streaming."""
+    configuration = apply_anthropic_cache_control(configuration)
     anthropic_client = AsyncAnthropic(api_key=apikey)
     content_blocks = {}
-    usage = {"input_tokens": 0, "output_tokens": 0}
+    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
     finish_reason = None
     try:
         async with anthropic_client.messages.stream(**configuration) as stream:
@@ -22,6 +24,10 @@ async def anthropic_stream(configuration, apikey):
                 if event.type == "message_start":
                     message_data = event.message
                     usage["input_tokens"] = message_data.usage.input_tokens
+                    usage["cache_read_input_tokens"] = getattr(message_data.usage, "cache_read_input_tokens", 0) or 0
+                    usage["cache_creation_input_tokens"] = (
+                        getattr(message_data.usage, "cache_creation_input_tokens", 0) or 0
+                    )
 
                 elif event.type == "content_block_start":
                     index = event.index
@@ -101,6 +107,10 @@ async def anthropic_stream(configuration, apikey):
                         finish_reason = delta.stop_reason
                     if hasattr(event, "usage") and event.usage:
                         usage["output_tokens"] = event.usage.output_tokens
+                        if hasattr(event.usage, "cache_read_input_tokens"):
+                            usage["cache_read_input_tokens"] = event.usage.cache_read_input_tokens
+                        if hasattr(event.usage, "cache_creation_input_tokens"):
+                            usage["cache_creation_input_tokens"] = event.usage.cache_creation_input_tokens
 
         tool_calls = [
             b for b in content_blocks.values() if b.get("type") in {"tool_use", "mcp_tool_use", "mcp_tool_result"}
@@ -127,6 +137,8 @@ async def anthropic_runmodel(
         # model_name = configuration.get('model')
         # validate_anthropic_token_limit(configuration, model_name, service, apikey)
 
+        configuration = apply_anthropic_cache_control(configuration)
+
         # Initialize async client
         anthropic_client = AsyncAnthropic(api_key=apikey)
 
@@ -142,7 +154,12 @@ async def anthropic_runmodel(
                     "model": config.get("model", ""),
                     "stop_reason": None,
                     "stop_sequence": None,
-                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                    },
                 }
 
                 # Track content blocks
@@ -157,6 +174,12 @@ async def anthropic_runmodel(
                             accumulated_response["id"] = message_data.id
                             accumulated_response["model"] = message_data.model
                             accumulated_response["usage"]["input_tokens"] = message_data.usage.input_tokens
+                            accumulated_response["usage"]["cache_read_input_tokens"] = (
+                                getattr(message_data.usage, "cache_read_input_tokens", 0) or 0
+                            )
+                            accumulated_response["usage"]["cache_creation_input_tokens"] = (
+                                getattr(message_data.usage, "cache_creation_input_tokens", 0) or 0
+                            )
 
                         elif event.type == "content_block_start":
                             # Initialize content block
@@ -266,6 +289,10 @@ async def anthropic_runmodel(
                             # Update usage if present
                             if hasattr(event, "usage") and event.usage:
                                 accumulated_response["usage"]["output_tokens"] = event.usage.output_tokens
+                                if hasattr(event.usage, "cache_read_input_tokens"):
+                                    accumulated_response["usage"]["cache_read_input_tokens"] = event.usage.cache_read_input_tokens
+                                if hasattr(event.usage, "cache_creation_input_tokens"):
+                                    accumulated_response["usage"]["cache_creation_input_tokens"] = event.usage.cache_creation_input_tokens
 
                         elif event.type == "message_stop":
                             # Finalize the response
