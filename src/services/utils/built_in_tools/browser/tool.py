@@ -117,11 +117,11 @@ async def _run(args: dict, ctx: dict) -> dict:
     try:
         response, new_ref_map = await _dispatch(action, args, page, state)
     except StaleRefError as exc:
-        return _err(str(exc))
+        return _err(str(exc), live_url=live_url)
     except UrlBlocked as exc:
-        return _err(f"url not allowed: {exc}")
+        return _err(f"url not allowed: {exc}", live_url=live_url)
     except BrowserActionError as exc:
-        return _err(str(exc))
+        return _err(str(exc), live_url=live_url)
     except Exception as exc:
         if is_connection_lost_error(exc):
             logger.warning(f"Gtwy_Browser: tab lost for thread {tkey}: {exc.__class__.__name__}")
@@ -129,9 +129,12 @@ async def _run(args: dict, ctx: dict) -> dict:
             await release_tab(tkey, reason="tab lost")
             return _err("the browser tab was lost; call navigate again to start over")
         if is_timeout_error(exc):
-            return _err("timeout: the page did not respond in time; call snapshot to see its current state")
+            return _err(
+                "timeout: the page did not respond in time; call snapshot to see its current state",
+                live_url=live_url,
+            )
         logger.error(f"Gtwy_Browser: action {action} failed: {exc.__class__.__name__}: {exc}")
-        return _err(f"browser action failed: {_reason(exc)}")
+        return _err(f"browser action failed: {_reason(exc)}", live_url=live_url)
 
     if new_ref_map is not None:
         state["ref_map"] = new_ref_map
@@ -144,6 +147,10 @@ async def _run(args: dict, ctx: dict) -> dict:
         await _begin_handoff(ctx, tkey, state, "This page requires you to log in.")
         await _emit_handoff(ctx, live_url, state["handoff_message"])
         response.update(login_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
+
+    # The chat UI needs a way to show this conversation's tab at any moment, not only when a login
+    # blocks the agent, so every result carries the live view pinned to that tab.
+    response.setdefault("live_url", live_url)
 
     await save_thread_state(tkey, state)
 
