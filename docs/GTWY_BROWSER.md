@@ -159,9 +159,12 @@ Snapshot text is wrapped in `<<<UNTRUSTED_WEB_CONTENT>>>` markers.
 - `browser_handoff`: `{"event": "browser_handoff", "live_url", "message", "call_id"}`.
   `live_url` is pinned to this conversation's own tab, so the user only sees their own page.
 
-The same value also arrives as `live_url` inside the tool result (`login_required` is `true` there),
-and for non-streaming callers at `response.data.tools_data.Gtwy_Browser.live_url`. Read one of those
-rather than parsing the model's reply text: the URL is long and a model may reformat or truncate it.
+**Every browser result carries `live_url`**, not only the handoff ones, so the interface can show
+this conversation's tab at any moment. It is in the streamed `tool_result` content and, for
+non-streaming callers, at `response.data.tools_data.Gtwy_Browser.live_url`. Read one of those rather
+than parsing the model's reply text: the URL is long and a model may reformat or truncate it. When a
+login blocks the agent the same result also sets `login_required: true` and emits `browser_handoff`,
+which is the cue to put the browser in front of the user rather than merely offering it.
 
 ```js
 // in the chat UI's SSE handler
