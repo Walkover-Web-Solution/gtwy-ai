@@ -587,6 +587,7 @@ def _build_reviewer_history_params_for_round(
     history_params["thread_id"] = parsed_data.get("thread_id")
     history_params["sub_thread_id"] = reviewer_sub_thread_id
     history_params["org_id"] = parsed_data.get("org_id")
+    history_params["user_id"] = parsed_data.get("user_id")
     # Pin `user` to the templated review prompt for THIS round. On synthesized
     # hard-error rows prepare_history_params didn't run, so this fills the gap;
     # on successful rounds it's already correct but pinning keeps both
