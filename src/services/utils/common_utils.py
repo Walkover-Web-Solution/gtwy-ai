@@ -28,7 +28,7 @@ from src.services.billing.billing_utils import (
     apply_wallet_fallback,
     fallback_allowed_on_plan,
 )
-from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
+from src.services.commonServices.baseService.utils import axios_work, compute_billing_events, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
@@ -1100,6 +1100,8 @@ async def process_background_tasks(
             asyncio.create_task(create_testcase_background())
     if parsed_data.get("skip_history"):
         return
+
+    compute_billing_events(parsed_data, result.get("historyParams") or {})
 
     # Plan mode: parse the LLM JSON, save to Redis, and thread the parsed plan
     # into historyParams so the conversation log persists `plans`.
