@@ -16,14 +16,6 @@ def _last_message_item(output):
     return result
 
 
-def _last_message_item(output):
-    result = None
-    for item in output:
-        if isinstance(item, dict) and item.get("type") == "message":
-            result = item
-    return result
-
-
 def format_openai(response, tools_data, images, type="chat"):
     if type == "embedding":
         return _format_embedding(response)
@@ -108,7 +100,7 @@ def _format_chat(response, tools_data, images):
             "tools_data": tools_data or {},
             "images": images,
             "annotations": extract_web_search_annotations(response, "openai")
-            or (last_message.get("content") or [{}])[0].get("annotations") if last_message else None,
+            or ((last_message.get("content") or [{}])[0].get("annotations") if last_message else None),
             "fallback": response.get("fallback") or False,
             "firstAttemptError": response.get("firstAttemptError") or "",
         },
