@@ -33,6 +33,7 @@ lazy is send_message inside the listener.
 
 import asyncio
 import time
+from decimal import Decimal
 
 from pymongo.errors import OperationFailure, PyMongoError
 
@@ -98,6 +99,21 @@ def allowed_models_for(plan_code, service):
     if plan["all_services"]:
         return ALL_MODELS
     return plan["services"].get(service)
+
+
+def hit_fee_for(plan_code, hit_type) -> Decimal | None:
+    """The flat USD this plan charges for one hit of this kind, or None.
+
+    None means "do not charge": the plan does not price that kind, the plan is
+    unknown, or the registry never loaded. Deliberately NOT fail-open the way
+    plan_allows is — an unavailable registry must never invent a price, because
+    that bills real money on every request. The effect of not knowing is that
+    the customer is not charged, which is the safe direction to be wrong in.
+    """
+    plan = get_plan(plan_code)
+    if plan is None:
+        return None
+    return plan.get("hit_fees", {}).get(hit_type)
 
 
 def plan_allows(plan_code, service, model) -> bool:
