@@ -52,7 +52,7 @@ class ResponseFormatModel(BaseModel):
 class UserUrlItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["image", "audio", "video", "file"] | None = None
+    type: Literal["image", "audio", "video", "file", "pdf"] | None = None
     url: str | None = Field(default=None, pattern=HTTP_URL_REGEX)
     source: str | None = None
 
