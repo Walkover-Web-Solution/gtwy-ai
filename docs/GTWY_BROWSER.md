@@ -160,7 +160,13 @@ Snapshot text is wrapped in `<<<UNTRUSTED_WEB_CONTENT>>>` markers.
   `live_url` is pinned to this conversation's own tab, so the user only sees their own page.
 
 **Every browser result carries `live_url`**, not only the handoff ones, so the interface can show
-this conversation's tab at any moment. It is in the streamed `tool_result` content and, for
+this conversation's tab at any moment. It points at gtwy, not at Steel: `/browser/live/<token>`
+resolves the conversation's tab when someone opens it and redirects there. A Steel link names one tab by
+id, and that tab is closed after a few minutes of silence, so a link from an older message would point at
+a tab that no longer exists and Steel's player answers by retrying forever, which reads as
+"Session connecting..." with no explanation. The gtwy link keeps working across tab changes, and when no
+browser is open it says so. The token is signed with `SecretKey`, is the same all day for a conversation,
+and stays valid for 30 days; set `GTWY_PUBLIC_URL` or the tool falls back to the direct Steel link. It is in the streamed `tool_result` content and, for
 non-streaming callers, at `response.data.tools_data.Gtwy_Browser.live_url`. Read one of those rather
 than parsing the model's reply text: the URL is long and a model may reformat or truncate it. When a
 login blocks the agent the same result also sets `login_required: true` and emits `browser_handoff`,

@@ -93,7 +93,10 @@ async def _run(args: dict, ctx: dict) -> dict:
         await reset_connection()
         return _err("could not reach the browser; try again in a moment")
 
-    live_url = steel_client.live_view_url(registry.get("debug_url"), tab.get("target_id"))
+    # Prefer the link that survives this tab being replaced; fall back to the direct one.
+    live_url = steel_client.permanent_live_url(
+        ctx.get("org_id"), ctx.get("thread_id"), ctx.get("sub_thread_id")
+    ) or steel_client.live_view_url(registry.get("debug_url"), tab.get("target_id"))
     state = await get_thread_state(tkey)
     state["target_id"] = tab.get("target_id")
 

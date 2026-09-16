@@ -6,6 +6,7 @@ is arbitrated by session_store, never here. Steel OSS has no auth: keep it on a
 private network.
 """
 
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import httpx
@@ -15,6 +16,8 @@ from globals import logger
 
 STEEL_HTTP_TIMEOUT = 15.0
 DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
+# The link sits in the chat history, so it must outlive the tab it resolves to.
+LIVE_LINK_TTL_DAYS = 30
 
 
 class SteelError(Exception):
@@ -41,6 +44,31 @@ def cdp_ws_url() -> str:
     parsed = urlparse(_base_url())
     scheme = "wss" if parsed.scheme == "https" else "ws"
     return f"{scheme}://{parsed.netloc}/"
+
+
+def permanent_live_url(org_id, thread_id, sub_thread_id) -> str | None:
+    """A link to this conversation's browser that keeps working after the tab is replaced.
+
+    It points at gtwy rather than at Steel, so the tab is resolved when someone opens it.
+    Falls back to None when the gateway does not know its own public address; the caller
+    then hands out the direct Steel link, which is correct but only until that tab closes.
+    """
+    import jwt
+
+    base = (getattr(Config, "GTWY_PUBLIC_URL", None) or "").rstrip("/")
+    if not base or not Config.SecretKey:
+        return None
+    # The expiry is rounded to the start of today, so the same conversation gets the same link
+    # all day instead of a new one per message. Each link stays valid for its full window, so a
+    # link from an older message keeps working.
+    midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    payload = {
+        "o": str(org_id or ""),
+        "t": str(thread_id or ""),
+        "s": str(sub_thread_id or thread_id or ""),
+        "exp": midnight + timedelta(days=LIVE_LINK_TTL_DAYS),
+    }
+    return f"{base}/browser/live/{jwt.encode(payload, Config.SecretKey, algorithm='HS256')}"
 
 
 def live_view_url(debug_url: str | None, target_id: str | None) -> str | None:

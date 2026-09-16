@@ -34,6 +34,7 @@ from src.configs.service_registry import background_listen_for_service_changes, 
 from src.routes.chatBot_routes import router as chatbot_router
 from src.routes.image_process_routes import router as image_process_routes
 from src.routes.rag_routes import router as rag_routes
+from src.routes.v2.browserRouter import router as browser_router
 from src.routes.v2.modelRouter import router as v2_router
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueService import queue_obj
@@ -173,6 +174,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # Include routers
 app.include_router(v2_router, prefix="/api/v2/model")
+app.include_router(browser_router, prefix="/browser")
 app.include_router(chatbot_router, prefix="/chatbot")
 app.include_router(image_process_routes, prefix="/image/processing")
 app.include_router(image_process_routes, prefix="/files")
