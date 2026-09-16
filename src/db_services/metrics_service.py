@@ -40,6 +40,9 @@ async def save_conversations_to_redis(conversations, version_id, thread_id, sub_
             "tools_call_data": history_params.get("tools_call_data"),
             "error": "",
             "urls": history_params.get("urls", []),
+            # same shape as the PG-backed history (find_conversation_logs), so
+            # file/image context survives a Redis cache hit
+            "user_urls": history_params.get("user_urls", []),
         }
 
         # Assistant message
@@ -53,6 +56,7 @@ async def save_conversations_to_redis(conversations, version_id, thread_id, sub_
             "tools_call_data": None,
             "error": None,
             "urls": [],
+            "llm_urls": history_params.get("llm_urls", []),
         }
 
         # Add new conversations first

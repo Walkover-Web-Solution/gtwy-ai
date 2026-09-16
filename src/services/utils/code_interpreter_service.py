@@ -157,7 +157,7 @@ async def _list_container_files(container_id: str, apikey: str, exclude_file_ids
     files not found immediately may simply not have landed yet.
     """
     for attempt in range(_LIST_RETRY_ATTEMPTS):
-        entries = await _list_container_files_once(container_id, apikey,[])
+        entries = await _list_container_files_once(container_id, apikey, exclude_file_ids)
         if entries:
             return entries
         if attempt < _LIST_RETRY_ATTEMPTS - 1:

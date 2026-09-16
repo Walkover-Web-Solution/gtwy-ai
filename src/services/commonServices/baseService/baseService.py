@@ -156,20 +156,31 @@ class BaseService:
             return self.apikey_object_id.get(self.service)
         return self.apikey_object_id
 
-    async def resolve_provider_files(self):
-        """Map opted-in URLs to provider Files-API file_ids.
+    async def resolve_provider_files(self, extra_urls=None):
+        """Map the current turn's (and optionally the thread's prior) file URLs
+        to provider Files-API file_ids.
 
-        Opt-in is per file at runtime: user_urls entries sent with
-        use_provider_files=true. Populates self.provider_file_map
-        ({url: {"file_id", "mime_type"}}). Any failure leaves URLs unmapped —
-        callers fall back to URL pass-through.
+        Populates self.provider_file_map ({url: {"file_id", "mime_type"}}).
+        Resolution is content-hash deduped via Redis/Mongo (see
+        file_lifecycle_service.resolve_file), so a URL already uploaded for
+        this thread/credential earlier resolves to the same file_id on a
+        cache hit instead of re-downloading/re-uploading it. Passing
+        `extra_urls` (e.g. file URLs pulled from earlier messages in the
+        conversation) lets callers keep the whole thread's files addressable
+        by file_id on every turn — not just files attached in this turn —
+        which matters for tools like code_interpreter that need the full
+        thread's file context. Any failure leaves URLs unmapped — callers
+        fall back to URL pass-through.
         """
         self.provider_file_map = {}
-        provider_file_urls = [
+        provider_file_urls = {
             entry.get("url")
             for entry in self.user_urls
             if isinstance(entry, dict) and entry.get("url")
-        ]
+        }
+        if extra_urls:
+            provider_file_urls.update(url for url in extra_urls if url)
+        provider_file_urls = list(provider_file_urls)
         if not (file_lifecycle_config["enabled"] and provider_file_urls):
             return
         try:
