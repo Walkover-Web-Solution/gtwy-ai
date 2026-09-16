@@ -5,7 +5,7 @@ from config import Config
 from globals import logger
 
 from src.configs.constant import billing_config, redis_keys
-from src.configs.plan_registry import DEFAULT_PLAN_CODE, plan_allows, plan_display_name, plan_exists
+from src.configs.plan_registry import DEFAULT_PLAN_CODE, hit_fee_for, plan_allows, plan_display_name, plan_exists
 from src.services.billing.lago_service import get_subscription_plan_slug, get_wallet_balance
 from src.services.cache_service import REDIS_PREFIX, client
 
@@ -66,46 +66,11 @@ _COMMISSION_PCT = _load_commission_pct()
 _COMMISSION_MULTIPLIER = Decimal(1) + (_COMMISSION_PCT / Decimal(100))
 
 
-def _load_hit_fee(raw, var_name: str) -> Decimal:
-    """A flat per-hit fee in USD, charged on top of the model cost + commission.
-
-    Same shape as the commission loader, and for the same reason: unset means
-    that fee is off (a legitimate choice), but a value that IS set and
-    nonsensical refuses to start rather than quietly billing nothing for however
-    long it takes someone to notice.
-
-    NOT commissioned. These are already GTWY's own fee, so applying the
-    commission on top would charge a margin on a margin.
-    """
-    if raw is None or str(raw).strip() == "":
-        return Decimal(0)
-    try:
-        fee = Decimal(str(raw))
-    except (InvalidOperation, ValueError):
-        raise RuntimeError(f"{var_name} is not a number ({raw!r})")
-    if fee < 0:
-        raise RuntimeError(f"{var_name} cannot be negative ({raw!r})")
-    return fee
-
-
-# Every wallet-billed hit pays a flat fee. Embed traffic pays its own rate;
-# everything else (direct API calls and chatbot hits) pays the standard one.
-# Two dials rather than one because embed hits are priced differently, not
-# because the code paths differ.
-_HIT_FEE_USD = _load_hit_fee(Config.GTWY_HIT_FEE_USD, "GTWY_HIT_FEE_USD")
-_EMBED_HIT_FEE_USD = _load_hit_fee(Config.GTWY_EMBED_HIT_FEE_USD, "GTWY_EMBED_HIT_FEE_USD")
-
 logger.info(
     f"[billing] credit rate ${_CREDIT_RATE} per credit, GTWY commission {_COMMISSION_PCT}% "
-    f"(multiplier {_COMMISSION_MULTIPLIER}). Node must match."
+    f"(multiplier {_COMMISSION_MULTIPLIER}). Node must match. Per-hit fees come from each plan "
+    "(billing_plans.hit_fees), not from config."
 )
-for _label, _fee in (("standard (api + chatbot)", _HIT_FEE_USD), ("embed", _EMBED_HIT_FEE_USD)):
-    if _fee > 0:
-        _fee_credits = (_fee / _CREDIT_RATE).quantize(_CREDIT_QUANTUM, rounding=ROUND_HALF_UP) if _CREDIT_RATE else None
-        logger.info(
-            f"[billing] {_label} hit fee ${_fee} per hit"
-            + (f" = {_fee_credits} credits at the current rate." if _fee_credits is not None else " (no credit rate — fee cannot be charged).")
-        )
 
 
 def build_llm_usage_event(usage: dict, message_id: str, org_id: str, bridge_id: str | None = None) -> dict | None:
@@ -157,19 +122,13 @@ def build_llm_usage_event(usage: dict, message_id: str, org_id: str, bridge_id: 
     }
 
 
-def build_hit_fee_event(message_id: str, org_id: str, hit_type: str) -> dict | None:
+def build_hit_fee_event(message_id: str, org_id: str, hit_type: str, plan_code: str | None) -> dict | None:
     """The flat per-hit fee, as its own billing event.
 
-    EVERY wallet-billed hit pays one. `hit_type` picks the rate and is recorded
-    on the event so a charge can be attributed later:
-
-        "embed"   -> GTWY_EMBED_HIT_FEE_USD
-        "chatbot" -> GTWY_HIT_FEE_USD
-        "api"     -> GTWY_HIT_FEE_USD
-
-    chatbot and api share a rate today but are kept apart on the event, because
-    telling them apart afterwards is exactly what a billing question needs and
-    the label costs nothing.
+    The rate comes from the org's PLAN — billing_plans.hit_fees[hit_type], loaded
+    live by the plan registry — not from config, so putting a new plan on a
+    different rate is one admin API call with no deploy. A plan that does not
+    price this kind of hit charges nothing for it.
 
     Separate from the usage event on purpose:
       * it is visible as its own line in Lago, so a charge can be explained;
@@ -188,12 +147,18 @@ def build_hit_fee_event(message_id: str, org_id: str, hit_type: str) -> dict | N
     need no request-scoped flag and no notion of being the "first" frame: they
     just emit whenever this frame spent wallet money.
 
-    The id deliberately does NOT include hit_type. One request is one hit even
-    if two frames somehow disagreed about its type, and a type in the key would
+    The id deliberately carries neither hit_type nor the plan. One request is one
+    hit even if two frames disagreed about its type, and either in the key would
     let them charge twice.
     """
-    fee_usd = _EMBED_HIT_FEE_USD if hit_type == "embed" else _HIT_FEE_USD
-    if fee_usd <= 0:
+    if not plan_code:
+        # The gate stamps the plan on every agent config whenever the request
+        # needed the wallet, so this should not happen. Charging a guessed rate
+        # would bill real money, so the safe direction is to charge nothing.
+        logger.error(f"[billing] hit fee skipped for org {org_id}: the request carries no plan")
+        return None
+    fee_usd = hit_fee_for(plan_code, hit_type)
+    if fee_usd is None or fee_usd <= 0:
         return None
     if not message_id:
         # Without it the id would be "hit-fee-None" for every request on the
@@ -222,6 +187,7 @@ def build_hit_fee_event(message_id: str, org_id: str, hit_type: str) -> dict | N
         # commission_pct: the fee is GTWY's own and is never commissioned.
         "fee_usd": str(fee_usd),
         "hit_type": hit_type,
+        "plan": plan_code,
     }
 
 

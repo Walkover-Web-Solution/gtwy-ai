@@ -827,7 +827,7 @@ def compute_billing_events(parsed_data, history_params):
 
     if parsed_data.get("wallet") or parsed_data.get("_wallet_primary_cost"):
         hit_type = "embed" if payer["is_embed"] else ("chatbot" if parsed_data.get("bridgeType") else "api")
-        fee_event = build_hit_fee_event(billing_message_id, parsed_data.get("org_id"), hit_type)
+        fee_event = build_hit_fee_event(billing_message_id, parsed_data.get("org_id"), hit_type, parsed_data.get("org_billing_plan"))
         if fee_event:
             billing_events.append(fee_event)
 

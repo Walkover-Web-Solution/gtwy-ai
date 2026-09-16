@@ -21,6 +21,8 @@ Service keys and model names are compared verbatim, case-sensitively, against
 `cfg["service"]` and `configuration["model"]` — do NOT case-fold anywhere.
 """
 
+from decimal import Decimal, InvalidOperation
+
 from globals import logger
 from models.mongo_connection import db
 from src.services.utils.time import with_timeout
@@ -75,6 +77,41 @@ def _normalize_services(raw, plan_code):
     return (False, services) if services else None
 
 
+# The kinds of hit a plan can price. Matches the classification the charging
+# code makes for every request.
+HIT_KINDS = ("api", "chatbot", "embed")
+
+
+def _normalize_hit_fees(raw, plan_code) -> dict:
+    """{kind: Decimal} for the kinds this plan actually prices.
+
+    A kind that is missing, zero, negative or unparseable is simply absent, and
+    an absent kind is not charged. Nothing here guesses a price: a plan with a
+    broken value charges nothing for that kind and says so in the log, because
+    inventing a number would bill real money on every request.
+    """
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.error(f"[plans] plan '{plan_code}': hit_fees is {type(raw).__name__}, not an object — no per-hit fee charged")
+        return {}
+
+    fees = {}
+    for kind in HIT_KINDS:
+        if kind not in raw:
+            continue
+        try:
+            fee = Decimal(str(raw[kind]))
+        except (InvalidOperation, ValueError, TypeError):
+            logger.error(f"[plans] plan '{plan_code}': hit_fees.{kind} is not a number ({raw[kind]!r}) — not charged")
+            continue
+        if fee < 0:
+            logger.error(f"[plans] plan '{plan_code}': hit_fees.{kind} is negative ({fee}) — not charged")
+            continue
+        if fee > 0:
+            fees[kind] = fee
+    return fees
+
+
 async def get_plan_configs() -> dict:
     """Load and normalize billing_plans.
 
@@ -111,5 +148,6 @@ async def get_plan_configs() -> dict:
             "display_name": doc.get("display_name") or plan_code,
             "all_services": all_services,
             "services": services,
+            "hit_fees": _normalize_hit_fees(doc.get("hit_fees"), plan_code),
         }
     return registry
