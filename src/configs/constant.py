@@ -127,6 +127,7 @@ redis_keys = {
     # Gtwy_Browser: which tab belongs to which conversation, and that tab's page refs
     "gtwy_browser_registry": "nd_gtwy_browser_registry",
     "gtwy_browser_thread_": "nd_gtwy_browser_thread_",
+    "provider_file_": "nd_pfile_",
 }
 
 tag_keys = {
@@ -194,4 +195,14 @@ auto_model_tradeoff = {
     "quality": None,
     "cost": "cost",
     "speed": "latency"
+}
+
+# Provider Files API lifecycle (see docs/file_lifecycle_design.md)
+file_lifecycle_config = {
+    "enabled": True,
+    "ttl_seconds": 86400,               # 1 days
+    "max_download_bytes": 100 * 1024 * 1024,
+    "cleanup_interval_seconds": 3600,    # 1 hour
+    "delete_max_attempts": 3,
+    "download_host_allowlist": "resources.gtwy.ai",
 }

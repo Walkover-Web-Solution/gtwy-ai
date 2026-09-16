@@ -37,12 +37,15 @@ def _format_memory(memory):
 
 class ConversationService:
     @staticmethod
-    async def createOpenAiConversation(conversation, memory, files):
+    async def createOpenAiConversation(conversation, memory, files, provider_file_map=None, skip_urls=None):
         try:
             threads = []
             image_urls = await _image_data_urls(conversation)
             # Track distinct PDF URLs across the entire conversation
             seen_pdf_urls = set()
+            provider_file_map = provider_file_map or {}
+            # superseded uploads/versions: keep the message text, drop the attachment
+            skip_urls = set(skip_urls or ())
 
             if memory is not None:
                 threads.append(
@@ -74,11 +77,17 @@ class ConversationService:
                                         "type": "input_image",
                                         "image_url": image_urls.get(url.get('url'), url.get('url'))
                                     })
+                                elif url.get('url') in skip_urls:
+                                    continue
                                 elif url.get('url') not in files and url.get('url') not in seen_pdf_urls:
-                                    content.append({
-                                        "type": "input_file",
-                                        "file_url": url.get('url')
-                                    })
+                                    ref = provider_file_map.get(url.get('url'))
+                                    if ref:
+                                        content.append({"type": "input_file", "file_id": ref["file_id"]})
+                                    else:
+                                        content.append({
+                                            "type": "input_file",
+                                            "file_url": url.get('url')
+                                        })
                                     seen_pdf_urls.add(url.get('url'))
                         else:
                             content = content_text if content_text else " "
