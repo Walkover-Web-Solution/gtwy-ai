@@ -2,6 +2,7 @@ import aiohttp
 
 from decimal import Decimal
 from config import Config
+from globals import logger
 
 # Lago sits on the request hot path (reserve → sync on cache miss). The shared
 # apiservice.fetch allows 600s + retries, which would freeze user requests for
@@ -31,7 +32,15 @@ async def _lago_get(path: str, params: dict) -> dict:
 
 
 async def get_wallet_balance(org_id: str) -> Decimal:
-    """Return the org's current wallet balance in credits.
+    """Return what the org can still spend, in credits, across ALL active wallets.
+
+    An org should have exactly one wallet. When it has more, Lago charges usage
+    to one of them and lists the other first, so reading a single wallet reports
+    a balance that never moves while the real one drains. Org 20678 sat at a
+    frozen 2440 for a month while its usage ran to -284 on a second wallet, and
+    this figure seeds the Redis admission gate, so the gate never refused it.
+    Summing is therefore the org's true net position whichever wallet Lago draws
+    from, and the duplicate is logged loudly rather than silently picked between.
 
     Raises Exception if the org has no active wallet yet (residual new-org
     provisioning race, §9.4) — the caller (billing_utils._sync_balance_from_lago)
@@ -45,8 +54,13 @@ async def get_wallet_balance(org_id: str) -> Decimal:
     active = [w for w in wallets if w.get("status") == "active"]
     if not active:
         raise Exception(f"no active Lago wallet for org_id={org_id}")
-    balance = active[0].get("credits_ongoing_balance", "0")
-    return Decimal(str(balance))
+    if len(active) > 1:
+        ids = ", ".join(str(w.get("lago_id")) for w in active)
+        logger.error(
+            f"[billing] org {org_id} has {len(active)} active Lago wallets ({ids}) — "
+            "balances summed for the gate; terminate the extras in Lago"
+        )
+    return sum((Decimal(str(w.get("credits_ongoing_balance", "0") or 0)) for w in active), Decimal(0))
 
 
 # Lago plan_code -> our plan slug. Node holds the same mapping in
