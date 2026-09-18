@@ -14,6 +14,7 @@ from .batch_script_utils import get_batch_result_handler, is_finalized_batch_ite
 from .helper import Helper
 from globals import *
 from .token_calculation import TokenCalculator
+from .common_utils import update_cost_usage_and_apikey_status_in_background
 
 
 async def repeat_function():
@@ -157,6 +158,29 @@ async def check_batch_status():
                             output_tokens = usage.get('output_tokens') or 0 if usage else 0
                             total_tokens = usage.get('total_tokens') or 0 if usage else 0
                             individual_cost = item_costs.get(message_id, 0)
+
+                            # Update cost, last used, and API key status using the same function as chat completion
+                            if individual_cost:
+                                try:
+                                    cost_parsed_data = {
+                                        "bridge_id": bridge_id,
+                                        "folder_id": folder_id,
+                                        "apikey_object_id": {service: apikey_id} if apikey_id else {},
+                                        "service": service,
+                                        "tokens": {"total_cost": individual_cost},
+                                        "limit": limit,
+                                        "org_id": org_id,
+                                        "is_request_apikey": False,
+                                    }
+                                    code = status_code if not is_success else None
+                                    await update_cost_usage_and_apikey_status_in_background(
+                                        service,
+                                        cost_parsed_data,
+                                        code,
+                                        is_success,
+                                    )
+                                except Exception as cost_update_error:
+                                    logger.error(f"Error updating cost and API key status for batch {batch_id}, message {message_id}: {cost_update_error}")
 
                             update_data = {
                                 'llm_message': llm_message,
