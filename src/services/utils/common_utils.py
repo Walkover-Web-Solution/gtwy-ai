@@ -195,6 +195,9 @@ def parse_request_body(request_body):
         # Who the run is billed to (the FIRST agent's owner) — propagated
         # unchanged into nested/transfer frames.
         "billing_attribution": body.get("billing_attribution") or {},
+        # True in agent-to-agent child frames (set by call_gtwy_agent). Copied
+        # along by transfers, so a chain started from a child stays nested.
+        "nested_agent_call": bool(body.get("_nested_agent_call")),
         "org_billing_plan": body.get("org_billing_plan"),
         "user": body.get("user"),
         "original_user": body.get("user"),
