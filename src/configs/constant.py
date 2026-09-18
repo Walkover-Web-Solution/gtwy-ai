@@ -95,6 +95,9 @@ redis_keys = {
     "timezone_and_org_": "cd_timezone_and_org_",
     "conversation_": "cd_conversation_",
     "last_transffered_agent_": "cd_last_transffered_agent_",
+    # Skills: the org's catalogue, and one entry per skill's content.
+    "org_skills_": "cd_org_skills_",
+    "skill_content_": "cd_skill_content_",
     # Protected — source of truth or cost/metrics accumulators
     "bridgeusedcost_": "nd_bridgeusedcost_",
     "folderusedcost_": "nd_folderusedcost_",
@@ -144,7 +147,11 @@ limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search", "Gtwy_Browser": "Gtwy_Browser"}
 
-tool_types = {"AGENT": "AGENT"}
+tool_types = {"AGENT": "AGENT", "SKILL": "SKILL"}
+
+# The connected_tools type for a skill, and the tool the model calls to load one.
+SKILL_TOOL_TYPE = "skills"
+SKILL_TOOL_NAME = "load_skill"
 
 VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
 

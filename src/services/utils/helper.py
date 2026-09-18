@@ -335,6 +335,28 @@ class Helper:
 
         return prompt
 
+    def add_skills_to_prompt(prompt, skills):
+        """List the attached skills in the prompt; content is loaded on demand via load_skill."""
+        prompt += (
+            "\n Available Skills :- These are reusable instruction sets available to you. "
+            "When a user's request matches a skill's description, call the function load_skill "
+            "with that skill's ID to get its full instructions, then follow them: \n"
+        )
+
+        for idx, skill in enumerate(skills, 1):
+            if not isinstance(skill, dict):
+                continue
+
+            skill_id = skill.get("_id", "")
+            skill_name = skill.get("name", "")
+            skill_description = skill.get("description") or "No description available"
+
+            prompt += f"{idx}. Skill ID: {skill_id}\n"
+            prompt += f"   Name: {skill_name}\n"
+            prompt += f"   Description: {skill_description}\n\n"
+
+        return prompt
+
     def append_tone_and_response_style_prompts(prompt, tone, response_style):
         if tone:
             prompt += f"\n\nTone Prompt: {tone['prompt']}"
