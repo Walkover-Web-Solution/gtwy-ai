@@ -3,6 +3,7 @@ import json
 import logging
 
 import src.db_services.ConfigurationServices as ConfigurationService
+from src.configs.constant import SKILL_TOOL_TYPE
 from models.mongo_connection import db
 from src.services.utils.common_utils import updateVariablesWithTimeZone
 from src.db_services.ConfigurationServices import transform_agent_config_to_frontend
@@ -11,6 +12,7 @@ from .getConfiguration_utils import (
     add_browser_tool,
     add_connected_agents,
     add_rag_tool,
+    add_skills_tool,
     add_web_crawling_tool,
     get_bridge_data,
     setup_api_key,
@@ -20,6 +22,7 @@ from .getConfiguration_utils import (
     validate_bridge,
 )
 from .helper import Helper
+from .skills_utils import fetch_org_skills, get_attached_skills
 from .update_and_check_cost import check_bridge_api_folder_limits
 
 apiCallModel = db["apicalls"]
@@ -282,6 +285,17 @@ async def _prepare_configuration_response(
     add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools or bridges.get("built_in_tools"))
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
+
+    # Skills - only agents with one attached pay for the catalogue lookup.
+    has_skill_entry = any(isinstance(ct, dict) and ct.get("type") == SKILL_TOOL_TYPE for ct in connected_tools)
+    attached_skills = (
+        get_attached_skills(connected_tools, await fetch_org_skills(org_id, bridges.get("user_id")))
+        if has_skill_entry
+        else []
+    )
+    if attached_skills:
+        add_skills_tool(tools, tool_id_and_name_mapping, attached_skills)
+        configuration["prompt"] = Helper.add_skills_to_prompt(configuration["prompt"], attached_skills)
 
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 

@@ -63,6 +63,9 @@ class Config:
     FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
     # Gtwy_Browser (self-hosted Steel browser)
     STEEL_API_URL = os.getenv("STEEL_API_URL")
+    # Skills: without MCP_JWT_SECRET the load_skill tool is not registered.
+    SKILL_API_URL = os.getenv("SKILL_API_URL", "https://mcp.viasocket.com/api/skill")
+    MCP_JWT_SECRET = os.getenv("MCP_JWT_SECRET")
     OTEL_SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME")
     PROFILES_SERVER_ADDRESS = os.getenv("PROFILES_SERVER_ADDRESS")
     OTEL_EXPORTER_OTLP_PROTOCOL = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL")

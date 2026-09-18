@@ -2,7 +2,7 @@ import src.db_services.ConfigurationServices as ConfigurationService
 from config import Config
 from globals import logger
 from models.mongo_connection import db
-from src.configs.constant import inbuild_tools, tool_types
+from src.configs.constant import SKILL_TOOL_NAME, inbuild_tools, tool_types
 from src.services.commonServices.baseService.utils import makeFunctionName
 from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
@@ -425,6 +425,39 @@ def add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools):
     tool_id_and_name_mapping[inbuild_tools["Gtwy_Browser"]] = {
         "type": inbuild_tools["Gtwy_Browser"],
         "name": inbuild_tools["Gtwy_Browser"],
+    }
+
+
+def add_skills_tool(tools, tool_id_and_name_mapping, skills):
+    """Register one load_skill tool for the agent, however many skills are attached."""
+    if not skills:
+        return
+
+    tools.append(
+        {
+            "type": "function",
+            "name": SKILL_TOOL_NAME,
+            "description": (
+                "Load the full instructions for one of the skills listed in the system prompt. "
+                "Call this when a skill's description matches what the user is asking about, "
+                "then follow the instructions it returns."
+            ),
+            "properties": {
+                "skill_id": {
+                    "description": "The ID of the skill to load, exactly as listed in the available skills section.",
+                    "type": "string",
+                    "enum": [skill["_id"] for skill in skills],
+                    "required": [],
+                    "parameter": {},
+                }
+            },
+            "required": ["skill_id"],
+        }
+    )
+
+    tool_id_and_name_mapping[SKILL_TOOL_NAME] = {
+        "type": tool_types["SKILL"],
+        "name": SKILL_TOOL_NAME,
     }
 
 

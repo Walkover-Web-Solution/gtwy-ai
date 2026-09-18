@@ -31,6 +31,7 @@ from src.services.utils.apiservice import fetch
 from src.services.utils.time import SERVICE_TIMEOUTS
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 from src.services.utils.built_in_tools.browser.tool import call_gtwy_browser
+from src.services.utils.skills_utils import fetch_skill_content
 
 
 def clean_json(data):
@@ -634,6 +635,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                     task = call_firecrawl_scrape(tool_data.get("args"))
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Browser"]:
                     task = call_gtwy_browser(tool_data.get("args"), _browser_ctx(self, tool_call_key))
+                elif self.tool_id_and_name_mapping[name].get("type") == tool_types["SKILL"]:
+                    task = fetch_skill_content((tool_data.get("args") or {}).get("skill_id"), self.org_id, self.user_id)
                 elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
                     task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 else:
