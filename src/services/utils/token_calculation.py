@@ -27,7 +27,8 @@ class TokenCalculator:
             "image_output_tokens": 0,
             "cached_text_input_tokens": 0,
             "cached_image_input_tokens": 0,
-            "total_images_generated": 0
+            "total_images_generated": 0,
+            "total_tokens": 0,  # aggregate total, used by the UI's Total row
         }
 
     def calculate_usage(self, model_response):
@@ -384,6 +385,7 @@ class TokenCalculator:
         self.image_usage["cached_text_input_tokens"] += usage.get("cached_text_input_tokens") or 0
         self.image_usage["cached_image_input_tokens"] += usage.get("cached_image_input_tokens") or 0
         self.image_usage["total_images_generated"] += usage.get("total_images_generated") or 0
+        self.image_usage["total_tokens"] += usage.get("total_tokens") or 0
 
     def get_total_usage(self):
         return self.total_usage
