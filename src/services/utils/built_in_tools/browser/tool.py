@@ -32,6 +32,10 @@ from .steel_client import SteelError
 from .tabs import mark_handoff, open_or_reuse_tab, release_tab
 
 TOOL_TIMEOUT_SECONDS = 60
+# Getting a tab ready (lock, Steel session, CDP connect, cookie restore) is capped separately, so
+# a slow start can never eat the time the page itself needs. Setup plus a 30s navigate fits inside
+# the ceiling above, which was not true when the pieces were only bounded individually.
+SETUP_TIMEOUT_SECONDS = 25
 HANDOFF_INSTRUCTIONS = (
     "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
     "complete the action there (log in, solve the CAPTCHA, enter the OTP), and reply 'done' "
@@ -58,7 +62,9 @@ async def call_gtwy_browser(args: dict | None, ctx: dict | None) -> dict:
     try:
         return await asyncio.wait_for(_run(args or {}, ctx or {}), timeout=TOOL_TIMEOUT_SECONDS)
     except TimeoutError:
-        return _err(f"browser action timed out after {TOOL_TIMEOUT_SECONDS}s; try snapshot again")
+        return _err(
+            f"the page did not finish within {TOOL_TIMEOUT_SECONDS}s; call snapshot to see where it got to"
+        )
     except Exception as exc:  # the tool loop expects a dict, never an exception
         logger.error(f"Gtwy_Browser: unexpected failure: {exc.__class__.__name__}: {exc}")
         return _err(f"browser tool failed: {_reason(exc)}")
@@ -82,7 +88,16 @@ async def _run(args: dict, ctx: dict) -> dict:
             return _err(f"url not allowed: {exc}")
 
     try:
-        browser, page, registry, tab = await open_or_reuse_tab(tkey, ctx.get("org_id"), ctx.get("bridge_id"))
+        browser, page, registry, tab = await asyncio.wait_for(
+            open_or_reuse_tab(tkey, ctx.get("org_id"), ctx.get("bridge_id")),
+            timeout=SETUP_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(f"Gtwy_Browser: getting a tab took over {SETUP_TIMEOUT_SECONDS}s for thread {tkey}")
+        return _err(
+            f"the browser took more than {SETUP_TIMEOUT_SECONDS}s to start; it may be busy or "
+            "restarting. Try the same action again"
+        )
     except BrowserBusy as busy:
         return _err(str(busy), retry_in_seconds=busy.retry_in)
     except SteelError as exc:

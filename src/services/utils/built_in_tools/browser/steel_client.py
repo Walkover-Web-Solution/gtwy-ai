@@ -14,7 +14,9 @@ import httpx
 from config import Config
 from globals import logger
 
-STEEL_HTTP_TIMEOUT = 15.0
+# Creating a session relaunches Chrome, which is fast; a slower answer than this means Steel
+# is unwell and retrying inside one tool call will not help.
+STEEL_HTTP_TIMEOUT = 10.0
 DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
 # The link sits in the chat history, so it must outlive the tab it resolves to.
 LIVE_LINK_TTL_DAYS = 30
