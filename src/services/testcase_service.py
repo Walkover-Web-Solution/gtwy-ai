@@ -21,7 +21,7 @@ from bson import ObjectId
 from config import Config
 from models.mongo_connection import db
 from src.services.commonServices.baseService.utils import send_message
-from src.services.billing.billing_utils import release_credits, reserve_credits_and_api_key_setup
+from src.services.billing.billing_utils import get_platform_apikey, release_credits, reserve_credits_and_api_key_setup
 from src.services.commonServices.common import chat
 from src.services.utils.getConfiguration import getConfiguration
 from src.services.utils.time import with_timeout
@@ -64,7 +64,10 @@ async def _publish_event(rtlayer_cred: dict[str, Any] | None, event: str, payloa
 class TestcaseValidationError(Exception):
     """Custom exception for testcase validation errors"""
 
-    pass
+    def __init__(self, message: str, error_code: str | None = None):
+        super().__init__(message)
+        # e.g. CREDIT_BALANCE_EXHAUSTED / FREE_PLAN_MODEL_RESTRICTED from the credit gate.
+        self.error_code = error_code
 
 
 class TestcaseNotFoundError(Exception):
@@ -217,8 +220,39 @@ async def fetch_testcases_from_request(
     return testcases
 
 
+def _apply_model_override(cfg: dict[str, Any], override: dict[str, Any]) -> None:
+    """Swap the primary agent onto the requested service/model BEFORE the credit gate runs.
+
+    The apikey is reset to the org's own key for the new service, or None when it
+    has none, so reserve_credits_and_api_key_setup applies its normal rule to the
+    overridden model: own key -> free run (wallet=False); no key -> platform key,
+    wallet=True, plan check and a hold. Applying the override AFTER the gate (the
+    old order) meant a wallet-only org could never compare models ("No API key
+    configured"), an own key for the new service was still wallet-billed, and the
+    plan was checked against the original model rather than the one that ran.
+    """
+    new_service = override.get("service")
+    new_model = override.get("model")
+    if new_service:
+        cfg["service"] = new_service
+        cfg["apikey"] = (cfg.get("service_apikeys") or {}).get(new_service)
+        if not cfg["apikey"] and not get_platform_apikey(new_service):
+            raise TestcaseValidationError(
+                f"No API key configured on the version for service '{new_service}'. "
+                f"Add an API key for this service before running testcases with it."
+            )
+    if new_model:
+        cfg.setdefault("configuration", {})["model"] = new_model
+
+
 async def get_testcase_configuration(
-    org_id: str, version_id: str, bridge_id: str | None, testcases_flag: bool, testcase_data: dict[str, Any] | None, variables: dict[str, Any] | None
+    org_id: str,
+    version_id: str,
+    bridge_id: str | None,
+    testcases_flag: bool,
+    testcase_data: dict[str, Any] | None,
+    variables: dict[str, Any] | None,
+    override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Get configuration for testcase execution
@@ -229,6 +263,8 @@ async def get_testcase_configuration(
         bridge_id: Bridge ID
         testcases_flag: Flag indicating direct testcase data
         testcase_data: Direct testcase data
+        override: Optional {service, model, is_overridden} to run instead of the
+            version's own service/model (model-comparison runs)
 
     Returns:
         Configuration dictionary
@@ -257,18 +293,25 @@ async def get_testcase_configuration(
     if not db_config.get("success"):
         raise TestcaseValidationError(db_config.get("error", "Failed to get configuration"))
 
-    credit_hold_token, credit_error = await reserve_credits_and_api_key_setup(org_id, db_config)
-    if credit_error:
-        raise TestcaseValidationError(credit_error.get("error", "Could not resolve an API key"))
-
     primary_bridge_id = db_config.get("primary_bridge_id")
     bridge_configurations = db_config.get("bridge_configurations", {})
-
     bridge_config = bridge_configurations[primary_bridge_id]
+
+    if override:
+        _apply_model_override(bridge_config, override)
+
+    credit_hold_token, credit_error = await reserve_credits_and_api_key_setup(org_id, db_config)
+    if credit_error:
+        raise TestcaseValidationError(
+            credit_error.get("error", "Could not resolve an API key"),
+            error_code=credit_error.get("error_code"),
+        )
+
     # Single-use release token, consumed by execute_testcases' finally. Billing
     # is gated by the per-cfg `wallet` flag stamped in reserve_credits_and_api_key_setup.
     bridge_config["credit_hold_token"] = credit_hold_token
     bridge_config["billing_attribution"] = db_config.get("billing_attribution") or {}
+    bridge_config["_testcase_model_overridden"] = bool(override and override.get("is_overridden"))
     return bridge_config
 
 
@@ -278,6 +321,7 @@ async def process_single_testcase(
     override_matching_type: str | None,
     rtlayer_cred: dict[str, Any] | None = None,
     version_id: str | None = None,
+    org_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Process a single testcase
@@ -288,6 +332,7 @@ async def process_single_testcase(
         override_matching_type: Optional override matching type
         rtlayer_cred: Optional RTLayer credentials; when set, the result is pushed to the channel
         version_id: Optional version id, included in the RTLayer payload
+        org_id: Org the run belongs to; stamped on the chat body (see below)
 
     Returns:
         Dictionary containing testcase result
@@ -323,6 +368,12 @@ async def process_single_testcase(
         testcase_request_data = {
             "body": {
                 "message_id": message_id,
+                # chat() has no JWT profile on this internal call and getConfiguration's
+                # config carries no org_id, so parse_request_body would resolve org_id to
+                # None. Billing events, the history row and metrics all read it from
+                # parsed_data — without this the wallet debit for every testcase was
+                # dropped by Node as malformed and never reached Lago.
+                "org_id": org_id,
                 "user": testcase.get("conversation", [])[-1].get("content", "") if testcase.get("conversation") else "",
                 "testcase_data": {
                     "matching_type": override_matching_type or testcase.get("matching_type") or "cosine",
@@ -455,6 +506,7 @@ async def run_testcases_parallel(
     override_matching_type: str | None,
     rtlayer_cred: dict[str, Any] | None = None,
     version_id: str | None = None,
+    org_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run multiple testcases in parallel.
@@ -465,6 +517,7 @@ async def run_testcases_parallel(
         override_matching_type: Optional override matching type
         rtlayer_cred: Optional RTLayer credentials for streaming results
         version_id: Version id, included in published payloads
+        org_id: Org the run belongs to, forwarded into every chat body
 
     Returns:
         List of testcase results
@@ -472,7 +525,7 @@ async def run_testcases_parallel(
     results = await asyncio.gather(
         *[
             process_single_testcase(
-                tc, copy.deepcopy(db_config), override_matching_type, rtlayer_cred, version_id
+                tc, copy.deepcopy(db_config), override_matching_type, rtlayer_cred, version_id, org_id=org_id
             )
             for tc in testcases
         ]
@@ -538,98 +591,112 @@ async def execute_testcases(
     )
     models_list = request_data.get("models") or []
 
+    def _resolve_override(model_spec) -> dict[str, Any] | None:
+        """Requested service/model for one run, or None to run the version as configured."""
+        if model_spec:
+            return {
+                "service": (model_spec.get("service") or "").lower() or None,
+                "model": model_spec.get("model"),
+                "is_overridden": True,
+            }
+        service_override = request_data.get("service_override")
+        model_override = request_data.get("model_override")
+        if not (service_override or model_override):
+            return None
+        return {
+            "service": service_override.lower() if service_override else None,
+            "model": model_override,
+            "is_overridden": True,
+        }
+
+    async def _error_results_for_config(version_id, override, error: TestcaseValidationError):
+        """One failed outcome per testcase when a comparison model could not be set up
+        (no key, plan does not allow it, wallet empty) — the other versions/models keep running."""
+        model = override.get("model")
+        service = override.get("service")
+        results = []
+        for tc in testcases:
+            outcome = {
+                "testcase_id": (
+                    str(tc.get("_id")) if tc.get("_id") != "direct_testcase" else "direct_testcase"
+                ),
+                "bridge_id": tc.get("bridge_id"),
+                "expected": tc.get("expected"),
+                "actual_result": None,
+                "score": 0,
+                "matching_type": tc.get("matching_type", "cosine"),
+                "error": str(error),
+                "error_code": error.error_code,
+                "success": False,
+                "model": model,
+                "service": service,
+                "is_overridden": True,
+            }
+            if rtlayer_cred:
+                await _publish_event(
+                    rtlayer_cred,
+                    "testcase_result",
+                    {
+                        "version_id": version_id,
+                        "model": model,
+                        "service": service,
+                        "is_overridden": True,
+                        "result": outcome,
+                    },
+                )
+            results.append(outcome)
+        return {
+            "version_id": version_id,
+            "total_testcases": len(testcases),
+            "results": results,
+            "model": model,
+            "service": service,
+            "is_overridden": True,
+            "tools_call_data": [],
+            "total_tokens": 0,
+            "cost": 0,
+        }
+
     async def run_for_version_model(version_id, model_spec):
-        db_config = await get_testcase_configuration(
-            org_id,
-            version_id,
-            request_data["bridge_id"],
-            request_data["testcases_flag"],
-            request_data["testcase_data"],
-            request_data["variables"],
-        )
+        override = _resolve_override(model_spec)
+        try:
+            db_config = await get_testcase_configuration(
+                org_id,
+                version_id,
+                request_data["bridge_id"],
+                request_data["testcases_flag"],
+                request_data["testcase_data"],
+                request_data["variables"],
+                override=override,
+            )
+        except TestcaseValidationError as error:
+            # A plain run keeps the old behaviour (the whole run fails with the
+            # error); a comparison model that cannot run is reported per testcase.
+            if override is None:
+                raise
+            logger.warning(
+                f"testcase model override unavailable (version_id={version_id}, "
+                f"service={override.get('service')}, model={override.get('model')}): {error}"
+            )
+            return await _error_results_for_config(version_id, override, error)
         # Pop so the token never reaches the per-testcase chat bodies (chat()
         # would pop-and-release it after the first testcase otherwise).
         hold_token = db_config.pop("credit_hold_token", None)
         try:
-            return await _run_testcases_for_config(db_config, version_id, model_spec)
+            return await _run_testcases_for_config(db_config, version_id, override)
         finally:
             await release_credits(org_id, hold_token)
 
-    async def _run_testcases_for_config(db_config, version_id, model_spec):
-        is_overridden = False
-        new_service: str | None = None
-        if model_spec:
-            new_service = (model_spec.get("service") or "").lower()
-            db_config["service"] = new_service
-            db_config.setdefault("configuration", {})["model"] = model_spec.get("model")
-            is_overridden = True
-        else:
-            model_override = request_data.get("model_override")
-            service_override = request_data.get("service_override")
-            if service_override:
-                new_service = service_override.lower()
-                db_config["service"] = new_service
-                is_overridden = True
-            if model_override:
-                db_config.setdefault("configuration", {})["model"] = model_override
-                is_overridden = True
-
-        missing_apikey_error: str | None = None
-        if new_service:
-            service_apikeys = db_config.get("service_apikeys") or {}
-            new_apikey = service_apikeys.get(new_service)
-            if new_apikey:
-                db_config["apikey"] = new_apikey
-            else:
-                missing_apikey_error = (
-                    f"No API key configured on the version for service '{new_service}'. "
-                    f"Add an API key for this service before running testcases with it."
-                )
-                logger.warning(
-                    f"{missing_apikey_error} (version_id={version_id}, model={db_config.get('configuration', {}).get('model')})"
-                )
-
-        db_config["_testcase_model_overridden"] = is_overridden
-
-        if missing_apikey_error:
-            results = []
-            for tc in testcases:
-                outcome = {
-                    "testcase_id": (
-                        str(tc.get("_id")) if tc.get("_id") != "direct_testcase" else "direct_testcase"
-                    ),
-                    "bridge_id": tc.get("bridge_id"),
-                    "expected": tc.get("expected"),
-                    "actual_result": None,
-                    "score": 0,
-                    "matching_type": tc.get("matching_type", "cosine"),
-                    "error": missing_apikey_error,
-                    "success": False,
-                    "model": db_config.get("configuration", {}).get("model"),
-                    "service": new_service,
-                    "is_overridden": is_overridden,
-                }
-                if rtlayer_cred:
-                    await _publish_event(
-                        rtlayer_cred,
-                        "testcase_result",
-                        {
-                            "version_id": version_id,
-                            "model": db_config.get("configuration", {}).get("model"),
-                            "service": new_service,
-                            "is_overridden": is_overridden,
-                            "result": outcome,
-                        },
-                    )
-                results.append(outcome)
-        else:
-            results = await run_testcases_parallel(
-                testcases,
-                db_config,
-                request_data["matching_type"],
-                rtlayer_cred=rtlayer_cred,
-                version_id=version_id,
-            )
+    async def _run_testcases_for_config(db_config, version_id, override):
+        is_overridden = bool(override and override.get("is_overridden"))
+        results = await run_testcases_parallel(
+            testcases,
+            db_config,
+            request_data["matching_type"],
+            rtlayer_cred=rtlayer_cred,
+            version_id=version_id,
+            org_id=org_id,
+        )
         tools_call_data = []
         if results and isinstance(results[0], dict):
             tools_call_data = results[0].get("tools_call_data", [])
