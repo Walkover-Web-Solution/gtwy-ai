@@ -825,6 +825,7 @@ def compute_billing_events(parsed_data, history_params):
         if (event := build_llm_usage_event(usage, billing_message_id, parsed_data.get("org_id"), parsed_data.get("bridge_id")))
     ]
 
+    fee_event = None
     if parsed_data.get("wallet") or parsed_data.get("_wallet_primary_cost"):
         hit_type = "embed" if payer["is_embed"] else ("chatbot" if parsed_data.get("bridgeType") else "api")
         fee_event = build_hit_fee_event(billing_message_id, parsed_data.get("org_id"), hit_type, parsed_data.get("org_billing_plan"))
@@ -832,7 +833,13 @@ def compute_billing_events(parsed_data, history_params):
             billing_events.append(fee_event)
 
     if isinstance(parsed_data.get("usage"), dict):
-        parsed_data["usage"]["credits"] = float(sum((Decimal(e["credits"]) for e in billing_events), Decimal(0)))
+        # What this frame's history row reports. The wallet is charged the hit
+        # fee ONCE per request (every frame emits the same transaction_id and
+        # the dedup layers keep one), so only the first agent's row counts it;
+        # a nested agent's row shows its own usage alone. Otherwise summing the
+        # rows of one request overstates spend by one fee per extra agent.
+        shown = [e for e in billing_events if not (e is fee_event and parsed_data.get("nested_agent_call"))]
+        parsed_data["usage"]["credits"] = float(sum((Decimal(e["credits"]) for e in shown), Decimal(0)))
 
     parsed_data["_billing"] = {"events": billing_events, "payer": payer, "message_id": billing_message_id}
     return parsed_data["_billing"]
