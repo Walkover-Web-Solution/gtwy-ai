@@ -221,6 +221,17 @@ lock_gtwy_browser_registry, lock_gtwy_browser_reaper  short SETNX locks
 7. Handoff: "Log into https://github.com and tell me my username" produces a `browser_handoff`
    event with a live URL; `snapshot` in the same turn is refused; the next user message lets it continue.
 
+## Timeouts
+
+A browser call is capped at 60 s. Inside that, getting a tab ready (lock, Steel session, CDP
+connect, cookie restore) is capped at 25 s on its own, so a slow start can never eat the time the
+page needs. The page then gets its 30 s. A healthy Steel does the whole setup in about 1.5 s.
+
+If calls start timing out, look at Steel before the code. When its Chrome is wedged the REST
+endpoints still answer in milliseconds while anything touching the browser takes 20 s or more, so
+`/v1/health` looks fine and every browser call dies. Creating a session relaunches Chrome and
+clears it.
+
 ## Not in this POC
 
 - A pool of Steel containers, and scaling them with demand, for more than ~10 concurrent conversations.

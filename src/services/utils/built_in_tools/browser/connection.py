@@ -19,10 +19,13 @@ from globals import logger
 
 from . import steel_client
 
-CONNECT_TIMEOUT_MS = 10_000
-CONNECT_ATTEMPTS = 4
+# These add up: two attempts plus the gap is about 17s, and the whole setup is capped at
+# SETUP_TIMEOUT_SECONDS in tool.py. Four attempts used to eat 45s on their own, leaving a slow
+# page no room inside the tool's one minute ceiling.
+CONNECT_TIMEOUT_MS = 8_000
+CONNECT_ATTEMPTS = 2
 CONNECT_RETRY_SECONDS = 1.5
-TAB_APPEAR_TIMEOUT_SECONDS = 10
+TAB_APPEAR_TIMEOUT_SECONDS = 6
 
 _lock = asyncio.Lock()
 _state = {"playwright": None, "browser": None, "session_id": None, "cdp": None, "pages": {}}
