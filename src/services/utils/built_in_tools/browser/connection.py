@@ -19,12 +19,18 @@ from globals import logger
 
 from . import steel_client
 
-# These add up: two attempts plus the gap is about 17s, and the whole setup is capped at
-# SETUP_TIMEOUT_SECONDS in tool.py. Four attempts used to eat 45s on their own, leaving a slow
-# page no room inside the tool's one minute ceiling.
-CONNECT_TIMEOUT_MS = 8_000
-CONNECT_ATTEMPTS = 2
-CONNECT_RETRY_SECONDS = 1.5
+# The whole setup is capped at SETUP_TIMEOUT_SECONDS (25s) in tool.py, and a first call after
+# Chrome froze has to fit two things inside it: finding out the old Chrome is dead, then
+# relaunching and connecting to the new one. Connecting to a Chrome we already know therefore gets
+# one attempt: when it hangs, Chrome is frozen and a second attempt only burns the budget. A Chrome
+# that was just relaunched is still starting, so its attempts are shorter and retried.
+# Worst case: 1s quick failure + 1s gap + 7s hang, relaunch, then 5s + 1s + 5s, about 20s.
+CONNECT_TIMEOUT_MS = 7_000
+FRESH_CONNECT_TIMEOUT_MS = 5_000
+FRESH_CONNECT_ATTEMPTS = 2
+CONNECT_RETRY_SECONDS = 1.0
+# A failure this quick was a refusal or a network error, not a frozen Chrome, so one retry is cheap.
+QUICK_FAILURE_SECONDS = 2.0
 TAB_APPEAR_TIMEOUT_SECONDS = 6
 
 _lock = asyncio.Lock()
@@ -46,7 +52,24 @@ async def _teardown_locked() -> None:
             pass
 
 
-async def get_browser(steel_session_id: str):
+def should_retry_connect(attempt: int, elapsed_seconds: float, fresh: bool) -> bool:
+    """Whether another connect attempt is worth its time.
+
+    A Chrome that was just relaunched (``fresh``) may refuse the first attempt while it starts, so
+    it gets FRESH_CONNECT_ATTEMPTS. A Chrome we already know gets a retry only after a quick
+    failure such as a refusal; when the attempt ran to its timeout, Chrome is frozen and the
+    caller should relaunch it instead of waiting again.
+    """
+    if fresh:
+        return attempt + 1 < FRESH_CONNECT_ATTEMPTS
+    return attempt == 0 and elapsed_seconds < QUICK_FAILURE_SECONDS
+
+
+async def get_browser(steel_session_id: str, fresh: bool = False):
+    """Connect to Steel's Chrome, reusing the live connection when it is for this session.
+
+    ``fresh`` says the session was created a moment ago, so Chrome may still be starting.
+    """
     async with _lock:
         browser = _state.get("browser")
         if browser is not None and _state.get("session_id") == steel_session_id and browser.is_connected():
@@ -60,25 +83,30 @@ async def get_browser(steel_session_id: str):
         playwright = await async_playwright().start()
         browser = None
         last_error = None
-        # A session that was just created is still relaunching Chrome, so the first connect can
-        # be refused. Retry briefly rather than failing the turn.
-        for attempt in range(CONNECT_ATTEMPTS):
+        attempt = 0
+        started = asyncio.get_event_loop().time()
+        timeout_ms = FRESH_CONNECT_TIMEOUT_MS if fresh else CONNECT_TIMEOUT_MS
+        while browser is None:
+            attempt_started = asyncio.get_event_loop().time()
             try:
-                browser = await playwright.chromium.connect_over_cdp(
-                    steel_client.cdp_ws_url(), timeout=CONNECT_TIMEOUT_MS
-                )
-                break
+                browser = await playwright.chromium.connect_over_cdp(steel_client.cdp_ws_url(), timeout=timeout_ms)
             except Exception as exc:
                 last_error = exc
-                if attempt + 1 < CONNECT_ATTEMPTS:
-                    await asyncio.sleep(CONNECT_RETRY_SECONDS)
+                elapsed = asyncio.get_event_loop().time() - attempt_started
+                if not should_retry_connect(attempt, elapsed, fresh):
+                    break
+                attempt += 1
+                await asyncio.sleep(CONNECT_RETRY_SECONDS)
         if browser is None:
             await playwright.stop()
             detail = str(last_error).strip().splitlines()[0][:160] if last_error else "unknown error"
             raise BrowserConnectionError(f"could not connect to the browser: {detail}") from last_error
 
         _state.update(playwright=playwright, browser=browser, session_id=steel_session_id, cdp=None, pages={})
-        logger.info(f"Gtwy_Browser: connected over CDP for session {steel_client.redact_session_id(steel_session_id)}")
+        logger.info(
+            f"Gtwy_Browser: connected over CDP for session {steel_client.redact_session_id(steel_session_id)} "
+            f"in {asyncio.get_event_loop().time() - started:.1f}s"
+        )
         return browser
 
 
