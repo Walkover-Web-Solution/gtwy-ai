@@ -1,4 +1,7 @@
-"""Playwright connection to the Steel browser over CDP, plus isolated tab management.
+"""Playwright connections to the Steel hosts over CDP, plus isolated tab management.
+
+One connection per host per pod. Every function takes the host's base URL first, so a pod
+can drive several Chromes at once without their state mixing.
 
 Design notes learned from probing Steel's Chrome:
 
@@ -31,17 +34,26 @@ CONNECT_RETRY_SECONDS = 1.0
 QUICK_FAILURE_SECONDS = 2.0
 TAB_APPEAR_TIMEOUT_SECONDS = 6
 
-_lock = asyncio.Lock()
-_state = {"playwright": None, "browser": None, "session_id": None, "cdp": None, "pages": {}}
+_states: dict[str, dict] = {}
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def _state(host: str) -> dict:
+    return _states.setdefault(host, {"playwright": None, "browser": None, "session_id": None, "cdp": None, "pages": {}})
+
+
+def _lock(host: str) -> asyncio.Lock:
+    return _locks.setdefault(host, asyncio.Lock())
 
 
 class BrowserConnectionError(Exception):
-    """Could not reach or keep the CDP connection to Steel."""
+    """Could not reach or keep the CDP connection to a Steel host."""
 
 
-async def _teardown_locked() -> None:
-    playwright = _state.get("playwright")
-    _state.update(playwright=None, browser=None, session_id=None, cdp=None, pages={})
+async def _teardown_locked(host: str) -> None:
+    state = _state(host)
+    playwright = state.get("playwright")
+    state.update(playwright=None, browser=None, session_id=None, cdp=None, pages={})
     if playwright is not None:
         try:
             # Deliberately no browser.close(): that would dispose tabs inside Chrome.
@@ -63,16 +75,17 @@ def should_retry_connect(attempt: int, elapsed_seconds: float, fresh: bool) -> b
     return attempt == 0 and elapsed_seconds < QUICK_FAILURE_SECONDS
 
 
-async def get_browser(steel_session_id: str, fresh: bool = False):
-    """Connect to Steel's Chrome, reusing the live connection when it is for this session.
+async def get_browser(host: str, steel_session_id: str, fresh: bool = False):
+    """Connect to one host's Chrome, reusing the live connection when it is for this session.
 
     ``fresh`` says the session was created a moment ago, so Chrome may still be starting.
     """
-    async with _lock:
-        browser = _state.get("browser")
-        if browser is not None and _state.get("session_id") == steel_session_id and browser.is_connected():
+    async with _lock(host):
+        state = _state(host)
+        browser = state.get("browser")
+        if browser is not None and state.get("session_id") == steel_session_id and browser.is_connected():
             return browser
-        await _teardown_locked()
+        await _teardown_locked(host)
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:  # pragma: no cover - environment problem
@@ -87,7 +100,7 @@ async def get_browser(steel_session_id: str, fresh: bool = False):
         while browser is None:
             attempt_started = asyncio.get_event_loop().time()
             try:
-                browser = await playwright.chromium.connect_over_cdp(steel_client.cdp_ws_url(), timeout=timeout_ms)
+                browser = await playwright.chromium.connect_over_cdp(steel_client.cdp_ws_url(host), timeout=timeout_ms)
             except Exception as exc:
                 last_error = exc
                 elapsed = asyncio.get_event_loop().time() - attempt_started
@@ -98,21 +111,23 @@ async def get_browser(steel_session_id: str, fresh: bool = False):
         if browser is None:
             await playwright.stop()
             detail = str(last_error).strip().splitlines()[0][:160] if last_error else "unknown error"
-            raise BrowserConnectionError(f"could not connect to the browser: {detail}") from last_error
+            raise BrowserConnectionError(f"could not connect to {steel_client.short_host(host)}: {detail}") from last_error
 
-        _state.update(playwright=playwright, browser=browser, session_id=steel_session_id, cdp=None, pages={})
+        state.update(playwright=playwright, browser=browser, session_id=steel_session_id, cdp=None, pages={})
         logger.info(
-            f"Gtwy_Browser: connected over CDP for session {steel_client.redact_session_id(steel_session_id)} "
-            f"in {asyncio.get_event_loop().time() - started:.1f}s"
+            f"Gtwy_Browser: connected over CDP to {steel_client.short_host(host)} for session "
+            f"{steel_client.redact_session_id(steel_session_id)} in {asyncio.get_event_loop().time() - started:.1f}s"
         )
         return browser
 
 
-async def _browser_cdp(browser):
-    cdp = _state.get("cdp")
-    if cdp is None:
+async def _browser_cdp(host: str, browser):
+    state = _state(host)
+    cdp = state.get("cdp")
+    if cdp is None or state.get("browser") is not browser:
         cdp = await browser.new_browser_cdp_session()
-        _state["cdp"] = cdp
+        if state.get("browser") is browser:
+            state["cdp"] = cdp
     return cdp
 
 
@@ -133,8 +148,8 @@ async def _page_target_id(context, page) -> str | None:
             pass
 
 
-async def _rescan(browser) -> dict:
-    """Rebuild the target id to page map for this connection."""
+async def _rescan(host: str, browser) -> dict:
+    """Rebuild the target id to page map for this host's connection."""
     pages = {}
     for context in browser.contexts:
         for page in context.pages:
@@ -143,23 +158,23 @@ async def _rescan(browser) -> dict:
             target_id = await _page_target_id(context, page)
             if target_id:
                 pages[target_id] = page
-    _state["pages"] = pages
+    _state(host)["pages"] = pages
     return pages
 
 
-async def find_page(browser, target_id: str):
+async def find_page(host: str, browser, target_id: str):
     """Return the page with this Chrome target id, or None if the tab is gone."""
     if not target_id:
         return None
-    cached = _state.get("pages", {}).get(target_id)
+    cached = _state(host).get("pages", {}).get(target_id)
     if cached is not None and not cached.is_closed():
         return cached
-    return (await _rescan(browser)).get(target_id)
+    return (await _rescan(host, browser)).get(target_id)
 
 
-async def create_isolated_tab(browser) -> tuple[str, str]:
+async def create_isolated_tab(host: str, browser) -> tuple[str, str]:
     """Open a tab in a brand new cookie jar. Returns (target_id, browser_context_id)."""
-    cdp = await _browser_cdp(browser)
+    cdp = await _browser_cdp(host, browser)
     try:
         created = await cdp.send("Target.createBrowserContext", {"disposeOnDetach": False})
         browser_context_id = created["browserContextId"]
@@ -182,17 +197,17 @@ async def create_isolated_tab(browser) -> tuple[str, str]:
 
     deadline = asyncio.get_event_loop().time() + TAB_APPEAR_TIMEOUT_SECONDS
     while asyncio.get_event_loop().time() < deadline:
-        if await find_page(browser, target_id) is not None:
-            logger.info(f"Gtwy_Browser: opened isolated tab {target_id[-6:]}")
+        if await find_page(host, browser, target_id) is not None:
+            logger.info(f"Gtwy_Browser: opened isolated tab {target_id[-6:]} on {steel_client.short_host(host)}")
             return target_id, browser_context_id
         await asyncio.sleep(0.25)
     raise BrowserConnectionError("the new browser tab did not become available in time")
 
 
-async def close_tab(browser, target_id: str | None, browser_context_id: str | None) -> None:
+async def close_tab(host: str, browser, target_id: str | None, browser_context_id: str | None) -> None:
     """Close a tab and dispose its cookie jar. Errors are logged, never raised."""
     try:
-        cdp = await _browser_cdp(browser)
+        cdp = await _browser_cdp(host, browser)
     except Exception as exc:
         logger.warning(f"Gtwy_Browser: no CDP session to close tab: {exc}")
         return
@@ -201,7 +216,7 @@ async def close_tab(browser, target_id: str | None, browser_context_id: str | No
             await cdp.send("Target.closeTarget", {"targetId": target_id})
         except Exception as exc:
             logger.warning(f"Gtwy_Browser: closing tab {target_id[-6:]} failed: {exc.__class__.__name__}")
-        _state.get("pages", {}).pop(target_id, None)
+        _state(host).get("pages", {}).pop(target_id, None)
     if browser_context_id:
         try:
             await cdp.send("Target.disposeBrowserContext", {"browserContextId": browser_context_id})
@@ -209,25 +224,27 @@ async def close_tab(browser, target_id: str | None, browser_context_id: str | No
             logger.warning(f"Gtwy_Browser: disposing cookie jar failed: {exc.__class__.__name__}")
 
 
-async def export_jar_cookies(browser, browser_context_id: str) -> list[dict]:
+async def export_jar_cookies(host: str, browser, browser_context_id: str) -> list[dict]:
     """Every cookie in one tab's jar. Steel's own /context endpoint cannot see these jars."""
-    cdp = await _browser_cdp(browser)
+    cdp = await _browser_cdp(host, browser)
     result = await cdp.send("Storage.getCookies", {"browserContextId": browser_context_id})
     return result.get("cookies") or []
 
 
-async def import_jar_cookies(browser, browser_context_id: str, cookies: list[dict]) -> int:
+async def import_jar_cookies(host: str, browser, browser_context_id: str, cookies: list[dict]) -> int:
     """Load cookies into one tab's jar. Returns how many were sent."""
     if not cookies:
         return 0
-    cdp = await _browser_cdp(browser)
+    cdp = await _browser_cdp(host, browser)
     await cdp.send("Storage.setCookies", {"browserContextId": browser_context_id, "cookies": cookies})
     return len(cookies)
 
 
-async def reset_connection() -> None:
-    async with _lock:
-        await _teardown_locked()
+async def reset_connection(host: str | None = None) -> None:
+    """Drop the Playwright driver for one host, or for every host when none is given."""
+    for h in ([host] if host else list(_states.keys())):
+        async with _lock(h):
+            await _teardown_locked(h)
 
 
 def is_connection_lost_error(exc: Exception) -> bool:

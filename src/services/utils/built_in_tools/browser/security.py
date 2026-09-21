@@ -46,8 +46,7 @@ async def ensure_url_allowed(url: str) -> None:
         raise UrlBlocked("url has no hostname")
     if hostname in BLOCKED_HOSTNAMES or hostname.endswith(BLOCKED_SUFFIXES):
         raise UrlBlocked("url points to an internal host, which is not allowed")
-    steel = steel_client.steel_host()
-    if steel and hostname == steel.lower():
+    if hostname in steel_client.steel_hostnames():
         raise UrlBlocked("url points to the browser backend, which is not allowed")
 
     try:
