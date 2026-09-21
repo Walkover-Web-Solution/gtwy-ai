@@ -104,11 +104,14 @@ async def _run(args: dict, ctx: dict) -> dict:
         return _err(str(busy), retry_in_seconds=busy.retry_in)
     except SteelError as exc:
         logger.error(f"Gtwy_Browser: steel error while opening a tab: {exc}")
-        return _err("browser backend is unavailable right now; try again later")
+        return _err(f"browser backend is unavailable right now; try again later ({_reason(exc)})")
     except BrowserConnectionError as exc:
+        # Carry the underlying cause so a failure can be diagnosed from the tool result alone,
+        # not only from the server log: "Timeout 5000ms exceeded" means Chrome is frozen, while
+        # a refusal means Steel is down or restarting.
         logger.warning(f"Gtwy_Browser: connection error while opening a tab: {exc}")
         await reset_connection()
-        return _err("could not reach the browser; try again in a moment")
+        return _err(f"could not reach the browser; try again in a moment ({_reason(exc)})")
 
     # Prefer the link that survives this tab being replaced; fall back to the direct one.
     live_url = steel_client.permanent_live_url(
