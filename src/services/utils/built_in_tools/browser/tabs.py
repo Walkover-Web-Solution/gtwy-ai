@@ -34,22 +34,27 @@ from .steel_client import SteelError
 
 async def _ensure_session_and_browser(registry: dict) -> tuple[dict, object]:
     """Return (registry, browser), creating a Steel session or recovering a dead one."""
+    fresh = False
     if not registry.get("steel_session_id"):
         session = await steel_client.create_session()
         registry = empty_registry()
         registry.update(steel_session_id=session["id"], debug_url=session.get("debugUrl"))
+        fresh = True
 
     try:
-        return registry, await get_browser(registry["steel_session_id"])
+        return registry, await get_browser(registry["steel_session_id"], fresh=fresh)
     except BrowserConnectionError as exc:
-        # Steel restarted or the session was released elsewhere: every stored tab id is stale.
+        if fresh:
+            raise
+        # Chrome is frozen, Steel restarted, or the session was released elsewhere: every stored
+        # tab id is stale. Relaunch Chrome now, while there is still budget left to connect to it.
         logger.warning(f"Gtwy_Browser: reconnecting with a fresh Steel session ({exc})")
         for tkey in list((registry.get("tabs") or {}).keys()):
             await clear_thread_state(tkey)
         session = await steel_client.create_session()
         registry = empty_registry()
         registry.update(steel_session_id=session["id"], debug_url=session.get("debugUrl"))
-        return registry, await get_browser(registry["steel_session_id"])
+        return registry, await get_browser(registry["steel_session_id"], fresh=True)
 
 
 async def open_or_reuse_tab(tkey: str, org_id, bridge_id) -> tuple[object, object, dict, dict]:

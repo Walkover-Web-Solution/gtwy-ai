@@ -227,10 +227,23 @@ A browser call is capped at 60 s. Inside that, getting a tab ready (lock, Steel 
 connect, cookie restore) is capped at 25 s on its own, so a slow start can never eat the time the
 page needs. The page then gets its 30 s. A healthy Steel does the whole setup in about 1.5 s.
 
-If calls start timing out, look at Steel before the code. When its Chrome is wedged the REST
-endpoints still answer in milliseconds while anything touching the browser takes 20 s or more, so
-`/v1/health` looks fine and every browser call dies. Creating a session relaunches Chrome and
-clears it.
+The first call after Chrome freezes has the most to do: notice the old Chrome is dead, relaunch it,
+and connect to the new one. The connect budget is sized so all of that fits inside the 25 s:
+
+| Step | Budget | Why |
+|---|---|---|
+| connect to a Chrome we already know | one attempt, 7 s | a hang means Chrome is frozen; a second attempt would only wait again. Only a quick failure (refused, network error) earns one retry |
+| relaunch Chrome (`POST /v1/sessions`) | about 1 s | |
+| connect to the fresh Chrome | 2 attempts, 5 s each, 1 s apart | it may still be starting and refuse the first attempt |
+
+Worst case is about 20 s, so the call that does the repair also succeeds, rather than reporting
+"the browser took more than 25s to start" and leaving the next call to find the healthy Chrome.
+
+If calls still time out, look at Steel before the code. When its Chrome is wedged the REST
+endpoints answer in milliseconds while anything touching the browser hangs, so `/v1/health` looks
+fine and every browser call dies. The usual cause is one tab whose page process is stuck: Playwright
+attaches to every tab when it connects, so a single frozen tab blocks every connection. Creating a
+session relaunches Chrome and clears it, at the cost of every conversation's live login.
 
 ## Not in this POC
 

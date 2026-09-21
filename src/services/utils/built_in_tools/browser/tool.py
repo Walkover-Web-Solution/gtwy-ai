@@ -34,7 +34,9 @@ from .tabs import mark_handoff, open_or_reuse_tab, release_tab
 TOOL_TIMEOUT_SECONDS = 60
 # Getting a tab ready (lock, Steel session, CDP connect, cookie restore) is capped separately, so
 # a slow start can never eat the time the page itself needs. Setup plus a 30s navigate fits inside
-# the ceiling above, which was not true when the pieces were only bounded individually.
+# the ceiling above, which was not true when the pieces were only bounded individually. The
+# connect budget in connection.py is sized so that even the repair path, finding Chrome frozen and
+# relaunching it, finishes inside this window instead of failing the first call after a freeze.
 SETUP_TIMEOUT_SECONDS = 25
 HANDOFF_INSTRUCTIONS = (
     "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
