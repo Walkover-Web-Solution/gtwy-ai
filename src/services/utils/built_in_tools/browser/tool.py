@@ -115,6 +115,7 @@ async def _run(args: dict, ctx: dict) -> dict:
     ) or steel_client.live_view_url(registry.get("debug_url"), tab.get("target_id"))
     state = await get_thread_state(tkey)
     state["target_id"] = tab.get("target_id")
+    state["host"] = tab.get("host")
 
     # While the user is acting in the live view we take no snapshots, so nothing they type can
     # land in the transcript. A new user message (new message_id) or a navigate ends the handoff.
@@ -144,7 +145,7 @@ async def _run(args: dict, ctx: dict) -> dict:
     except Exception as exc:
         if is_connection_lost_error(exc):
             logger.warning(f"Gtwy_Browser: tab lost for thread {tkey}: {exc.__class__.__name__}")
-            await reset_connection()
+            await reset_connection(tab.get("host"))
             await release_tab(tkey, reason="tab lost")
             return _err("the browser tab was lost; call navigate again to start over")
         if is_timeout_error(exc):
@@ -178,7 +179,13 @@ async def _run(args: dict, ctx: dict) -> dict:
     if response.get("title"):
         response["title"] = wrap_untrusted(response["title"])
 
-    return _ok(response, action=action, url=page.url, tab=(tab.get("target_id") or "")[-6:])
+    return _ok(
+        response,
+        action=action,
+        url=page.url,
+        tab=(tab.get("target_id") or "")[-6:],
+        host=steel_client.short_host(tab.get("host")),
+    )
 
 
 async def _dispatch(action: str, args: dict, page, state: dict):

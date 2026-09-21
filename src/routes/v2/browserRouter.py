@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from config import Config
 from globals import logger
 from src.services.utils.built_in_tools.browser import steel_client
-from src.services.utils.built_in_tools.browser.session_store import get_registry, thread_key
+from src.services.utils.built_in_tools.browser.session_store import find_tab_host, get_all_registries, thread_key
 from src.services.utils.built_in_tools.browser.steel_client import SteelError
 
 router = APIRouter()
@@ -53,16 +53,18 @@ async def live_view(token: str):
         return _page("This link is not valid", "Check that you copied the whole address.", 400)
 
     scope = thread_key(claims.get("o"), claims.get("t"), claims.get("s"))
-    registry = await get_registry()
+    registries = await get_all_registries()
+    host = find_tab_host(scope, registries)
+    registry = registries.get(host) if host else None
     tab = ((registry or {}).get("tabs") or {}).get(scope)
 
     if tab and tab.get("target_id"):
-        # The tab record may outlive its Chrome: if Steel is running a different session than the
-        # one the tab was opened in, the tab is gone and Steel's player would spin on it forever.
+        # The tab record may outlive its Chrome: if the host is running a different session than
+        # the one the tab was opened in, the tab is gone and Steel's player would spin on it forever.
         try:
-            current = await steel_client.current_session()
+            current = await steel_client.current_session(host)
         except SteelError as exc:
-            logger.warning(f"Gtwy_Browser: live view could not check the current session ({exc})")
+            logger.warning(f"Gtwy_Browser: live view could not check the session on {steel_client.short_host(host)} ({exc})")
             current = None
         if current is not None and current.get("id") != registry.get("steel_session_id"):
             tab = None

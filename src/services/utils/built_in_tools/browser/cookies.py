@@ -3,7 +3,8 @@
 A tab's cookies live in its own jar and die with the tab, so a user who logged in
 yesterday would have to log in again today. Before a tab closes its cookies are
 exported, encrypted and stored; when the conversation opens a new tab they go back in
-and the sites see the user as still signed in.
+and the sites see the user as still signed in. The store is keyed by conversation, not
+by Steel host, so a returning conversation can land on any Chrome in the pool.
 
 MongoDB is the only place a login lives. A cache in front of it was tried and removed:
 the blob is read once per tab creation, roughly once per conversation, so a cache saved
@@ -72,7 +73,7 @@ async def _store_blob(scope_key: str, blob: str, cookie_count: int, meta: dict |
         logger.error(f"Gtwy_Browser: could not persist cookies for {scope_key}; the user will sign in again")
 
 
-async def save_jar(browser, browser_context_id: str | None, scope_key: str | None, meta: dict | None = None) -> int:
+async def save_jar(host: str, browser, browser_context_id: str | None, scope_key: str | None, meta: dict | None = None) -> int:
     """Export a tab's cookies and store them for its conversation. Returns how many were saved."""
     if not is_enabled() or not browser_context_id or not scope_key:
         return 0
@@ -80,7 +81,7 @@ async def save_jar(browser, browser_context_id: str | None, scope_key: str | Non
     from src.services.utils.helper import Helper  # imported here: helper imports back into this package
 
     try:
-        cookies = _trim(await export_jar_cookies(browser, browser_context_id))
+        cookies = _trim(await export_jar_cookies(host, browser, browser_context_id))
         if not cookies:
             return 0
         await _store_blob(scope_key, Helper.encrypt(json.dumps(cookies)), len(cookies), meta)
@@ -92,7 +93,7 @@ async def save_jar(browser, browser_context_id: str | None, scope_key: str | Non
         return 0
 
 
-async def restore_jar(browser, browser_context_id: str | None, scope_key: str | None) -> int:
+async def restore_jar(host: str, browser, browser_context_id: str | None, scope_key: str | None) -> int:
     """Put a conversation's saved cookies into a fresh tab. Returns how many were restored."""
     if not is_enabled() or not browser_context_id or not scope_key:
         return 0
@@ -104,7 +105,7 @@ async def restore_jar(browser, browser_context_id: str | None, scope_key: str | 
         if not blob:
             return 0
         cookies = json.loads(Helper.decrypt(blob))
-        applied = await import_jar_cookies(browser, browser_context_id, cookies)
+        applied = await import_jar_cookies(host, browser, browser_context_id, cookies)
         logger.info(f"Gtwy_Browser: restored {applied} cookies for {scope_key}")
         return applied
     except Exception as exc:
