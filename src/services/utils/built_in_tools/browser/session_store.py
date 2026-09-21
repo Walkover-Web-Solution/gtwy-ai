@@ -96,12 +96,20 @@ async def clear_registry() -> None:
     await delete_in_cache(REGISTRY_KEY)
 
 
+# How long a caller waits for another conversation to finish its setup. Bounded by time, not
+# by attempts: a slow Redis (SETNX has been seen taking 700ms) must not turn 40 attempts into
+# half a minute and eat the whole setup budget.
+REGISTRY_LOCK_WAIT_SECONDS = 5.0
+
+
 async def acquire_registry_lock() -> bool:
-    for _ in range(40):
+    deadline = asyncio.get_event_loop().time() + REGISTRY_LOCK_WAIT_SECONDS
+    while True:
         if await acquire_lock(REGISTRY_LOCK, ttl=REGISTRY_LOCK_TTL):
             return True
+        if asyncio.get_event_loop().time() >= deadline:
+            return False
         await asyncio.sleep(0.1)
-    return False
 
 
 async def release_registry_lock() -> None:

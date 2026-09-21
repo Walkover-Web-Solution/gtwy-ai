@@ -19,12 +19,10 @@ from globals import logger
 
 from . import steel_client
 
-# The whole setup is capped at SETUP_TIMEOUT_SECONDS (25s) in tool.py, and a first call after
-# Chrome froze has to fit two things inside it: finding out the old Chrome is dead, then
-# relaunching and connecting to the new one. Connecting to a Chrome we already know therefore gets
-# one attempt: when it hangs, Chrome is frozen and a second attempt only burns the budget. A Chrome
-# that was just relaunched is still starting, so its attempts are shorter and retried.
-# Worst case: 1s quick failure + 1s gap + 7s hang, relaunch, then 5s + 1s + 5s, about 20s.
+# The whole setup is capped at SETUP_TIMEOUT_SECONDS (25s) in tool.py. Connecting to a Chrome we
+# already know gets one attempt: when it hangs, a second attempt only burns the budget, and the
+# caller reports "try again" rather than restarting Chrome (a restart kills every conversation's
+# tab). A Chrome that Steel just launched is still starting, so its attempts are shorter and retried.
 CONNECT_TIMEOUT_MS = 7_000
 FRESH_CONNECT_TIMEOUT_MS = 5_000
 FRESH_CONNECT_ATTEMPTS = 2
@@ -55,10 +53,10 @@ async def _teardown_locked() -> None:
 def should_retry_connect(attempt: int, elapsed_seconds: float, fresh: bool) -> bool:
     """Whether another connect attempt is worth its time.
 
-    A Chrome that was just relaunched (``fresh``) may refuse the first attempt while it starts, so
+    A Chrome that was just launched (``fresh``) may refuse the first attempt while it starts, so
     it gets FRESH_CONNECT_ATTEMPTS. A Chrome we already know gets a retry only after a quick
-    failure such as a refusal; when the attempt ran to its timeout, Chrome is frozen and the
-    caller should relaunch it instead of waiting again.
+    failure such as a refusal; when the attempt ran to its timeout, waiting again is pointless
+    and the caller should give up for this call and ask for a retry.
     """
     if fresh:
         return attempt + 1 < FRESH_CONNECT_ATTEMPTS

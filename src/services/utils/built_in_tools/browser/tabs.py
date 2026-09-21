@@ -17,7 +17,6 @@ from .session_store import (
     MAX_TABS,
     BrowserBusy,
     acquire_registry_lock,
-    clear_registry,
     clear_thread_state,
     cookie_meta,
     drop_tab,
@@ -32,29 +31,44 @@ from .session_store import (
 from .steel_client import SteelError
 
 
-async def _ensure_session_and_browser(registry: dict) -> tuple[dict, object]:
-    """Return (registry, browser), creating a Steel session or recovering a dead one."""
-    fresh = False
-    if not registry.get("steel_session_id"):
-        session = await steel_client.create_session()
-        registry = empty_registry()
-        registry.update(steel_session_id=session["id"], debug_url=session.get("debugUrl"))
-        fresh = True
+async def reconcile_registry(registry: dict, current: dict | None) -> dict:
+    """Make the registry describe the Chrome Steel is running now.
 
-    try:
-        return registry, await get_browser(registry["steel_session_id"], fresh=fresh)
-    except BrowserConnectionError as exc:
-        if fresh:
-            raise
-        # Chrome is frozen, Steel restarted, or the session was released elsewhere: every stored
-        # tab id is stale. Relaunch Chrome now, while there is still budget left to connect to it.
-        logger.warning(f"Gtwy_Browser: reconnecting with a fresh Steel session ({exc})")
-        for tkey in list((registry.get("tabs") or {}).keys()):
-            await clear_thread_state(tkey)
-        session = await steel_client.create_session()
-        registry = empty_registry()
-        registry.update(steel_session_id=session["id"], debug_url=session.get("debugUrl"))
-        return registry, await get_browser(registry["steel_session_id"], fresh=True)
+    Chrome may have been replaced by something gtwy did not do: a person in the Steel UI,
+    Steel itself, or another client. Every tab recorded for the old Chrome is gone, so they
+    are forgotten here instead of being handed out as ghosts. Pure apart from clearing the
+    per-thread Redis state, so it can be tested with a fake registry.
+    """
+    if current is None or registry.get("steel_session_id") == current["id"]:
+        return registry
+    tabs = list((registry.get("tabs") or {}).keys())
+    if registry.get("steel_session_id"):
+        logger.warning(
+            f"Gtwy_Browser: Chrome was replaced (session {steel_client.redact_session_id(registry.get('steel_session_id'))}"
+            f" -> {steel_client.redact_session_id(current['id'])}); {len(tabs)} recorded tab(s) are gone"
+        )
+    for tkey in tabs:
+        await clear_thread_state(tkey)
+    fresh = empty_registry()
+    fresh.update(steel_session_id=current["id"], debug_url=current.get("debugUrl"))
+    return fresh
+
+
+async def _ensure_session_and_browser(registry: dict) -> tuple[dict, object]:
+    """Return (registry, browser) for the Chrome Steel is running now.
+
+    Never restarts Chrome because a connect failed: that used to kill every other
+    conversation's tab and start the next failure. A failed connect is reported to the
+    caller as BrowserConnectionError and the model is told to retry.
+    """
+    current = await steel_client.current_session()
+    fresh = False
+    if current is None:
+        # Steel has no Chrome up at all (fresh container). This is the only time gtwy launches one.
+        current = await steel_client.create_session()
+        fresh = True
+    registry = await reconcile_registry(registry, current)
+    return registry, await get_browser(current["id"], fresh=fresh)
 
 
 async def open_or_reuse_tab(tkey: str, org_id, bridge_id) -> tuple[object, object, dict, dict]:
@@ -153,10 +167,8 @@ async def release_tab(tkey: str, reason: str = "") -> None:
                 logger.warning(f"Gtwy_Browser: could not close tab of {tkey}: {exc}")
             logger.info(f"Gtwy_Browser: released tab of thread {tkey} ({reason})")
         await clear_thread_state(tkey)
-        if registry.get("tabs"):
-            await save_registry(registry)
-        else:
-            await steel_client.release_session(registry.get("steel_session_id"))
-            await clear_registry()
+        # Never release the Steel session: Steel restarts Chrome on release and would take every
+        # other conversation's tab with it. An empty tab list is a fine resting state.
+        await save_registry(registry)
     finally:
         await release_registry_lock()

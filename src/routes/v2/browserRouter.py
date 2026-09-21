@@ -18,6 +18,7 @@ from config import Config
 from globals import logger
 from src.services.utils.built_in_tools.browser import steel_client
 from src.services.utils.built_in_tools.browser.session_store import get_registry, thread_key
+from src.services.utils.built_in_tools.browser.steel_client import SteelError
 
 router = APIRouter()
 
@@ -55,11 +56,22 @@ async def live_view(token: str):
     registry = await get_registry()
     tab = ((registry or {}).get("tabs") or {}).get(scope)
 
+    if tab and tab.get("target_id"):
+        # The tab record may outlive its Chrome: if Steel is running a different session than the
+        # one the tab was opened in, the tab is gone and Steel's player would spin on it forever.
+        try:
+            current = await steel_client.current_session()
+        except SteelError as exc:
+            logger.warning(f"Gtwy_Browser: live view could not check the current session ({exc})")
+            current = None
+        if current is not None and current.get("id") != registry.get("steel_session_id"):
+            tab = None
+
     if not tab or not tab.get("target_id"):
         return _page(
             "No browser is open for this conversation",
-            "The tab closed after a few minutes of inactivity. Ask the assistant to open a page "
-            "again and a fresh one will start.",
+            "The tab closed after a few minutes of inactivity or the browser was restarted. Ask "
+            "the assistant to open a page again and a fresh one will start.",
             404,
         )
 
