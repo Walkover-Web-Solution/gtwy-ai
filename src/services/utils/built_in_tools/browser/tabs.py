@@ -19,7 +19,9 @@ from .connection import (
     create_isolated_tab,
     find_page,
     get_browser,
+    reset_connection,
 )
+from .frozen_tabs import close_frozen_tabs
 from .session_store import (
     MAX_TABS_PER_HOST,
     BrowserBusy,
@@ -65,12 +67,45 @@ async def reconcile_registry(host: str, registry: dict, current: dict | None) ->
     return fresh
 
 
+async def forget_tabs(host: str, registry: dict, target_ids: list[str]) -> list[str]:
+    """Drop the registry records of tabs that no longer exist. Returns the affected thread keys."""
+    gone = [key for key, tab in (registry.get("tabs") or {}).items() if tab.get("target_id") in target_ids]
+    for key in gone:
+        drop_tab(registry, key)
+        await clear_thread_state(key)
+        logger.warning(f"Gtwy_Browser: thread {key} lost its frozen tab on {steel_client.short_host(host)}; it gets a new one on its next call")
+    return gone
+
+
+async def _connect_or_repair(host: str, registry: dict, session_id: str, fresh: bool):
+    """Connect to a host's Chrome; if the handshake hangs, close frozen tabs and try once more.
+
+    A connect that times out while Chrome's browser process still answers means one tab's
+    renderer is frozen and is blocking every new connection. Closing that tab, and only that
+    tab, unblocks everyone else. Any other failure is reported as is, never with a restart.
+    """
+    try:
+        return await get_browser(host, session_id, fresh=fresh)
+    except BrowserConnectionError as exc:
+        if not exc.timed_out:
+            raise
+        logger.warning(f"Gtwy_Browser: connect to {steel_client.short_host(host)} hung; looking for frozen tabs")
+        closed = await close_frozen_tabs(host)
+        if not closed:
+            raise
+        await forget_tabs(host, registry, closed)
+        await save_registry(host, registry)
+        await reset_connection(host)
+        return await get_browser(host, session_id, fresh=fresh)
+
+
 async def _ensure_session_and_browser(host: str, registry: dict) -> tuple[dict, object]:
     """Return (registry, browser) for the Chrome one host is running now.
 
     Never restarts Chrome because a connect failed: that used to kill every other
-    conversation's tab and start the next failure. A failed connect is reported to the
-    caller as BrowserConnectionError and the model is told to retry.
+    conversation's tab and start the next failure. A hung connect gets the frozen-tab repair;
+    any other failed connect is reported to the caller as BrowserConnectionError and the
+    model is told to retry.
     """
     current = await steel_client.current_session(host)
     fresh = False
@@ -79,7 +114,7 @@ async def _ensure_session_and_browser(host: str, registry: dict) -> tuple[dict, 
         current = await steel_client.create_session(host)
         fresh = True
     registry = await reconcile_registry(host, registry, current)
-    return registry, await get_browser(host, current["id"], fresh=fresh)
+    return registry, await _connect_or_repair(host, registry, current["id"], fresh)
 
 
 def _placement_order(registries: dict[str, dict | None], exclude: str | None = None) -> list[str]:

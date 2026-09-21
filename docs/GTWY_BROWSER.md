@@ -265,11 +265,18 @@ to fix: every restart killed the other conversations' tabs, their cleanup releas
 (another restart), and each restart was a new chance to hit a Chrome that was still starting.
 Steel's session history showed bursts of three restarts within five seconds on several days.
 
-If connects still time out with Chrome left alone, look at Steel before the code. When its Chrome
-is wedged the REST endpoints answer in milliseconds while the CDP websocket hangs, so `/v1/health`
-looks fine. Check the api container's logs on the VM for that minute, and whether Chrome answers on
-port 9223 inside the VM while the proxied websocket does not. A release from Steel's UI clears it,
-at the cost of every conversation's live login, and gtwy recovers on the next call.
+**A frozen tab is repaired, not restarted around.** Playwright and Steel's live view both
+initialize every tab when they connect and wait for each renderer to answer, so a single page that
+froze while loading blocks every new connection to that Chrome: the websocket opens, then nothing,
+while `/v1/health` and Chrome's browser process answer instantly. Seen live with a shopping site's
+orders page whose title never left `about:blank`. When a connect times out, `frozen_tabs.py` talks to
+Chrome over a plain websocket at the browser level, asks each tab's renderer to evaluate `1` with a
+3 s deadline, closes only the tabs that never answer, forgets them in the registry, and connects
+again. The frozen conversation gets a fresh tab on its next call; everyone else keeps their tab and
+their login. The reaper does the same on its tick, so a host does not stay blocked until someone
+acts. If Chrome does not answer even at the browser level, nothing tab-level can help and the call
+reports the browser as unavailable; that is the moment to look at the host's memory and CPU
+(`docker stats`) and at Steel's own logs.
 
 ## Not in this POC
 
