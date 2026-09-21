@@ -26,8 +26,9 @@ from .session_store import (
     save_registry,
     tab_idle_limit,
 )
+from .frozen_tabs import close_frozen_tabs
 from .steel_client import SteelError
-from .tabs import reconcile_registry
+from .tabs import forget_tabs, reconcile_registry
 
 REAPER_LOCK = "gtwy_browser_reaper"
 REAPER_LOCK_TTL = 55
@@ -92,7 +93,14 @@ async def _reap_host(host: str) -> None:
         try:
             browser = await get_browser(host, registry["steel_session_id"])
         except BrowserConnectionError as exc:
-            # Chrome is still the one we know but is not answering right now. Leave the tabs
+            if exc.timed_out:
+                # A frozen tab blocks every connection to this Chrome. Close it now, so the
+                # conversations that are still healthy do not wait for the next tool call.
+                closed = await close_frozen_tabs(host)
+                if closed:
+                    await forget_tabs(host, registry, closed)
+                    await save_registry(host, registry)
+            # Otherwise Chrome is the one we know but is not answering right now. Leave the tabs
             # alone and try again next tick; they are not stale just because a connect failed.
             logger.warning(f"Gtwy_Browser: reaper cannot reach {steel_client.short_host(host)} ({exc}); will retry next tick")
             await reset_connection(host)

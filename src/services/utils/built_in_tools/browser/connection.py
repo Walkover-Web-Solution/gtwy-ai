@@ -47,7 +47,15 @@ def _lock(host: str) -> asyncio.Lock:
 
 
 class BrowserConnectionError(Exception):
-    """Could not reach or keep the CDP connection to a Steel host."""
+    """Could not reach or keep the CDP connection to a Steel host.
+
+    ``timed_out`` is True when the websocket opened but Chrome never finished the handshake,
+    which is what a single frozen tab looks like from the outside.
+    """
+
+    def __init__(self, message: str, timed_out: bool = False):
+        super().__init__(message)
+        self.timed_out = timed_out
 
 
 async def _teardown_locked(host: str) -> None:
@@ -111,7 +119,10 @@ async def get_browser(host: str, steel_session_id: str, fresh: bool = False):
         if browser is None:
             await playwright.stop()
             detail = str(last_error).strip().splitlines()[0][:160] if last_error else "unknown error"
-            raise BrowserConnectionError(f"could not connect to {steel_client.short_host(host)}: {detail}") from last_error
+            raise BrowserConnectionError(
+                f"could not connect to {steel_client.short_host(host)}: {detail}",
+                timed_out=is_timeout_error(last_error) if last_error else False,
+            ) from last_error
 
         state.update(playwright=playwright, browser=browser, session_id=steel_session_id, cdp=None, pages={})
         logger.info(
