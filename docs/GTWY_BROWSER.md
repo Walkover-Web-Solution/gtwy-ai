@@ -30,7 +30,19 @@ one Chromium ── tab (own cookie jar) ── conversation A   logged in as us
   right tab. Up to 10 conversations can hold a tab at once; beyond
   that, a conversation whose tab has been idle past the 300 s idle timeout is recycled, and if
   none are idle the caller gets a clear "all tabs are in use" error.
-  A reaper on every pod closes idle tabs and releases the Steel session once no tab is left.
+  A reaper on every pod closes idle tabs. It never releases the Steel session.
+- **gtwy does not own the Chrome, it uses the one Steel is running.** Steel OSS always keeps one
+  session up: after any release it starts a default one by itself. Creating a session restarts
+  Chrome, and so does releasing one, even with a stale or unknown id (verified against Steel). A
+  restart kills every conversation's tab at once and drops every live view. So before every call
+  gtwy asks Steel which session is running (`GET /v1/sessions`, the newest one not released) and
+  attaches to that. It creates a session only when Steel reports none at all, and it never calls
+  release. If the running session id differs from the one in the registry, Chrome was replaced by
+  someone else (a person in the Steel UI, Steel itself, another client) and every recorded tab is
+  forgotten instead of being handed out as a ghost. A connect that fails is reported to the model
+  as "try again"; it is never answered by restarting Chrome, because that used to start a chain
+  where one conversation's hiccup killed the others' tabs, whose "tab lost" cleanup then killed
+  the first one's new tab, and so on.
 - **Why raw CDP and not `browser.new_context()`.** Playwright owns the contexts it creates and
   destroys them when the connection closes, which would drop a user's login on every reconnect or
   pod restart. Raw CDP contexts survive, and a fresh process can find their tabs again by target id.
@@ -217,33 +229,37 @@ lock_gtwy_browser_registry, lock_gtwy_browser_reaper  short SETNX locks
    logged-out site. With all tabs held and no idle tab, the caller gets
    `all N browser tabs are in use by other conversations; retry in N seconds`.
 
-6. Reaper: after the idle timeout the tab is closed and its cookies saved; once no tab is left the Steel session is released.
+6. Reaper: after the idle timeout the tab is closed and its cookies saved. Chrome stays up; `GET /v1/sessions` keeps showing the same session.
+8. Replaced Chrome: with a tab open, click release in Steel's UI (or `POST /v1/sessions`). The next
+   browser call logs "Chrome was replaced" and opens a fresh tab instead of failing, and the old
+   `live_url` shows "No browser is open" instead of "Session connecting...".
 7. Handoff: "Log into https://github.com and tell me my username" produces a `browser_handoff`
    event with a live URL; `snapshot` in the same turn is refused; the next user message lets it continue.
 
 ## Timeouts
 
-A browser call is capped at 60 s. Inside that, getting a tab ready (lock, Steel session, CDP
-connect, cookie restore) is capped at 25 s on its own, so a slow start can never eat the time the
-page needs. The page then gets its 30 s. A healthy Steel does the whole setup in about 1.5 s.
-
-The first call after Chrome freezes has the most to do: notice the old Chrome is dead, relaunch it,
-and connect to the new one. The connect budget is sized so all of that fits inside the 25 s:
+A browser call is capped at 60 s. Inside that, getting a tab ready (lock, Steel session lookup,
+CDP connect, cookie restore) is capped at 25 s on its own, so a slow start can never eat the time
+the page needs. The page then gets its 30 s. A healthy Steel does the whole setup in about 1.5 s.
+Waiting for the registry lock is bounded by time (5 s), not by attempts, because a slow Redis
+was seen taking 700 ms per lock call.
 
 | Step | Budget | Why |
 |---|---|---|
-| connect to a Chrome we already know | one attempt, 7 s | a hang means Chrome is frozen; a second attempt would only wait again. Only a quick failure (refused, network error) earns one retry |
-| relaunch Chrome (`POST /v1/sessions`) | about 1 s | |
-| connect to the fresh Chrome | 2 attempts, 5 s each, 1 s apart | it may still be starting and refuse the first attempt |
+| connect to a Chrome we already know | one attempt, 7 s | a hang will not clear by waiting again; only a quick failure (refused, network error) earns one retry |
+| connect to a Chrome Steel just launched | 2 attempts, 5 s each, 1 s apart | it may still be starting and refuse the first attempt |
 
-Worst case is about 20 s, so the call that does the repair also succeeds, rather than reporting
-"the browser took more than 25s to start" and leaving the next call to find the healthy Chrome.
+A connect that fails ends the call with "the browser did not answer; try again". It does not
+restart Chrome. Restarting was the old reaction, and it was the cause of the failures it was meant
+to fix: every restart killed the other conversations' tabs, their cleanup released the session
+(another restart), and each restart was a new chance to hit a Chrome that was still starting.
+Steel's session history showed bursts of three restarts within five seconds on several days.
 
-If calls still time out, look at Steel before the code. When its Chrome is wedged the REST
-endpoints answer in milliseconds while anything touching the browser hangs, so `/v1/health` looks
-fine and every browser call dies. The usual cause is one tab whose page process is stuck: Playwright
-attaches to every tab when it connects, so a single frozen tab blocks every connection. Creating a
-session relaunches Chrome and clears it, at the cost of every conversation's live login.
+If connects still time out with Chrome left alone, look at Steel before the code. When its Chrome
+is wedged the REST endpoints answer in milliseconds while the CDP websocket hangs, so `/v1/health`
+looks fine. Check the api container's logs on the VM for that minute, and whether Chrome answers on
+port 9223 inside the VM while the proxied websocket does not. A release from Steel's UI clears it,
+at the cost of every conversation's live login, and gtwy recovers on the next call.
 
 ## Not in this POC
 

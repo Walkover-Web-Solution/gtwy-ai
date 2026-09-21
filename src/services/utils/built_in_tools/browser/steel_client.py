@@ -1,9 +1,13 @@
 """Thin REST client for a self-hosted Steel browser (https://github.com/steel-dev/steel-browser).
 
-Steel OSS runs ONE Chrome and ONE active session per container. Creating a new
-session relaunches Chrome and kills the previous one, so all session ownership
-is arbitrated by session_store, never here. Steel OSS has no auth: keep it on a
-private network.
+Steel OSS runs ONE Chrome and ONE active session per container, and it always keeps a
+session running: after any release it starts a default one on its own. Creating a session
+relaunches Chrome, and so does releasing one, even with a stale or unknown id (verified
+against Steel). Either call kills every tab of every conversation, so gtwy never releases
+and only creates when Steel reports no session at all. The CDP endpoint is not tied to a
+session: ``wss://host/`` reaches whatever Chrome is running right now, which is why the
+caller compares the running session id with the one it remembered before trusting its tabs.
+Steel OSS has no auth: keep it on a private network.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -112,23 +116,29 @@ async def _request(method: str, path: str, json_body: dict | None = None) -> dic
         return None
 
 
+def pick_current_session(sessions: list[dict] | None) -> dict | None:
+    """The session whose Chrome is running now: the newest one Steel has not released.
+
+    Steel's list can carry a stale ``live`` entry next to the real one after a messy relaunch,
+    so the newest wins rather than the first. Pure, so it can be tested without Steel.
+    """
+    live = [s for s in (sessions or []) if s.get("id") and s.get("status") != "released"]
+    if not live:
+        return None
+    return max(live, key=lambda s: s.get("createdAt") or "")
+
+
+async def current_session() -> dict | None:
+    """Ask Steel which session is running. None means Steel has no Chrome up at all."""
+    data = await _request("GET", "/v1/sessions")
+    return pick_current_session((data or {}).get("sessions"))
+
+
 async def create_session() -> dict:
-    """Launch a Steel session. Returns the raw Steel session dict (id, websocketUrl, debugUrl, ...)."""
+    """Launch a Steel session. Only for when Steel reports none: this relaunches Chrome."""
     body = {"dimensions": DEFAULT_VIEWPORT, "blockAds": True}
     data = await _request("POST", "/v1/sessions", body)
     if not data or not data.get("id"):
         raise SteelError("steel returned no session id")
     logger.info(f"Gtwy_Browser: created steel session {redact_session_id(data['id'])}")
     return data
-
-
-async def release_session(session_id: str) -> bool:
-    try:
-        await _request("POST", f"/v1/sessions/{session_id}/release")
-        logger.info(f"Gtwy_Browser: released steel session {redact_session_id(session_id)}")
-        return True
-    except SteelError as exc:
-        # Steel answers with a synthetic "released" stub for unknown ids, so a failure here is rare
-        # and never fatal: the next create_session() relaunches Chrome anyway.
-        logger.warning(f"Gtwy_Browser: release of {redact_session_id(session_id)} failed: {exc}")
-        return False

@@ -32,11 +32,10 @@ from .steel_client import SteelError
 from .tabs import mark_handoff, open_or_reuse_tab, release_tab
 
 TOOL_TIMEOUT_SECONDS = 60
-# Getting a tab ready (lock, Steel session, CDP connect, cookie restore) is capped separately, so
-# a slow start can never eat the time the page itself needs. Setup plus a 30s navigate fits inside
-# the ceiling above, which was not true when the pieces were only bounded individually. The
-# connect budget in connection.py is sized so that even the repair path, finding Chrome frozen and
-# relaunching it, finishes inside this window instead of failing the first call after a freeze.
+# Getting a tab ready (lock, Steel session lookup, CDP connect, cookie restore) is capped
+# separately, so a slow start can never eat the time the page itself needs. Setup plus a 30s
+# navigate fits inside the ceiling above. A connect that fails inside this window is reported as
+# an error to retry; it never restarts Chrome, because that would kill every other conversation's tab.
 SETUP_TIMEOUT_SECONDS = 25
 HANDOFF_INSTRUCTIONS = (
     "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
@@ -108,7 +107,7 @@ async def _run(args: dict, ctx: dict) -> dict:
     except BrowserConnectionError as exc:
         logger.warning(f"Gtwy_Browser: connection error while opening a tab: {exc}")
         await reset_connection()
-        return _err("could not reach the browser; try again in a moment")
+        return _err("the browser did not answer; it may still be starting. Try the same action again in a few seconds")
 
     # Prefer the link that survives this tab being replaced; fall back to the direct one.
     live_url = steel_client.permanent_live_url(
