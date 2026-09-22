@@ -426,6 +426,11 @@ async def send_message(cred, data):
 
 
 async def sendResponse(response_format, data, success=False, variables=None, meta=None):
+    """Deliver a payload to the request's configured destination.
+
+    For a webhook destination the customer's own reply is recorded onto the
+    response_format dict as "webhook_response" — see _attach_webhook_response.
+    """
     if variables is None:
         variables = {}
     data_to_send = {"response" if success else "error": data, "success": success}
