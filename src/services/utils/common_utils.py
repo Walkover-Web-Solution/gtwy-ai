@@ -1464,7 +1464,7 @@ def restructure_json_schema(response_type, service):
 
 
 
-def model_supports_json_schema(model_config):
+def model_supports_json_schema_or_text(model_config):
     """
     Return True if the model config advertises a json_schema response_type option.
 
@@ -1486,8 +1486,9 @@ def model_supports_json_schema(model_config):
 
     options = response_type.get("options")
     if not isinstance(options, list):
-        return True
-    return any(isinstance(opt, dict) and opt.get("type") == "json_schema" for opt in options)
+        return (False, False)
+    return ((any(isinstance(opt, dict) and opt.get("type") == "json_schema" for opt in options)),(
+        any(isinstance(opt, dict) and opt.get("type") == "text" for opt in options)))
 
 
 def normalize_response_type(custom_config, service, model_config=None):
@@ -1516,14 +1517,17 @@ def normalize_response_type(custom_config, service, model_config=None):
         if text_value:
             # Store the text instruction in a separate key to be added to system message
             custom_config["_text_instruction"] = text_value
-        custom_config["response_type"] = {"type": "text"}
+        _, is_text_support = model_supports_json_schema_or_text(model_config)
+        if not is_text_support:
+            custom_config.pop("response_type", None)
         return
 
     if rtype == "json_object":
         return
 
     if rtype == "json_schema":
-        if model_supports_json_schema(model_config):
+        is_json_schema_support, _ = model_supports_json_schema_or_text(model_config)
+        if is_json_schema_support:
             custom_config["response_type"] = restructure_json_schema(response_type, service)
         else:
             # Model can't enforce a json_schema: inline the schema into the prompt and
