@@ -61,8 +61,14 @@ class Config:
     HIPPOCAMPUS_API_KEY = os.getenv("HIPPOCAMPUS_API_KEY")
     HIPPOCAMPUS_COLLECTION_ID = os.getenv("HIPPOCAMPUS_COLLECTION_ID")
     FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
-    # Gtwy_Browser (self-hosted Steel browser)
+    # Gtwy_Browser (self-hosted Steel browsers). STEEL_API_URLS is the pool, comma separated;
+    # STEEL_API_URL is kept for a single host. Each host's Chrome takes at most
+    # STEEL_MAX_TABS_PER_HOST conversations (3 on the current 1.5 GB containers).
     STEEL_API_URL = os.getenv("STEEL_API_URL")
+    STEEL_API_URLS = os.getenv("STEEL_API_URLS")
+    STEEL_MAX_TABS_PER_HOST = int(os.getenv("STEEL_MAX_TABS_PER_HOST") or 3)
+    # Public address of this gateway, used to build the permanent browser live-view link.
+    GTWY_PUBLIC_URL = os.getenv("GTWY_PUBLIC_URL")
     OTEL_SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME")
     PROFILES_SERVER_ADDRESS = os.getenv("PROFILES_SERVER_ADDRESS")
     OTEL_EXPORTER_OTLP_PROTOCOL = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
@@ -88,11 +94,3 @@ class Config:
     # never rewrites past charges. MUST match Node's GTWY_COMMISSION_PCT, or
     # background AI jobs are billed at a different rate from main calls.
     GTWY_COMMISSION_PCT = os.getenv("GTWY_COMMISSION_PCT")
-    # Flat fee, in USD, charged once per HIT on top of the model cost and the
-    # commission above. Every wallet-billed hit pays one; embed traffic has its
-    # own rate, everything else (direct API calls and chatbot hits) pays the
-    # standard one. Unset or 0 disables that fee. Applied at charge time like the
-    # commission, so changing either needs no migration and never rewrites past
-    # charges.
-    GTWY_HIT_FEE_USD = os.getenv("GTWY_HIT_FEE_USD")
-    GTWY_EMBED_HIT_FEE_USD = os.getenv("GTWY_EMBED_HIT_FEE_USD")

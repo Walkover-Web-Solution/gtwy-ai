@@ -32,12 +32,23 @@ from .steel_client import SteelError
 from .tabs import mark_handoff, open_or_reuse_tab, release_tab
 
 TOOL_TIMEOUT_SECONDS = 60
+# Getting a tab ready (lock, Steel session lookup, CDP connect, cookie restore) is capped
+# separately, so a slow start can never eat the time the page itself needs. Setup plus a 30s
+# navigate fits inside the ceiling above. A connect that fails inside this window is reported as
+# an error to retry; it never restarts Chrome, because that would kill every other conversation's tab.
+SETUP_TIMEOUT_SECONDS = 25
 HANDOFF_INSTRUCTIONS = (
     "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
     "complete the action there (log in, solve the CAPTCHA, enter the OTP), and reply 'done' "
     "when finished. Do not take any other browser action in this turn. When the user replies, "
     "call snapshot and continue the original task."
 )
+
+
+def _reason(exc: Exception) -> str:
+    """A short, readable cause. Playwright calls every error "Error", so use its message."""
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+    return text[:200]
 
 
 def _err(message: str, **extra) -> dict:
@@ -52,10 +63,12 @@ async def call_gtwy_browser(args: dict | None, ctx: dict | None) -> dict:
     try:
         return await asyncio.wait_for(_run(args or {}, ctx or {}), timeout=TOOL_TIMEOUT_SECONDS)
     except TimeoutError:
-        return _err(f"browser action timed out after {TOOL_TIMEOUT_SECONDS}s; try snapshot again")
+        return _err(
+            f"the page did not finish within {TOOL_TIMEOUT_SECONDS}s; call snapshot to see where it got to"
+        )
     except Exception as exc:  # the tool loop expects a dict, never an exception
         logger.error(f"Gtwy_Browser: unexpected failure: {exc.__class__.__name__}: {exc}")
-        return _err(f"browser tool failed: {exc.__class__.__name__}")
+        return _err(f"browser tool failed: {_reason(exc)}")
 
 
 async def _run(args: dict, ctx: dict) -> dict:
@@ -76,7 +89,16 @@ async def _run(args: dict, ctx: dict) -> dict:
             return _err(f"url not allowed: {exc}")
 
     try:
-        browser, page, registry, tab = await open_or_reuse_tab(tkey, ctx.get("org_id"), ctx.get("bridge_id"))
+        browser, page, registry, tab = await asyncio.wait_for(
+            open_or_reuse_tab(tkey, ctx.get("org_id"), ctx.get("bridge_id")),
+            timeout=SETUP_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(f"Gtwy_Browser: getting a tab took over {SETUP_TIMEOUT_SECONDS}s for thread {tkey}")
+        return _err(
+            f"the browser took more than {SETUP_TIMEOUT_SECONDS}s to start; it may be busy or "
+            "restarting. Try the same action again"
+        )
     except BrowserBusy as busy:
         return _err(str(busy), retry_in_seconds=busy.retry_in)
     except SteelError as exc:
@@ -85,11 +107,15 @@ async def _run(args: dict, ctx: dict) -> dict:
     except BrowserConnectionError as exc:
         logger.warning(f"Gtwy_Browser: connection error while opening a tab: {exc}")
         await reset_connection()
-        return _err("could not reach the browser; try again in a moment")
+        return _err("the browser did not answer; it may still be starting. Try the same action again in a few seconds")
 
-    live_url = steel_client.live_view_url(registry.get("debug_url"), tab.get("target_id"))
+    # Prefer the link that survives this tab being replaced; fall back to the direct one.
+    live_url = steel_client.permanent_live_url(
+        ctx.get("org_id"), ctx.get("thread_id"), ctx.get("sub_thread_id")
+    ) or steel_client.live_view_url(registry.get("debug_url"), tab.get("target_id"))
     state = await get_thread_state(tkey)
     state["target_id"] = tab.get("target_id")
+    state["host"] = tab.get("host")
 
     # While the user is acting in the live view we take no snapshots, so nothing they type can
     # land in the transcript. A new user message (new message_id) or a navigate ends the handoff.
@@ -111,21 +137,24 @@ async def _run(args: dict, ctx: dict) -> dict:
     try:
         response, new_ref_map = await _dispatch(action, args, page, state)
     except StaleRefError as exc:
-        return _err(str(exc))
+        return _err(str(exc), live_url=live_url)
     except UrlBlocked as exc:
-        return _err(f"url not allowed: {exc}")
+        return _err(f"url not allowed: {exc}", live_url=live_url)
     except BrowserActionError as exc:
-        return _err(str(exc))
+        return _err(str(exc), live_url=live_url)
     except Exception as exc:
         if is_connection_lost_error(exc):
             logger.warning(f"Gtwy_Browser: tab lost for thread {tkey}: {exc.__class__.__name__}")
-            await reset_connection()
+            await reset_connection(tab.get("host"))
             await release_tab(tkey, reason="tab lost")
             return _err("the browser tab was lost; call navigate again to start over")
         if is_timeout_error(exc):
-            return _err("timeout: the page did not respond in time; call snapshot to see its current state")
+            return _err(
+                "timeout: the page did not respond in time; call snapshot to see its current state",
+                live_url=live_url,
+            )
         logger.error(f"Gtwy_Browser: action {action} failed: {exc.__class__.__name__}: {exc}")
-        return _err(f"browser action failed: {exc.__class__.__name__}")
+        return _err(f"browser action failed: {_reason(exc)}", live_url=live_url)
 
     if new_ref_map is not None:
         state["ref_map"] = new_ref_map
@@ -139,6 +168,10 @@ async def _run(args: dict, ctx: dict) -> dict:
         await _emit_handoff(ctx, live_url, state["handoff_message"])
         response.update(login_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
 
+    # The chat UI needs a way to show this conversation's tab at any moment, not only when a login
+    # blocks the agent, so every result carries the live view pinned to that tab.
+    response.setdefault("live_url", live_url)
+
     await save_thread_state(tkey, state)
 
     if response.get("snapshot"):
@@ -146,7 +179,13 @@ async def _run(args: dict, ctx: dict) -> dict:
     if response.get("title"):
         response["title"] = wrap_untrusted(response["title"])
 
-    return _ok(response, action=action, url=page.url, tab=(tab.get("target_id") or "")[-6:])
+    return _ok(
+        response,
+        action=action,
+        url=page.url,
+        tab=(tab.get("target_id") or "")[-6:],
+        host=steel_client.short_host(tab.get("host")),
+    )
 
 
 async def _dispatch(action: str, args: dict, page, state: dict):

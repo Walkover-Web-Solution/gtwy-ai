@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from config import Config
 from src.db_services.browserCookieService import ensure_indexes as ensure_browser_cookie_indexes
+from src.services.utils.built_in_tools.browser import steel_client
 from src.services.utils.built_in_tools.browser.reaper import run_browser_reaper_loop
 import globals as _globals
 from globals import logger
@@ -34,6 +35,7 @@ from src.configs.service_registry import background_listen_for_service_changes, 
 from src.routes.chatBot_routes import router as chatbot_router
 from src.routes.image_process_routes import router as image_process_routes
 from src.routes.rag_routes import router as rag_routes
+from src.routes.v2.browserRouter import router as browser_router
 from src.routes.v2.modelRouter import router as v2_router
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueService import queue_obj
@@ -72,8 +74,8 @@ async def lifespan(app: FastAPI):
     plan_registry_task = asyncio.create_task(background_listen_for_plan_changes())
     supported_services_refresh_task = asyncio.create_task(run_supported_services_refresh_loop())
     # Gtwy_Browser reaper runs on every pod (browser sessions start on any pod), not only the consumer.
-    browser_reaper_task = asyncio.create_task(run_browser_reaper_loop()) if Config.STEEL_API_URL else None
-    if Config.STEEL_API_URL:
+    browser_reaper_task = asyncio.create_task(run_browser_reaper_loop()) if steel_client.is_configured() else None
+    if steel_client.is_configured():
         asyncio.create_task(ensure_browser_cookie_indexes())
 
     yield  # Startup logic is complete
@@ -173,6 +175,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # Include routers
 app.include_router(v2_router, prefix="/api/v2/model")
+app.include_router(browser_router, prefix="/browser")
 app.include_router(chatbot_router, prefix="/chatbot")
 app.include_router(image_process_routes, prefix="/image/processing")
 app.include_router(image_process_routes, prefix="/files")

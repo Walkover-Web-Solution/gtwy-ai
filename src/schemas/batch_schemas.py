@@ -7,21 +7,27 @@ length against batch length.
 
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from ._validators import HTTP_URL_REGEX
-from .completion_schemas import CompletionRequest
+from .completion_schemas import CompletionRequest, WebhookCredModel
 
 
 class BatchChatCompletionRequest(CompletionRequest):
     # batch is required and non-empty.
     batch: list[str] = Field(min_length=1)
 
-    # webhook is required for batch (optional in parent).
-    webhook: str = Field(pattern=HTTP_URL_REGEX)
+    # webhook is required for batch (optional in parent): { url, headers? }.
+    # url must match HTTP_URL_REGEX (enforced via WebhookCredModel).
+    webhook: dict[str, Any]
 
     # Optional per-item variable substitutions; length must match batch.
     batch_variables: list[dict[str, Any]] | None = None
+
+    @field_validator("webhook")
+    @classmethod
+    def validate_webhook(cls, value: dict[str, Any]) -> dict[str, Any]:
+        WebhookCredModel.model_validate(value)
+        return value
 
     @model_validator(mode="after")
     def validate_batch_variables_length(self) -> "BatchChatCompletionRequest":

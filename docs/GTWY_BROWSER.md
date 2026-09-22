@@ -9,13 +9,14 @@ and hand the browser to the user when a login or CAPTCHA is needed.
 ## How it works
 
 ```
-model ──tool call──▶ gtwy (Gtwy_Browser tool) ──REST──▶ Steel /v1/sessions
-                          │                     ──CDP (Playwright)──▶ Chromium in Steel
-                          └── Redis: which tab belongs to which conversation + ref maps
+model ──tool call──▶ gtwy (Gtwy_Browser tool) ──REST──▶ Steel /v1/sessions   (one call per host)
+                          │                     ──CDP (Playwright)──▶ Chromium in Steel (one connection per host)
+                          └── Redis: which host and tab belongs to which conversation + ref maps
 
-one Chromium ── tab (own cookie jar) ── conversation A   logged in as user A
-             ├─ tab (own cookie jar) ── conversation B   logged in as user B
-             └─ tab (own cookie jar) ── conversation C   logged out
+api-1 Chromium ── tab (own cookie jar) ── conversation A   logged in as user A
+               ├─ tab (own cookie jar) ── conversation B   logged in as user B
+               └─ tab (own cookie jar) ── conversation C   logged out          (host full at 3)
+api-2 Chromium ── tab (own cookie jar) ── conversation D
 ```
 
 - **Snapshot loop.** Every action returns the page as an accessibility tree. Interactive
@@ -26,11 +27,30 @@ one Chromium ── tab (own cookie jar) ── conversation A   logged in as us
   CDP (`Target.createBrowserContext` + `Target.createTarget`), so it has its own cookie jar: two
   conversations can be signed in to the same site as different people, and neither sees the other's
   session. Coming back to an older conversation reuses that conversation's tab, still logged in.
-  Tabs are tracked in `nd_gtwy_browser_registry` by Chrome target id, so any gtwy pod can find the
-  right tab. Up to 10 conversations can hold a tab at once; beyond
-  that, a conversation whose tab has been idle past the 300 s idle timeout is recycled, and if
-  none are idle the caller gets a clear "all tabs are in use" error.
-  A reaper on every pod closes idle tabs and releases the Steel session once no tab is left.
+  Tabs are tracked per host in `nd_gtwy_browser_registry_<host>` by Chrome target id, so any gtwy
+  pod can find the right tab. A reaper on every pod closes idle tabs. It never releases the Steel session.
+- **A pool of Steel hosts, at most 3 conversations per Chrome.** `STEEL_API_URLS` lists the hosts.
+  A conversation stays on the host where its tab was opened, so its logins stay with it. A new
+  conversation goes to the host with the fewest open tabs. A host takes at most
+  `STEEL_MAX_TABS_PER_HOST` conversations (default 3); when it is full, a tab idle past the 300 s
+  limit is recycled first, and only when every host is full does the caller get a clear
+  "all tabs are in use" error with a retry time. If one host is unreachable the others are still
+  used. The cap is 3 because that is what the hosts can carry: with a 1.5 GB container limit and
+  Steel logging every request of every page, three real shopping or login pages put a host at
+  80% memory and nearly two cores, and its live view stops streaming. Raise the cap only after the
+  hosts get more memory and Steel's per-request logging is turned down.
+- **gtwy does not own the Chrome, it uses the one Steel is running.** Steel OSS always keeps one
+  session up: after any release it starts a default one by itself. Creating a session restarts
+  Chrome, and so does releasing one, even with a stale or unknown id (verified against Steel). A
+  restart kills every conversation's tab at once and drops every live view. So before every call
+  gtwy asks Steel which session is running (`GET /v1/sessions`, the newest one not released) and
+  attaches to that. It creates a session only when Steel reports none at all, and it never calls
+  release. If the running session id differs from the one in the registry, Chrome was replaced by
+  someone else (a person in the Steel UI, Steel itself, another client) and every recorded tab is
+  forgotten instead of being handed out as a ghost. A connect that fails is reported to the model
+  as "try again"; it is never answered by restarting Chrome, because that used to start a chain
+  where one conversation's hiccup killed the others' tabs, whose "tab lost" cleanup then killed
+  the first one's new tab, and so on.
 - **Why raw CDP and not `browser.new_context()`.** Playwright owns the contexts it creates and
   destroys them when the connection closes, which would drop a user's login on every reconnect or
   pod restart. Raw CDP contexts survive, and a fresh process can find their tabs again by target id.
@@ -113,17 +133,19 @@ The shared-secret header is not wired yet, so restrict by network address for no
 ## Configure gtwy
 
 ```
-STEEL_API_URL=https://api-1.browser.embarko.ai   # empty disables the tool
+STEEL_API_URLS=https://api-1.browser.gtwy.ai,https://api-2.browser.gtwy.ai   # the pool; empty disables the tool
+STEEL_MAX_TABS_PER_HOST=3                                                    # conversations per Chrome
+GTWY_PUBLIC_URL=https://dev-api.gtwy.ai                                      # for the permanent live link
 ```
 
-That is the only environment variable. Everything else is a constant in the code, because it
-describes how the browser behaves rather than where it lives:
+`STEEL_API_URL` with a single host still works. Everything else is a constant in the code, because
+it describes how the browser behaves rather than where it lives:
 
 | Constant | Where | Value |
 |---|---|---|
 | `IDLE_TIMEOUT_SECONDS` | `session_store.py` | 300, close a tab after 5 minutes of silence |
 | `HANDOFF_TIMEOUT_SECONDS` | `session_store.py` | 900, longer while a user is signing in |
-| `MAX_TABS` | `session_store.py` | 10 conversations browsing at once per container |
+| `MAX_TABS_PER_HOST` | `session_store.py` | from `STEEL_MAX_TABS_PER_HOST`, default 3 per host |
 | `SNAPSHOT_MAX_CHARS` | `actions.py` | 15,000, cuts huge pages |
 | `COOKIE_TTL_SECONDS` | `cookies.py` | 30 days a saved login lives in MongoDB |
 
@@ -159,9 +181,18 @@ Snapshot text is wrapped in `<<<UNTRUSTED_WEB_CONTENT>>>` markers.
 - `browser_handoff`: `{"event": "browser_handoff", "live_url", "message", "call_id"}`.
   `live_url` is pinned to this conversation's own tab, so the user only sees their own page.
 
-The same value also arrives as `live_url` inside the tool result (`login_required` is `true` there),
-and for non-streaming callers at `response.data.tools_data.Gtwy_Browser.live_url`. Read one of those
-rather than parsing the model's reply text: the URL is long and a model may reformat or truncate it.
+**Every browser result carries `live_url`**, not only the handoff ones, so the interface can show
+this conversation's tab at any moment. It points at gtwy, not at Steel: `/browser/live/<token>`
+resolves the conversation's tab when someone opens it and redirects there. A Steel link names one tab by
+id, and that tab is closed after a few minutes of silence, so a link from an older message would point at
+a tab that no longer exists and Steel's player answers by retrying forever, which reads as
+"Session connecting..." with no explanation. The gtwy link keeps working across tab changes, and when no
+browser is open it says so. The token is signed with `SecretKey`, is the same all day for a conversation,
+and stays valid for 30 days; set `GTWY_PUBLIC_URL` or the tool falls back to the direct Steel link. It is in the streamed `tool_result` content and, for
+non-streaming callers, at `response.data.tools_data.Gtwy_Browser.live_url`. Read one of those rather
+than parsing the model's reply text: the URL is long and a model may reformat or truncate it. When a
+login blocks the agent the same result also sets `login_required: true` and emits `browser_handoff`,
+which is the cue to put the browser in front of the user rather than merely offering it.
 
 ```js
 // in the chat UI's SSE handler
@@ -185,11 +216,11 @@ embed an iframe yet, render `live_url` as a plain "Log in" link that opens in a 
 ## Redis keys
 
 ```
-nd_gtwy_browser_registry                            the shared Chrome: steel session + one record
-                                                    per open tab {target_id, browser_context_id,
+nd_gtwy_browser_registry_<host>                     one per Steel host: its steel session + one record
+                                                    per open tab {host, target_id, browser_context_id,
                                                     last_used_at, handoff_active}
-nd_gtwy_browser_thread_<org>:<thread>:<sub_thread>  per-conversation ref map and handoff flags
-lock_gtwy_browser_registry, lock_gtwy_browser_reaper  short SETNX locks
+nd_gtwy_browser_thread_<org>:<thread>:<sub_thread>  per-conversation host, ref map and handoff flags
+lock_gtwy_browser_registry_<host>, lock_gtwy_browser_reaper  short SETNX locks
 ```
 
 ## Manual verification
@@ -197,7 +228,7 @@ lock_gtwy_browser_registry, lock_gtwy_browser_reaper  short SETNX locks
 1. Start Steel. `curl -X POST localhost:3000/v1/sessions` returns `id`, `websocketUrl`, `debugUrl`.
    Open `debugUrl` in a browser and confirm you can click inside the page. Release with
    `curl -X POST localhost:3000/v1/sessions/<id>/release`.
-2. Set `STEEL_API_URL`, start gtwy.
+2. Set `STEEL_API_URLS` (or `STEEL_API_URL` for one host), start gtwy.
 3. Chat completion with `stream: true`, `built_in_tools: ["Gtwy_Browser"]`, prompt
    "Open https://example.com and tell me the main heading". Expect `tool_call` (navigate),
    a `tool_result` whose snapshot contains `heading "Example Domain"`, then the answer.
@@ -208,13 +239,43 @@ lock_gtwy_browser_registry, lock_gtwy_browser_reaper  short SETNX locks
    logged-out site. With all tabs held and no idle tab, the caller gets
    `all N browser tabs are in use by other conversations; retry in N seconds`.
 
-6. Reaper: after the idle timeout the tab is closed and its cookies saved; once no tab is left the Steel session is released.
+6. Reaper: after the idle timeout the tab is closed and its cookies saved. Chrome stays up; `GET /v1/sessions` keeps showing the same session.
+8. Replaced Chrome: with a tab open, click release in Steel's UI (or `POST /v1/sessions`). The next
+   browser call logs "Chrome was replaced" and opens a fresh tab instead of failing, and the old
+   `live_url` shows "No browser is open" instead of "Session connecting...".
 7. Handoff: "Log into https://github.com and tell me my username" produces a `browser_handoff`
    event with a live URL; `snapshot` in the same turn is refused; the next user message lets it continue.
 
+## Timeouts
+
+A browser call is capped at 60 s. Inside that, getting a tab ready (lock, Steel session lookup,
+CDP connect, cookie restore) is capped at 25 s on its own, so a slow start can never eat the time
+the page needs. The page then gets its 30 s. A healthy Steel does the whole setup in about 1.5 s.
+Waiting for the registry lock is bounded by time (5 s), not by attempts, because a slow Redis
+was seen taking 700 ms per lock call.
+
+| Step | Budget | Why |
+|---|---|---|
+| connect to a Chrome we already know | one attempt, 7 s | a hang will not clear by waiting again; only a quick failure (refused, network error) earns one retry |
+| connect to a Chrome Steel just launched | 2 attempts, 5 s each, 1 s apart | it may still be starting and refuse the first attempt |
+
+A connect that fails ends the call with "the browser did not answer; try again". It does not
+restart Chrome. Restarting was the old reaction, and it was the cause of the failures it was meant
+to fix: every restart killed the other conversations' tabs, their cleanup released the session
+(another restart), and each restart was a new chance to hit a Chrome that was still starting.
+Steel's session history showed bursts of three restarts within five seconds on several days.
+
+If connects still time out with Chrome left alone, look at Steel before the code. When its Chrome
+is wedged the REST endpoints answer in milliseconds while the CDP websocket hangs, so `/v1/health`
+looks fine. Check the api container's logs on the VM for that minute, and whether Chrome answers on
+port 9223 inside the VM while the proxied websocket does not. A release from Steel's UI clears it,
+at the cost of every conversation's live login, and gtwy recovers on the next call.
+
 ## Not in this POC
 
-- A pool of Steel containers, and scaling them with demand, for more than ~10 concurrent conversations.
+- Scaling the Steel pool with demand. The pool itself is static: the hosts in `STEEL_API_URLS`, 3
+  conversations each. Placement is by tab count, not by the host's actual memory or CPU; a
+  check of the host's load before placing a tab would handle heavy and light pages better.
 - A user-facing control to clear saved logins. Nothing exposes one yet.
 - Local storage and IndexedDB are not saved, only cookies. Sites that keep their session outside
   cookies will still ask the user to log in again.
