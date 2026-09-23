@@ -2,6 +2,7 @@ import json
 import traceback
 
 from globals import logger
+from src.configs.constant import service_name
 from src.exceptions import ApiCallError
 
 from ...utils.apiservice import fetch, fetch_stream
@@ -22,7 +23,7 @@ async def grok_stream(configuration, api_key):
     usage = {}
     finish_reason = None
     try:
-        async for line in fetch_stream(url=url, headers=headers, json_body=payload):
+        async for line in fetch_stream(url=url, headers=headers, json_body=payload, service=service_name["grok"]):
             if not line.startswith("data:"):
                 continue
             data_str = line[5:].strip()
@@ -80,7 +81,7 @@ async def grok_runmodel(
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
             # Use the custom fetch function to make the API call
-            response_data, response_headers = await fetch(url=url, method="POST", headers=headers, json_body=config)
+            response_data, response_headers = await fetch(url=url, method="POST", headers=headers, json_body=config, service=service_name["grok"])
 
             # Parse the response similar to OpenAI format
             return {"success": True, "response": response_data}
