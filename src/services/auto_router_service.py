@@ -37,9 +37,10 @@ async def apply_auto_model_selection(parsed_data, timer):
         timer=timer,
         execution_time_logs=execution_time_logs,
         tradeoff=tradeoff,
-        # None means "not wallet-billed", i.e. unrestricted. See the
-        # org_billing_plan-presence invariant in reserve_credits_and_api_key_setup:
-        # the plan is only stamped when the request needed the wallet.
+        # None means "not wallet-billed", i.e. unrestricted. Gated on `wallet`,
+        # not on the plan's presence: the plan is also stamped on own-key
+        # traffic whose plan charges the per-hit fee, and that traffic is never
+        # model-restricted (see reserve_credits_and_api_key_setup).
         plan_code=parsed_data.get("org_billing_plan") if parsed_data.get("wallet") else None,
     )
 

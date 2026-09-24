@@ -199,6 +199,9 @@ def parse_request_body(request_body):
         # along by transfers, so a chain started from a child stays nested.
         "nested_agent_call": bool(body.get("_nested_agent_call")),
         "org_billing_plan": body.get("org_billing_plan"),
+        # Set by reserve_credits_and_api_key_setup when the org's plan charges
+        # the per-hit fee even on its own API key (OWN_KEY_HIT_FEE_PLANS).
+        "charge_hit_fee": bool(body.get("charge_hit_fee")),
         "user": body.get("user"),
         "original_user": body.get("user"),
         "tools": body.get("configuration", {}).get("tools"),
