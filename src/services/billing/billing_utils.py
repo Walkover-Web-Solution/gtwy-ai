@@ -392,9 +392,11 @@ def fallback_allowed_on_plan(parsed_data: dict) -> bool:
     Fallbacks with their own (customer) apikey are never restricted — they do
     not spend wallet credits, so they short-circuit before the plan is read.
     That short-circuit is also what makes an ABSENT org_billing_plan safe:
-    reserve_credits_and_api_key_setup stamps the plan only when the request
-    actually needed the wallet, so absent implies wallet=False everywhere and
-    we already returned above. Do not "helpfully" default the plan here.
+    reserve_credits_and_api_key_setup stamps the plan whenever the request
+    needed the wallet, so absent implies wallet=False everywhere and we already
+    returned above. (It may ALSO be present with wallet=False, on own-key
+    traffic whose plan charges the per-hit fee; the short-circuit covers that
+    too.) Do not "helpfully" default the plan here.
 
     Fail-closed on the allowlist. The single fail-open condition (the registry
     never loaded) is decided once, inside plan_allows.
@@ -576,15 +578,25 @@ async def apply_billing_events(events: list[dict] | None) -> None:
             logger.error(f"[billing] shadow debit failed for event {event.get('transaction_id')}: {e}")
 
 
+# Plans whose orgs pay the per-hit fee on EVERY hit, including hits that run
+# entirely on the customer's own API key. Those hits cost GTWY nothing in model
+# spend, so they are charged the fee alone (billing_plans.hit_fees for the plan)
+# and gated on the balance like any other billed hit. Plans outside this set
+# keep own-key traffic completely free.
+OWN_KEY_HIT_FEE_PLANS = frozenset({"paid"})
+
+
 async def reserve_credits_and_api_key_setup(
     org_id: str, db_config: dict, is_batch: bool = False
 ) -> tuple[str | None, dict | None]:
     """Fill in the platform apikey and hold credits for it, in one place.
 
     setup_api_key leaves apikey as None when a bridge has no key of its own.
-    Each bridge decides for ITSELF: with its own key it runs free (wallet=False);
-    without one it gets the platform key and wallet=True, so only its usage is
-    debited. One hold covers the request whenever any bridge runs on wallet.
+    Each bridge decides for ITSELF: with its own key its model usage is free
+    (wallet=False); without one it gets the platform key and wallet=True, so
+    only its usage is debited. One hold covers the request whenever any bridge
+    runs on wallet, OR the org's plan is in OWN_KEY_HIT_FEE_PLANS — those plans
+    pay the per-hit fee on own-key hits too, so they are gated the same way.
 
     Only chat-type requests get a hold. Embedding/image/batch are not billed
     per-event yet and nothing on those paths releases a hold, so one placed for
@@ -655,7 +667,12 @@ async def reserve_credits_and_api_key_setup(
             cfg["wallet"] = False
         return None, None
 
-    if not wallet_needed:
+    # Resolved for own-key traffic as well: a plan in OWN_KEY_HIT_FEE_PLANS
+    # charges the per-hit fee even when no agent touches the platform key.
+    # get_org_plan fails closed to free, so a Lago outage can only UNDER-charge.
+    plan = await get_org_plan(org_id)
+    charge_every_hit = plan in OWN_KEY_HIT_FEE_PLANS
+    if not wallet_needed and not charge_every_hit:
         return None, None
 
     # A plan is an ALLOWLIST of services, optionally narrowed to specific models
@@ -669,7 +686,6 @@ async def reserve_credits_and_api_key_setup(
     # transfer agents covered: a transfer can only target an agent already in
     # this map. Anything that ever introduces an agent config MID-request would
     # bypass the plan entirely.
-    plan = await get_org_plan(org_id)
     db_config["org_billing_plan"] = plan
     from src.configs.model_configuration import model_config_document  # lazy: import cycle
 
@@ -681,10 +697,16 @@ async def reserve_credits_and_api_key_setup(
         # plan visible in those frames. Invariant that follows, and that the
         # fail-closed predicates below depend on:
         #
-        #   org_billing_plan is present on a cfg IFF the request needed the wallet.
-        #   Absent implies wallet=False everywhere, and every plan predicate
-        #   short-circuits on `wallet` before reading the plan.
+        #   org_billing_plan is present on a cfg IFF the request needed the wallet
+        #   OR its plan charges own-key hits. Absent implies wallet=False and no
+        #   fee everywhere, and every plan predicate short-circuits on `wallet`
+        #   before reading the plan — so stamping it on own-key traffic changes
+        #   no allowlist decision.
+        #
+        # charge_hit_fee rides the same path, so every frame of the request can
+        # emit the fee; its transaction_id is per-request, so it lands once.
         cfg["org_billing_plan"] = plan
+        cfg["charge_hit_fee"] = charge_every_hit
         if not cfg.get("wallet"):
             continue
         cfg_service = cfg.get("service")
