@@ -1,8 +1,11 @@
 import src.db_services.ConfigurationServices as ConfigurationService
 from config import Config
+from globals import logger
 from models.mongo_connection import db
 from src.configs.constant import inbuild_tools, tool_types
 from src.services.commonServices.baseService.utils import makeFunctionName
+from src.services.utils.built_in_tools.browser import steel_client
+from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
 from src.services.utils.service_config_utils import tool_choice_function_name_formatter
@@ -229,11 +232,6 @@ def setup_api_key(service, bridges, apikey, chatbot):
             # Use Config.OPENAI_API_KEY only if model is gpt-5-nano
             if model == "gpt-5-nano":
                 apikey = Config.OPENAI_API_KEY_GPT_5_NANO
-            else:
-                raise Exception("Could not find api key or Agent is not Published")
-
-    if not (apikey or db_api_key):
-        raise Exception("Could not find api key or Agent is not Published")
 
     # Handle fallback configuration
     fallback_config = bridges.get("settings", {}).get("fall_back")
@@ -248,8 +246,9 @@ def setup_api_key(service, bridges, apikey, chatbot):
             bridges["settings"]["fall_back"]["apikey"] = Helper.decrypt(fallback_apikey)
             bridges["settings"]["fall_back"]["apikey_object_id"] = db_apikeys_object_id.get(fallback_service)
 
-    # Use provided API key or decrypt from database
-    return apikey if apikey else Helper.decrypt(db_api_key)
+    if apikey:
+        return apikey
+    return Helper.decrypt(db_api_key) if db_api_key else None
 
 
 def setup_pre_tools(bridge, agent_data, variables):
@@ -362,6 +361,27 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
         "name": inbuild_tools["Gtwy_Web_Search"],
     }
 
+
+
+def _should_enable_browser_tool(built_in_tools):
+    if not built_in_tools:
+        return False
+    return inbuild_tools["Gtwy_Browser"] in built_in_tools
+
+
+def add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools):
+    """Add the Steel-backed browser tool when requested via built-in tools."""
+    if not _should_enable_browser_tool(built_in_tools):
+        return
+    if not steel_client.is_configured():
+        logger.warning("Gtwy_Browser requested but no Steel host is configured (STEEL_API_URLS / STEEL_API_URL); tool not registered")
+        return
+
+    tools.append(build_browser_tool_schema())
+    tool_id_and_name_mapping[inbuild_tools["Gtwy_Browser"]] = {
+        "type": inbuild_tools["Gtwy_Browser"],
+        "name": inbuild_tools["Gtwy_Browser"],
+    }
 
 
 def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag, variables_path_bridge):

@@ -122,6 +122,7 @@ class BaseService:
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
+        self.billing_attribution = params.get("billing_attribution") or {}
         self.is_embed = params.get("is_embed")
         self.user_id = params.get("user_id")
         self.api_collection = params.get("api_collection")
@@ -497,6 +498,10 @@ class BaseService:
 
             if new_config.get("stream") is not None and service_name[service] in {"anthropic", "gemini", "mistral"}:
                 new_config.pop("stream")
+
+            # Remove internal keys that shouldn't be passed to API
+            new_config.pop("_json_schema_instruction", None)
+            new_config.pop("_text_instruction", None)
 
             static_extra_body = service_extra_body(service)
             if static_extra_body:

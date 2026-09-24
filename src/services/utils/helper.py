@@ -494,6 +494,10 @@ class Helper:
 def build_rerun_queue_message(log, data_to_send):
     """Build an independent queue message for a single rerun from the conversation log."""
     body = copy.deepcopy(data_to_send.get("body", {}))
+    # The middleware's hold belongs to the /rerun request itself, not to the N
+    # queued copies — carrying it here made every consumer release the same
+    # hold (free credits). The route releases it once after queueing.
+    body.pop("credit_hold_token", None)
     original_thread_id = log.get("thread_id")
     original_sub_thread_id = log.get("sub_thread_id")
     rerun_suffix = uuid.uuid4().hex[:8]
@@ -520,7 +524,13 @@ def build_rerun_queue_message(log, data_to_send):
     if bridge_id and bridge_id in bridge_confs:
         bridge_confs[bridge_id]["variables"] = merged_variables
 
-    body.setdefault("settings", {}).update({"response_format": {"type": "default"}, "stream": False})
+    stored_response_format = log.get("response_format") or {}
+    if stored_response_format.get("type") == "webhook" and (stored_response_format.get("cred") or {}).get("url"):
+        rerun_response_format = stored_response_format
+    else:
+        rerun_response_format = {"type": "default"}
+
+    body.setdefault("settings", {}).update({"response_format": rerun_response_format, "stream": False})
     return {"body": body, "state": data_to_send.get("state", {}), "path_params": data_to_send.get("path_params", {})}
 
 

@@ -282,6 +282,7 @@ async def find_rerun_logs(org_id, message_ids=None, bridge_id=None, thread_id=No
                 "user_urls": log.user_urls or [],
                 "service": log.service,
                 "model": log.model,
+                "response_format": log.response_format,
             }
 
         # message_ids path — return map of all found logs

@@ -21,6 +21,9 @@ from src.configs.service_registry import (
     uses_string_tool_choice,
 )
 from src.controllers.rag_controller import get_text_from_vectorsQuery
+from decimal import Decimal
+
+from src.services.billing.billing_utils import build_hit_fee_event, build_llm_usage_event
 from src.services.utils.mcp_utils import MCP_NAME_SUFFIX, display_mcp_tool_name
 from src.services.cache_service import REDIS_PREFIX, client, find_in_cache, incr_in_cache, store_in_cache
 from src.services.mcp_gateway.client import call_mcp_tool
@@ -28,6 +31,7 @@ from src.services.utils.ai_call_util import call_gtwy_agent
 from src.services.utils.apiservice import fetch
 from src.services.utils.time import SERVICE_TIMEOUTS
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
+from src.services.utils.built_in_tools.browser.tool import call_gtwy_browser
 
 
 def clean_json(data):
@@ -422,6 +426,11 @@ async def send_message(cred, data):
 
 
 async def sendResponse(response_format, data, success=False, variables=None, meta=None):
+    """Deliver a payload to the request's configured destination.
+
+    For a webhook destination the customer's own reply is recorded onto the
+    response_format dict as "webhook_response" — see _attach_webhook_response.
+    """
     if variables is None:
         variables = {}
     data_to_send = {"response" if success else "error": data, "success": success}
@@ -432,7 +441,32 @@ async def sendResponse(response_format, data, success=False, variables=None, met
             data_to_send["variables"] = variables
             if meta:
                 data_to_send["meta"] = meta
-            return await send_request(**response_format["cred"], method="POST", data=data_to_send)
+            webhook_response = await send_request(**response_format["cred"], method="POST", data=data_to_send)
+            _attach_webhook_response(response_format, webhook_response)
+            return webhook_response
+
+
+def _attach_webhook_response(response_format, webhook_response):
+    """Keep what the customer's webhook replied, on the response_format dict.
+
+    Mutates the caller's dict by design: callers pass parsed_data["response_format"],
+    which _attach_sub_thread_extras copies into conversation_log_data, so the reply
+    reaches the row of whichever path sent it. A locally built response_format
+    (alerts, batch) just drops it.
+
+    `webhook_response` is send_request's result: fetch's (body, headers) on a 2xx,
+    else {"error", "details"} — non-2xx included, since fetch raises on >=300.
+    Headers are noise for a log row, so only the body is kept.
+    """
+    try:
+        # A webhook that replies with a non-JSON body (bare "OK", empty 200)
+        # makes fetch raise inside send_request, so the error dict lands here
+        # too — worth storing as-is: it says the delivery result either way.
+        response_format["webhook_response"] = (
+            webhook_response[0] if isinstance(webhook_response, tuple) else webhook_response
+        )
+    except Exception as e:
+        logger.error(f"Failed to record webhook response: {e}")
 
 
 def merge_nested_agent_usage(content, tool_log):
@@ -473,6 +507,48 @@ def merge_nested_agent_usage(content, tool_log):
     if data.get("tools_data"):
         merged["tools_data"] = data["tools_data"]
     return merged
+
+
+def _browser_ctx(self, tool_call_key):
+    """Request context handed to the browser tool so it can scope the session per conversation."""
+    return {
+        "org_id": getattr(self, "org_id", None),
+        "bridge_id": getattr(self, "bridge_id", None),
+        "thread_id": getattr(self, "thread_id", None),
+        "sub_thread_id": getattr(self, "sub_thread_id", None),
+        "message_id": getattr(self, "message_id", None),
+        "tool_call_id": tool_call_key,
+        "streamer": getattr(self, "streamer", None) if getattr(self, "stream_mode", False) else None,
+    }
+
+
+async def _run_tool_tasks(tasks):
+    """Run tool coroutines and return results in the order of ``tasks``.
+
+    Everything runs concurrently except Gtwy_Browser actions: they share one browser,
+    so they run one after another while the other tools proceed in parallel.
+    Exceptions are returned in place of results, like ``gather(return_exceptions=True)``.
+    """
+    browser_type = inbuild_tools["Gtwy_Browser"]
+    results = [None] * len(tasks)
+    sequential = []
+    parallel = []
+    for index, (_, tool_data, coroutine) in enumerate(tasks):
+        if tool_data.get("type") == browser_type:
+            sequential.append((index, coroutine))
+        else:
+            parallel.append((index, coroutine))
+
+    gather_task = asyncio.gather(*[c for _, c in parallel], return_exceptions=True) if parallel else None
+    for index, coroutine in sequential:
+        try:
+            results[index] = await coroutine
+        except Exception as exc:
+            results[index] = exc
+    if gather_task is not None:
+        for (index, _), result in zip(parallel, await gather_task, strict=True):
+            results[index] = result
+    return results
 
 
 async def process_data_and_run_tools(codes_mapping, self):
@@ -534,7 +610,9 @@ async def process_data_and_run_tools(codes_mapping, self):
                         "bridge_id": self.tool_id_and_name_mapping[name].get("bridge_id"),
                         "user": tool_data.get("args").get("_query"),
                         "variables": {key: value for key, value in tool_data.get("args").items() if key != "user"},
-                        "message_id": self.message_id
+                        "message_id": self.message_id,
+                        # The child agent bills to the SAME owner as this run.
+                        "billing_attribution": self.billing_attribution,
                     }
 
                     if self.stream_mode and self.streamer:
@@ -560,6 +638,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                     task = call_gtwy_agent(agent_args)
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Web_Search"]:
                     task = call_firecrawl_scrape(tool_data.get("args"))
+                elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Browser"]:
+                    task = call_gtwy_browser(tool_data.get("args"), _browser_ctx(self, tool_call_key))
                 elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
                     task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 else:
@@ -581,9 +661,7 @@ async def process_data_and_run_tools(codes_mapping, self):
 
         # Execute all tasks concurrently if any exist
         if tasks:
-            task_results = await asyncio.gather(
-                *[task[2] for task in tasks], return_exceptions=True
-            )  # return_exceptions use for the handle the error occurs from the task
+            task_results = await _run_tool_tasks(tasks)
 
             # Process each result
             for i, (tool_call_key, tool_data, _) in enumerate(tasks):
@@ -727,9 +805,60 @@ async def make_request_data(request: Request):
     return result
 
 
+def compute_billing_events(parsed_data, history_params):
+    cached = parsed_data.get("_billing")
+    if cached is not None:
+        return cached
+
+    billing_message_id = history_params.get("message_id") or parsed_data.get("message_id")
+
+    attribution = parsed_data.get("billing_attribution") or {}
+    payer = {
+        "user_id": attribution.get("user_id") or parsed_data.get("user_id"),
+        "folder_id": attribution.get("folder_id") or parsed_data.get("folder_id"),
+        "is_embed": bool(attribution.get("is_embed")),
+    }
+
+    billable_usages = []
+    if parsed_data.get("wallet"):
+        billable_usages.append(parsed_data.get("usage"))
+    if parsed_data.get("_wallet_primary_cost"):
+        billable_usages.append({"expectedCost": parsed_data["_wallet_primary_cost"]})
+    billing_events = [
+        event
+        for usage in billable_usages
+        if (event := build_llm_usage_event(usage, billing_message_id, parsed_data.get("org_id"), parsed_data.get("bridge_id")))
+    ]
+
+    fee_event = None
+    # The fee is owed when this frame spent wallet money, OR the org's plan
+    # charges every hit including those on its own API key (charge_hit_fee).
+    if parsed_data.get("wallet") or parsed_data.get("_wallet_primary_cost") or parsed_data.get("charge_hit_fee"):
+        hit_type = "embed" if payer["is_embed"] else ("chatbot" if parsed_data.get("bridgeType") else "api")
+        fee_event = build_hit_fee_event(billing_message_id, parsed_data.get("org_id"), hit_type, parsed_data.get("org_billing_plan"))
+        if fee_event:
+            billing_events.append(fee_event)
+
+    if isinstance(parsed_data.get("usage"), dict):
+        # What this frame's history row reports. The wallet is charged the hit
+        # fee ONCE per request (every frame emits the same transaction_id and
+        # the dedup layers keep one), so only the first agent's row counts it;
+        # a nested agent's row shows its own usage alone. Otherwise summing the
+        # rows of one request overstates spend by one fee per extra agent.
+        shown = [e for e in billing_events if not (e is fee_event and parsed_data.get("nested_agent_call"))]
+        parsed_data["usage"]["credits"] = float(sum((Decimal(e["credits"]) for e in shown), Decimal(0)))
+
+    parsed_data["_billing"] = {"events": billing_events, "payer": payer, "message_id": billing_message_id}
+    return parsed_data["_billing"]
+
+
 async def make_request_data_and_publish_sub_queue(parsed_data, result, params, thread_info=None):
     suggestion_content = {"data": {"content": {}}}
     suggestion_content["data"]["content"] = result.get("historyParams", {}).get("message")
+
+    history_params = result.get("historyParams", {})
+    billing = compute_billing_events(parsed_data, history_params)
+    billing_events, payer, billing_message_id = billing["events"], billing["payer"], billing["message_id"]
 
     # Extract user and assistant messages for Hippocampus
     user_message = parsed_data.get("user", "")
@@ -809,6 +938,19 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "is_cache_hit": parsed_data.get("is_cache_hit", False),
             "resource_id": parsed_data.get("cache_hit_resource_id", None)
         },
+        # Who pays for the background AI jobs this response triggers (chatbot
+        # suggestions, gpt memory, agent-memory canonicalizer, sub-thread title).
+        # Those run in Node on OUR platform agents with OUR key, so Node needs the
+        # payer and the message_id to attribute the charge. One block for all of
+        # them: same payer, same request — copying this into each job payload
+        # would drift, and save_agent_memory carries no org_id at all today.
+        # Gated on `wallet`: a customer on their own API key is never charged for
+        # background work. None tells Node to skip billing entirely.
+        "background_billing": {
+            "org_id": parsed_data.get("org_id"),
+            "message_id": billing_message_id,
+            **payer,
+        } if parsed_data.get("wallet") else None,
         "type": parsed_data.get("type"),
         "save_files_to_redis": {
             "thread_id": parsed_data.get("thread_id"),
@@ -829,6 +971,17 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "thread_id": parsed_data.get("thread_id"),
             "service": parsed_data.get("service"),
         },
+        "billing": [
+            {
+                "model": history_params.get("model") or parsed_data.get("model"),
+                "service": parsed_data.get("service"),
+                "bridge_id": parsed_data.get("bridge_id"),
+                "thread_id": parsed_data.get("thread_id"),
+                **payer,
+                **event,
+            }
+            for event in billing_events
+        ] if billing_events else None,
     }
 
     return data

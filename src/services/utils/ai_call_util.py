@@ -84,6 +84,14 @@ async def call_gtwy_agent(args):
         request_body["variables"] = variables
         request_body["org_id"] = org_id
         request_body["bridge_configurations"] = bridge_configurations
+        # Placed AFTER the config merge so the parent's attribution (who pays
+        # for the whole run) survives into the child frame.
+        if args.get("billing_attribution"):
+            request_body["billing_attribution"] = args["billing_attribution"]
+        # This frame is a child of another agent in the same request. The
+        # per-hit fee is charged once per request, so only the first agent's
+        # history row should show it — see compute_billing_events.
+        request_body["_nested_agent_call"] = True
         request_body["configuration"] = {**(request_body.get("configuration") or {})}
         request_body["configuration"]["stream"] = True if nested_stream_call else False
         if nested_stream_call:

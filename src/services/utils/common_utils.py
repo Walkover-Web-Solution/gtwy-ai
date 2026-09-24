@@ -22,8 +22,13 @@ from src.db_services.metrics_service import (
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
-from src.configs.constant import bridge_ids, redis_keys, alert_types
-from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
+from src.configs.constant import bridge_ids, inbuild_tools, redis_keys, alert_types
+from src.services.billing.billing_utils import (
+    apply_billing_events,
+    apply_wallet_fallback,
+    fallback_allowed_on_plan,
+)
+from src.services.commonServices.baseService.utils import axios_work, compute_billing_events, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
@@ -146,6 +151,22 @@ async def handle_agent_transfer(
     return transfer_result
 
 
+GTWY_BROWSER_MIN_ITERATIONS = 25
+
+
+def _resolve_maximum_iterations(body):
+    """Tool-loop limit for this request.
+
+    Default is 3. When Gtwy_Browser is enabled the browser needs many snapshot/act
+    rounds, so the limit is raised to at least 25 even if the bridge stores the UI
+    default of 3; a larger explicit value still wins.
+    """
+    configured = (body.get("settings") or {}).get("maximum_iterations") or 3
+    if inbuild_tools["Gtwy_Browser"] in (body.get("built_in_tools") or []):
+        return max(int(configured), GTWY_BROWSER_MIN_ITERATIONS)
+    return configured
+
+
 def parse_request_body(request_body):
     body = request_body.get("body", {})
     state = request_body.get("state", {})
@@ -170,6 +191,17 @@ def parse_request_body(request_body):
         "thread_id": body.get("thread_id"),
         "sub_thread_id": body.get("sub_thread_id") or body.get("thread_id"),
         "org_id": state.get("profile", {}).get("org", {}).get("id", "") or body.get("org_id"),
+        "wallet": body.get("wallet", False),
+        # Who the run is billed to (the FIRST agent's owner) — propagated
+        # unchanged into nested/transfer frames.
+        "billing_attribution": body.get("billing_attribution") or {},
+        # True in agent-to-agent child frames (set by call_gtwy_agent). Copied
+        # along by transfers, so a chain started from a child stays nested.
+        "nested_agent_call": bool(body.get("_nested_agent_call")),
+        "org_billing_plan": body.get("org_billing_plan"),
+        # Set by reserve_credits_and_api_key_setup when the org's plan charges
+        # the per-hit fee even on its own API key (OWN_KEY_HIT_FEE_PLANS).
+        "charge_hit_fee": bool(body.get("charge_hit_fee")),
         "user": body.get("user"),
         "original_user": body.get("user"),
         "tools": body.get("configuration", {}).get("tools"),
@@ -221,7 +253,7 @@ def parse_request_body(request_body):
             for url in body.get("user_urls", [])
             if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
         ],
-        "maximum_iterations": body.get("settings", {}).get("maximum_iterations") or 3,
+        "maximum_iterations": _resolve_maximum_iterations(body),
         "tokens": {},
         "memory": "",
         "bridge_summary": body.get("bridge_summary"),
@@ -447,6 +479,13 @@ async def load_model_configuration(model, configuration, service):
                 continue
             if configuration.get(key):
                 custom_config[key] = configuration[key]
+
+    # response_type is handled even when the model's own schema doesn't declare
+    # it (normalize_response_type inlines the schema into the prompt for models
+    # that can't enforce it natively) — so it can't be dropped by the
+    # schema-driven loop above just because a model has no response_type field.
+    if "response_type" not in custom_config and configuration.get("response_type"):
+        custom_config["response_type"] = configuration["response_type"]
 
     return model_obj, custom_config, model_output_config
 
@@ -836,6 +875,7 @@ def build_service_params(
         "variables_path": parsed_data["variables_path"],
         "message_id": parsed_data["message_id"],
         "bridgeType": parsed_data["bridgeType"],
+        "billing_attribution": parsed_data.get("billing_attribution") or {},
         "tool_id_and_name_mapping": parsed_data["tool_id_and_name_mapping"],
         "reasoning_model": parsed_data["reasoning_model"],
         "memory": memory,
@@ -935,9 +975,12 @@ async def _update_history_redis(dataset, history_params, version_id, thread_info
 
     thread_id = thread_info.get("thread_id")
     sub_thread_id = thread_info.get("sub_thread_id")
-    conversations = thread_info.get("result", [])
+    conversations = thread_info.get("result", []) or []
 
-    if dataset and "error" not in dataset[0] and conversations:
+    # Seed the cache on the first turn too. Previously an empty history skipped this, so a brand
+    # new thread cached nothing and its second turn had to come from Postgres, which is only
+    # written by the Node log-queue worker. Without that worker the thread lost all memory.
+    if dataset and "error" not in dataset[0] and thread_id:
         await save_conversations_to_redis(conversations, version_id, thread_id, sub_thread_id, history_params)
 
     if history_params and history_params.get("bridge_id"):
@@ -1071,6 +1114,8 @@ async def process_background_tasks(
     if parsed_data.get("skip_history"):
         return
 
+    compute_billing_events(parsed_data, result.get("historyParams") or {})
+
     # Plan mode: parse the LLM JSON, save to Redis, and thread the parsed plan
     # into historyParams so the conversation log persists `plans`.
     if parsed_data.get("mode") == "plan" and not parsed_data.get("action"):
@@ -1188,6 +1233,9 @@ async def process_background_tasks(
     await sub_queue_obj.publish_message(data)
 
     await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_entries}))
+
+    if data.get("billing"):
+        await apply_billing_events(data["billing"])
 
 async def process_background_tasks_for_error(parsed_data, error):
     # Primary-agent sub-tasks inside plan mode skip per-call history.
@@ -1416,6 +1464,99 @@ def restructure_json_schema(response_type, service):
             }
         case _:
             return response_type
+
+
+
+def model_supports_json_schema_or_text(model_config):
+    """
+    Return True if the model config advertises a json_schema response_type option.
+
+    The model config document stores supported response types under
+    configuration.response_type.options (e.g. [{"key": "type", "type": "json_schema"}]).
+    Two checks, in order:
+      1. Does the model config expose a response_type field at all? If not, the model
+         has no configurable response format, so json_schema isn't supported.
+      2. If it does, but the options list can't be determined, assume support (so
+         configured json_schema requests are not silently downgraded). Otherwise check
+         whether json_schema is among the advertised options.
+    """
+    if not isinstance(model_config, dict):
+        return True
+
+    response_type = (model_config.get("configuration") or {}).get("response_type")
+    if not isinstance(response_type, dict):
+        return False
+
+    options = response_type.get("options")
+    if not isinstance(options, list):
+        return (False, False)
+    return ((any(isinstance(opt, dict) and opt.get("type") == "json_schema" for opt in options)),(
+        any(isinstance(opt, dict) and opt.get("type") == "text" for opt in options)))
+
+
+def normalize_response_type(custom_config, service, model_config=None):
+    """
+    Normalize custom_config["response_type"] in place before service formatting.
+
+    - type == "text" with a "text" value: fold the text into the prompt and pass
+      response_type through as a plain {"type": "text"}.
+    - type == "text" without a "text" value: leave as-is.
+    - type == "json_object" carrying a "json_schema": promote it to json_schema (then
+      the json_schema handling below applies).
+    - type == "json_object" without a schema: leave untouched.
+    - type == "json_schema":
+        * if the model supports json_schema -> restructure (unchanged behavior).
+        * if the model does NOT support json_schema -> inline the schema into the prompt
+          and downgrade response_type to plain {"type": "json_object"}.
+    """
+    response_type = custom_config.get("response_type")
+    if not isinstance(response_type, dict):
+        return
+
+    rtype = response_type.get("type")
+
+    if rtype == "text":
+        text_value = response_type.get("text")
+        if text_value:
+            # Store the text instruction in a separate key to be added to system message
+            custom_config["_text_instruction"] = text_value
+        _, is_text_support = model_supports_json_schema_or_text(model_config)
+        if not is_text_support:
+            custom_config.pop("response_type", None)
+        return
+
+    if rtype == "json_object":
+        return
+
+    if rtype == "json_schema":
+        is_json_schema_support, _ = model_supports_json_schema_or_text(model_config)
+        if is_json_schema_support:
+            custom_config["response_type"] = restructure_json_schema(response_type, service)
+        else:
+            # Model can't enforce a json_schema: inline the schema into the prompt and
+            # downgrade to plain json_object so the model still enforces valid JSON output.
+            schema = response_type.get("json_schema") or {}
+            # The json_schema value is often a wrapper ({"name":..., "schema": {...}, "strict":...}),
+            # not the bare schema. Unwrap it so we inline the actual schema, not its metadata.
+            schema_body = schema.get("schema", schema) if isinstance(schema, dict) else schema
+            schema_text = (
+                json.dumps(schema_body, ensure_ascii=False)
+                if isinstance(schema_body, (dict, list))
+                else str(schema_body)
+            )
+            # Store the schema instruction in a separate key to be added to system message
+            custom_config["_json_schema_instruction"] = (
+                "Below is a JSON Schema describing the required response shape, not the response "
+                "itself. Reply with ONLY a JSON object that is a valid instance of this schema:\n"
+                f"{schema_text}"
+            )
+            # Only downgrade to json_object if the model exposes a response_type field at
+            # all (models with no response_type field don't accept the parameter at all).
+            response_type_field = isinstance(model_config, dict) and (model_config.get("configuration") or {}).get("response_type")
+            if isinstance(response_type_field, dict):
+                custom_config["response_type"] = {"type": "json_object"}
+            else:
+                custom_config.pop("response_type", None)
 
 
 def validate_json_schema_configuration(configuration):
@@ -1713,15 +1854,21 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")
             fall_back = parsed_data.get("fall_back")
 
-            if fall_back and fall_back.get("is_enable", False):
+            # Streaming is the common chat path and this fallback used to skip
+            # every billing check the non-streaming one at common.py does: no plan
+            # check, no platform-key swap, no wallet flag flip and no capture of
+            # the failed primary's cost. So a wallet run could fall back onto any
+            # configured model, billed to the wallet, on the ORIGINAL service's
+            # credential. Kept in lockstep with common.py from here.
+            if fall_back and fall_back.get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
                 try:
                     fallback_model = fall_back.get("model", parsed_data["model"])
                     fallback_service = fall_back.get("service", parsed_data["service"])
                     parsed_data["model"] = fallback_model
                     parsed_data["service"] = fallback_service
                     parsed_data["configuration"]["model"] = fallback_model
-                    if fall_back.get("apikey"):
-                        parsed_data["apikey"] = fall_back["apikey"]
+                    # Same helper as common.py — the two paths cannot drift.
+                    apply_wallet_fallback(parsed_data, fall_back, fallback_service, fallback_model)
 
                     fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
                         parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
