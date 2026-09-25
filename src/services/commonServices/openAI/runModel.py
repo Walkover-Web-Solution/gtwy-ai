@@ -3,6 +3,7 @@ import json
 import traceback
 
 from globals import logger
+from src.configs.constant import service_name
 from src.exceptions import ApiCallError
 
 from ...utils.apiservice import fetch, fetch_stream
@@ -75,7 +76,7 @@ async def openai_response_stream(configuration, apiKey):
     service_tier = None
     incomplete_details = None
     try:
-        async for line in fetch_stream(url=OPENAI_RESPONSES_URL, headers=headers, json_body=payload):
+        async for line in fetch_stream(url=OPENAI_RESPONSES_URL, headers=headers, json_body=payload, service=service_name["openai"]):
             if line.startswith("event:"):
                 continue
             if not line.startswith("data:"):
@@ -248,7 +249,7 @@ async def openai_response_stream(configuration, apiKey):
 async def openai_test_model(configuration, api_key):
     headers = _openai_headers(api_key)
     try:
-        response_data, _ = await fetch(url=OPENAI_CHAT_COMPLETIONS_URL, method="POST", headers=headers, json_body=configuration)
+        response_data, _ = await fetch(url=OPENAI_CHAT_COMPLETIONS_URL, method="POST", headers=headers, json_body=configuration, service=service_name["openai"])
         return {"success": True, "response": response_data}
     except Exception as error:
         return {"success": False, "error": str(error), "status_code": getattr(error, "status_code", None)}
@@ -280,7 +281,7 @@ async def openai_response_model(
 
             for attempt in range(max_retries + 1):
                 try:
-                    response_data, _ = await fetch(url=OPENAI_RESPONSES_URL, method="POST", headers=headers, json_body=current_config)
+                    response_data, _ = await fetch(url=OPENAI_RESPONSES_URL, method="POST", headers=headers, json_body=current_config, service=service)
                     return {"success": True, "response": response_data}
                 except Exception as error:
                     error_str = str(error)

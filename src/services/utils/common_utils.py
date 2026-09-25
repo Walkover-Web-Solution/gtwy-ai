@@ -36,6 +36,7 @@ from src.send_alert import send_alert
 from src.services.utils.time import Timer, log_slow_call, SLOW_CALL_THRESHOLDS
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
+from src.services.utils.alert_payload_utils import sanitize_payload_for_alert
 from src.utils.formatter import apply_variables_to_template_json
 from src.services.utils.helper import Helper
 from ...controllers.conversationController import getThread
@@ -1245,20 +1246,33 @@ async def process_background_tasks(
     if data.get("billing"):
         await apply_billing_events(data["billing"])
 
-async def process_background_tasks_for_error(parsed_data, error):
+async def process_background_tasks_for_error(parsed_data, error, class_obj=None):
     # Primary-agent sub-tasks inside plan mode skip per-call history.
     if parsed_data.get("skip_history"):
         return
 
     tasks = []
-    
+
     # Only send alert if not in playground mode
     if not parsed_data.get("is_playground"):
+        error_log = {"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]}
+        # Set by the fallback paths when the retry also failed: `error` is then the
+        # retry error, so show both errors and both attempts' payloads.
+        if parsed_data.get("firstAttemptError"):
+            error_log["error"] = parsed_data["firstAttemptError"]
+            error_log["fallback_status"] = "failed"
+            error_log["fallback_error"] = str(error)
+            error_log["first_attempt_request_payload"] = sanitize_payload_for_alert(parsed_data.get("_first_attempt_request_payload"))
+            # Omitted when the fallback failed before a request went out (e.g. wallet/plan refusal).
+            if parsed_data.get("_retry_request_payload"):
+                error_log["request_payload"] = sanitize_payload_for_alert(parsed_data["_retry_request_payload"])
+        else:
+            error_log["request_payload"] = sanitize_payload_for_alert(getattr(class_obj, "last_request_payload", None))
         tasks.append(
             send_alert(
                 bridge_id=parsed_data["bridge_id"],
                 org_id=parsed_data["org_id"],
-                error_log={"error": str(error), "message": "Exception for the code", "message_id": parsed_data["message_id"]},
+                error_log=error_log,
                 error_type=alert_types["error"],
                 bridge_name=parsed_data.get("name"),
                 org_name=parsed_data.get("org_name"),
@@ -1292,7 +1306,7 @@ async def save_error_history(parsed_data, error, params, timer, class_obj=None, 
         latency = create_latency_object(timer, params)
         update_usage_metrics(parsed_data, params, latency, error=error, success=False)
         parsed_data["historyParams"] = create_history_params(parsed_data, error, class_obj, thread_info)
-        await process_background_tasks_for_error(parsed_data, error)
+        await process_background_tasks_for_error(parsed_data, error, class_obj)
     except Exception as hist_err:
         logger.error(f"save_error_history failed: {hist_err}")
 
@@ -1869,6 +1883,8 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             # configured model, billed to the wallet, on the ORIGINAL service's
             # credential. Kept in lockstep with common.py from here.
             if fall_back and fall_back.get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
+                first_attempt_request_payload = getattr(class_obj, "last_request_payload", None)
+                fallback_class_obj = None
                 try:
                     fallback_model = fall_back.get("model", parsed_data["model"])
                     fallback_service = fall_back.get("service", parsed_data["service"])
@@ -1929,6 +1945,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
                         f"Retried with {parsed_data['service']}/{parsed_data['model']}"
                     )
+                    # Both attempts' payloads for the failure alert (process_background_tasks_for_error).
+                    parsed_data["_first_attempt_request_payload"] = first_attempt_request_payload
+                    parsed_data["_retry_request_payload"] = getattr(fallback_class_obj, "last_request_payload", None)
                     if class_obj.streamer:
                         await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
                         if not is_nested_stream_call:

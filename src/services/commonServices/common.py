@@ -22,6 +22,7 @@ from src.services.billing.billing_utils import (
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.todo.planner_service import prepare_planner_request
 from src.services.todo.todo_handler import handle_todo_mode
+from src.services.utils.alert_payload_utils import sanitize_payload_for_alert
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
@@ -519,6 +520,9 @@ async def chat(request_body):
             )
             result = {"success": False, "error": original_error, "response": {"usage": {}}, "modelResponse": {}}
 
+        # Snapshot the failed attempt's payload now — fallback replaces class_obj below.
+        failed_request_payload = getattr(class_obj, "last_request_payload", None) if execution_failed else None
+
         # Retry mechanism with fallback configuration
         if execution_failed and parsed_data.get("settings", {}).get("fall_back") and parsed_data["settings"]["fall_back"].get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
             try:
@@ -564,6 +568,10 @@ async def chat(request_body):
 
                 # Execute with updated configuration
                 result = await class_obj.execute()
+                if not result["success"]:
+                    # Route a soft failure through the except below so the
+                    # original error is kept alongside the retry error.
+                    raise ValueError(result.get("error") or result)
                 result["response"]["usage"] = params["token_calculator"].get_total_usage()
 
                 # Mark that this was a retry attempt and store original error
@@ -586,6 +594,11 @@ async def chat(request_body):
                 parsed_data["firstAttemptError"] = (
                         f"Original attempt failed with {original_service}/{original_model}: {original_error}. Retried with {fallback_config['service']}/{fallback_config['model']}"
                     )
+                # Both attempts' payloads for the failure alert (process_background_tasks_for_error).
+                retry_payload = getattr(class_obj, "last_request_payload", None)
+                parsed_data["_first_attempt_request_payload"] = failed_request_payload
+                # class_obj is still the original handler if the fallback failed before creating its own.
+                parsed_data["_retry_request_payload"] = None if retry_payload is failed_request_payload else retry_payload
                 raise retry_error from original_exception
 
         if not result["success"]:
@@ -601,14 +614,20 @@ async def chat(request_body):
             asyncio.create_task(send_alert(
                 bridge_id=parsed_data["bridge_id"],
                 org_id=parsed_data["org_id"],
-                error_log=original_error,
+                error_log={
+                    "error": original_error,
+                    # Only reached after the fallback returned a successful result.
+                    "fallback_status": "succeeded",
+                    "request_payload": sanitize_payload_for_alert(failed_request_payload),
+                },
                 error_type=alert_types["retry_mechanism"],
                 bridge_name=parsed_data.get("name"),
                 org_name=parsed_data.get("org_name"),
                 is_embed=parsed_data.get("is_embed"),
                 user_id=parsed_data.get("user_id"),
                 thread_id=parsed_data.get("thread_id"),
-                service=parsed_data.get("service"),
+                # The failed service, not the fallback that answered.
+                service=original_service,
                 api_collection=parsed_data.get("api_collection"),
                 is_external_error=False,
             ))
