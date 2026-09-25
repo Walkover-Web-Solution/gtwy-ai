@@ -2,8 +2,13 @@ def extract_openai_image_usage(model_response):
 
     usage = {}
     usage_data = model_response.get('usage', {})
-    
+
     usage["total_images_generated"] = usage_data.get("total_images_generated", 0)
+
+    # Prefer OpenAI's own total; fall back to input + output.
+    usage["total_tokens"] = usage_data.get("total_tokens") or (
+        (usage_data.get("input_tokens") or 0) + (usage_data.get("output_tokens") or 0)
+    )
 
     # Extract input token details
     input_tokens_details = usage_data.get('input_tokens_details', {})
