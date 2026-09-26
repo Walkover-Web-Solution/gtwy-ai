@@ -1,7 +1,5 @@
 import json
 import traceback
-import uuid
-from datetime import datetime
 
 from globals import logger
 from models.index import combined_models
@@ -14,49 +12,57 @@ from ..services.cache_service import store_in_cache
 postgres = combined_models["pg"]
 timescale = combined_models["timescale"]
 
+_SKIPPED_CONVERSATION_ROLES = {"tools_call", "tool"}
+
+def slim_conversation_entry(message):
+    """Reduce one history message to the keys the LLM request builders use.
+
+    Returns ``None`` for messages that would be dropped anyway: a skipped role,
+    or an entry carrying neither text nor attachments.
+    """
+    if not isinstance(message, dict):
+        return None
+
+    role = message.get("role")
+    if not role or role in _SKIPPED_CONVERSATION_ROLES:
+        return None
+
+    content = message.get("content") or ""
+    user_urls = message.get("user_urls") or []
+    if not str(content).strip() and not user_urls:
+        return None
+
+    entry = {"role": role, "content": content}
+    if user_urls:
+        entry["user_urls"] = user_urls
+    return entry
+
+
+def slim_conversations(conversations):
+    """Apply :func:`slim_conversation_entry` across a history list."""
+    slimmed = (slim_conversation_entry(message) for message in conversations or [])
+    return [entry for entry in slimmed if entry is not None]
+
 
 async def save_conversations_to_redis(conversations, version_id, thread_id, sub_thread_id, history_params):
     """
     Save conversations to Redis with conversation management logic.
+    Only the fields the conversation builders read are stored.
     If conversation array has more than 9 items, remove first 2 and add current conversation.
     """
     try:
         # Create Redis key
         redis_key = f"{redis_keys['conversation_']}{version_id}_{thread_id}_{sub_thread_id}"
-        # Start with existing conversations from database
-        conversation_list = conversations or []
+        conversation_list = slim_conversations(conversations)
+        current_turn = [
+            {"role": "user", "content": history_params.get("user") or ""},
+            {"role": "assistant", "content": history_params.get("message", "") or ""},
+        ]
+        user_urls = history_params.get("user_urls") or []
+        if user_urls:
+            current_turn[0]["user_urls"] = user_urls
 
-        # Create current conversation entries (user + assistant)
-        current_time = datetime.now().isoformat() + "+00:00"
-
-        # User message
-        user_conversation = {
-            "content": history_params["user"],
-            "role": "user",
-            "createdAt": current_time,
-            "id": int(str(uuid.uuid4().int)[:8]),  # Generate 8-digit ID
-            "function": None,
-            "is_reset": False,
-            "tools_call_data": history_params.get("tools_call_data"),
-            "error": "",
-            "urls": history_params.get("urls", []),
-        }
-
-        # Assistant message
-        assistant_conversation = {
-            "content": history_params.get("message", ""),
-            "role": "assistant",
-            "createdAt": current_time,
-            "id": int(str(uuid.uuid4().int)[:8]),  # Generate 8-digit ID
-            "function": {},
-            "is_reset": False,
-            "tools_call_data": None,
-            "error": None,
-            "urls": [],
-        }
-
-        # Add new conversations first
-        conversation_list.extend([user_conversation, assistant_conversation])
+        conversation_list.extend(entry for entry in current_turn if slim_conversation_entry(entry))
 
         # Manage conversation array size - if more than 9, remove first 2
         if len(conversation_list) > 9:
