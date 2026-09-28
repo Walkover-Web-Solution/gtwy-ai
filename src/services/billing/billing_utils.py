@@ -1,3 +1,4 @@
+import asyncio
 import secrets
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
@@ -586,6 +587,24 @@ async def apply_billing_events(events: list[dict] | None) -> None:
 OWN_KEY_HIT_FEE_PLANS = frozenset({"paid"})
 
 
+async def _alert_credit_exhausted(org_id: str) -> None:
+    """Report an org blocked for having no credits, on the same channel as errors.
+
+    Fires on every blocked request — deliberately not deduplicated.
+    """
+    try:
+        # Lazy import, as in apiservice: baseService.utils sits on a long import chain.
+        from src.services.commonServices.baseService.utils import unknown_error_handler_alert
+
+        await unknown_error_handler_alert({
+            "type": "orgCreditExhausted",
+            "token": None,
+            "reason": f"org_id={org_id} blocked: credit balance exhausted (CREDIT_BALANCE_EXHAUSTED)",
+        })
+    except Exception as e:
+        logger.error(f"[billing] credit-exhausted alert failed for org {org_id}: {e}")
+
+
 async def reserve_credits_and_api_key_setup(
     org_id: str, db_config: dict, is_batch: bool = False
 ) -> tuple[str | None, dict | None]:
@@ -747,6 +766,7 @@ async def reserve_credits_and_api_key_setup(
 
     admitted, token = await reserve_credits(org_id)
     if not admitted:
+        asyncio.create_task(_alert_credit_exhausted(org_id))
         return None, {
             "success": False,
             "error": "Insufficient credits. Please top up your wallet to continue. For support contact support@gtwy.ai",
