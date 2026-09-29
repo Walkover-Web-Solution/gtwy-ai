@@ -29,10 +29,15 @@ async def add_tool_call_data_in_history(chats):
                 if prev_chat["role"] == "user" and next_chat["role"] == "assistant":
                     tools_call_data = current_chat.get("tools_call_data", [])
                     messages = []
-                    for call_data in tools_call_data:
-                        call_info = next(iter(call_data.values()))
-                        name = call_info.get("name", "")
-                        messages.append(f"{name}")
+                    for call_data in tools_call_data or []:
+                        if not isinstance(call_data, dict):
+                            continue
+                        # Entries are {call_id: {...}}, except post-tool logs saved without a flow_hit_id
+                        call_info = call_data if "name" in call_data else next(iter(call_data.values()), None)
+                        if not isinstance(call_info, dict) or call_info.get("type") in ("pre_tool", "post_tool"):
+                            continue
+                        if call_info.get("name"):
+                            messages.append(f"{call_info['name']}")
                     if messages:
                         combined_message = "tool_call has been done function name:-  " + ", ".join(messages)
                         if next_chat["content"]:
