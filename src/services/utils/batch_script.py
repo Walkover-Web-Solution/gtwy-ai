@@ -79,7 +79,7 @@ async def check_batch_status():
                                 try:
                                     temp_calculator = TokenCalculator(service, {})
                                     temp_calculator.calculate_usage(result_data)
-                                    cost_breakdown = temp_calculator.calculate_total_cost(model, service)
+                                    cost_breakdown = await temp_calculator.calculate_total_cost(model, service)
                                     item_costs[msg_id] = cost_breakdown.get("total_cost", 0) * 0.5
                                 except Exception as cost_error:
                                     logger.error(f"Error calculating batch cost for message {msg_id}: {str(cost_error)}")

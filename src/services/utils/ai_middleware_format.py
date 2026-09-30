@@ -18,6 +18,7 @@ from src.services.utils.formatters.grok_formatter import format_grok
 from src.services.utils.formatters.groq_formatter import format_groq
 from src.services.utils.formatters.openai_compatible_formatter import format_openai_compatible
 from src.services.utils.formatters.openai_formatter import format_openai
+from src.services.utils.formatters.huggingface_formatter import format_huggingface_image
 
 __all__ = [
     "Response_formatter",
@@ -112,6 +113,8 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
         formatted = format_deepseek(response, tools_data, images)
     elif service == service_name["grok"]:
         formatted = format_grok(response, tools_data, images)
+    elif service == service_name["huggingface"] and type == "image":
+        return format_huggingface_image(response)
     elif has_openai_choices_shape(service):
         # open_router / neev_cloud / moonshot / openai_completion / mistral (+ future)
         formatted = format_openai_compatible(response, tools_data, images)
