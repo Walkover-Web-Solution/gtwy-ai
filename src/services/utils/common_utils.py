@@ -28,7 +28,7 @@ from src.services.billing.billing_utils import (
     apply_wallet_fallback,
     fallback_allowed_on_plan,
 )
-from src.services.commonServices.baseService.utils import axios_work, compute_billing_events, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
+from src.services.commonServices.baseService.utils import axios_work, build_function_url, compute_billing_events, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
@@ -63,7 +63,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
             value = pydash.get(agent_variables, var_name, _MISSING)
             if value is not _MISSING:
                 resolved[param] = value
-        for param in tool_config.get("required", []):
+        for param in [*(tool_config.get("required") or []), *(tool_config.get("params") or [])]:
             if param not in resolved and param in agent_variables:
                 resolved[param] = agent_variables[param]
         return resolved
@@ -90,14 +90,17 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
         resolved_tools.append({
             "type": "custom_function",
             "name": tool_config.get("script_id"),
-            "url": tool_config.get("url"),
+            "url": tool_config.get("url") or build_function_url(tool_config.get("script_id")),
             "title": tool.get("title"),
             "args": resolved_args,
         })
     else:
+        # Built-in pre-tools read their static settings (prompt, resource_id/collection_id,
+        # url/formats) from args; values mapped to agent variables override them.
+        static_config = {key: value for key, value in tool_config.items() if key != "required"}
         resolved_tools.append({
             "type": tool_type,
-            "args": resolved_args,
+            "args": {**static_config, **resolved_args},
             "config": tool_config,
             "title": tool.get("title"),
         })
@@ -666,7 +669,7 @@ async def handle_post_tool(parsed_data, result):
         logger.warning("post_tool configured but no script_id / function_name found; skipping")
         return
 
-    tool_url = post_tool_data.get("url")
+    tool_url = post_tool_data.get("url") or build_function_url(script_id)
 
     try:
         args = {
@@ -1929,25 +1932,27 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
                         f"Retried with {parsed_data['service']}/{parsed_data['model']}"
                     )
-                    if class_obj.streamer:
+                    # A nested agent shares its caller's stream, where an `error` event ends the whole
+                    # response on the client; the caller gets this failure as the agent's tool result.
+                    if class_obj.streamer and not is_nested_stream_call:
                         await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
-                        if not is_nested_stream_call:
-                            await class_obj.streamer.close()
+                        await class_obj.streamer.close()
                     await sendResponse(
                         parsed_data.get("response_format"), str(retry_err), variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
-                    ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+                    ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") and not is_nested_stream_call else None
                     if is_nested_stream_call:
                         await save_error_history(parsed_data, retry_err, params, timer, class_obj, thread_info)
                         return {"success": False, "message": str(retry_err), "response": {}}
                     raise
             else:
-                if class_obj.streamer:
+                # A nested agent shares its caller's stream, where an `error` event ends the whole
+                # response on the client; the caller gets this failure as the agent's tool result.
+                if class_obj.streamer and not is_nested_stream_call:
                     await class_obj.streamer.emit_error(original_error)
-                    if not is_nested_stream_call:
-                        await class_obj.streamer.close()
+                    await class_obj.streamer.close()
                 await sendResponse(
                     parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
-                ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+                ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") and not is_nested_stream_call else None
                 if is_nested_stream_call:
                     await save_error_history(parsed_data, first_err, params, timer, class_obj, thread_info)
                     return {"success": False, "message": str(original_error), "response": {}}
@@ -2010,18 +2015,20 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         return transfer_result
                 else:
                     logger.warning(f"SSE transfer: target agent {target_agent_id} not found, closing stream")
-                    if class_obj.streamer:
+                    # A nested agent shares its caller's stream, where an `error` event ends the whole
+                    # response on the client; the caller gets this failure as the agent's tool result.
+                    if class_obj.streamer and not is_nested_stream_call:
                         await class_obj.streamer.emit_error(
                             f"Transfer target agent {target_agent_id} not found in bridge_configurations"
                         )
-                        if not is_nested_stream_call:
-                            await class_obj.streamer.close()
+                        await class_obj.streamer.close()
             except Exception as transfer_err:
                 logger.error(f"SSE transfer handling error: {transfer_err}, {tb.format_exc()}")
-                if class_obj.streamer:
+                # A nested agent shares its caller's stream, where an `error` event ends the whole
+                # response on the client; the caller gets this failure as the agent's tool result.
+                if class_obj.streamer and not is_nested_stream_call:
                     await class_obj.streamer.emit_error(str(transfer_err))
-                    if not is_nested_stream_call:
-                        await class_obj.streamer.close()
+                    await class_obj.streamer.close()
                 if is_nested_stream_call:
                     await save_error_history(parsed_data, transfer_err, params, timer, class_obj, thread_info)
                     return {"success": False, "message": str(transfer_err), "response": {}}
@@ -2137,8 +2144,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
     except Exception as err:
         logger.error(f"SSE error ({original_service}/{original_model}): {str(err)}, {tb.format_exc()}")
         if class_obj.streamer:
-            await class_obj.streamer.emit_error(str(err))
+            # Nested agent: no `error` event on the caller's stream (see above).
             if not is_nested_stream_call:
+                await class_obj.streamer.emit_error(str(err))
                 await class_obj.streamer.close()
             await save_error_history(parsed_data, err, params, timer, class_obj, thread_info)
         return {"success": False, "message": str(err), "response": {}}

@@ -6,6 +6,7 @@ import src.db_services.ConfigurationServices as ConfigurationService
 from models.mongo_connection import db
 from src.services.utils.common_utils import updateVariablesWithTimeZone
 from src.db_services.ConfigurationServices import transform_agent_config_to_frontend
+from src.services.commonServices.baseService.utils import build_function_url
 
 from .getConfiguration_utils import (
     add_browser_tool,
@@ -200,38 +201,62 @@ async def _prepare_configuration_response(
                 "title": entry_title,
             })
 
-    # New format: a connected_tools entry of type "pre_tool"/"custom_function" carries its
-    # own url directly (no apiCalls DB lookup needed) and takes precedence over the legacy list.
-    version_pre_tool_entry = next(
-        (ct for ct in connected_tools if ct.get("type") == "pre_tool" and ct.get("pre_tool_type") == "custom_function"),
-        None,
-    )
-    if version_pre_tool_entry:
-        variable_path = version_pre_tool_entry.get("variable_path", {}) or {}
-        pre_tools_data_for_later.insert(0, {
-            "_type": "custom_function",
-            "config": {
-                "script_id": version_pre_tool_entry.get("id"),
-                "url": version_pre_tool_entry.get("url"),
-                "required": list(variable_path.keys()),
-            },
-            "args": variable_path,
-            "title": version_pre_tool_entry.get("title"),
-        })
+    # New format: connected_tools entries of type "pre_tool" take precedence over the legacy list
+    # (only the first pre-tool runs). For every pre_tool_type, variable_path holds the static
+    # config and args maps each param to an agent variable.
+    version_pre_tools = []
+    for ct in connected_tools:
+        if not isinstance(ct, dict) or ct.get("type") != "pre_tool" or not ct.get("pre_tool_type"):
+            continue
+        variable_path = ct.get("variable_path") or {}
+        if ct.get("pre_tool_type") == "custom_function":
+            # id is the apicalls _id; script_id, url and title come from the entry or that document.
+            api_data = pre_tools_data_map.get(str(ct.get("id"))) or {}
+            script_id = variable_path.get("script_id") or ct.get("script_id") or api_data.get("script_id")
+            fields = api_data.get("fields") if isinstance(api_data.get("fields"), dict) else {}
+            version_pre_tools.append({
+                "_type": "custom_function",
+                "config": {
+                    "function_id": ct.get("id"),
+                    "script_id": script_id,
+                    "url": ct.get("url") or api_data.get("url") or build_function_url(script_id),
+                    "required": variable_path.get("required") or variable_path.get("required_params") or api_data.get("required") or [],
+                    "params": list(fields.keys()),
+                },
+                "args": ct.get("args") or {},
+                "title": ct.get("title") or api_data.get("title"),
+            })
+        else:
+            config = {**variable_path}
+            if ct.get("url"):
+                config["url"] = ct.get("url")
+            version_pre_tools.append({
+                "_type": ct.get("pre_tool_type"),
+                "config": config,
+                "args": ct.get("args") or {},
+                "title": ct.get("title"),
+            })
+    pre_tools_data_for_later = version_pre_tools + pre_tools_data_for_later
 
     # Handle post_tool: a connected_tools entry of type "post_tool" (bridge/version-level)
-    # carries its own url directly (no apiCalls DB lookup needed) and takes precedence
-    # over the folder-level post_tool merged in by ConfigurationServices.
-    post_tool_entry = next((ct for ct in connected_tools if ct.get("type") == "post_tool"), None)
+    # takes precedence over the folder-level post_tool merged in by ConfigurationServices.
+    post_tool_entry = next((ct for ct in connected_tools if isinstance(ct, dict) and ct.get("type") == "post_tool"), None)
 
     post_tool_data = None
     if post_tool_entry:
+        # id is the apicalls _id (joined into pre_tools_data); script_id, url and title come
+        # from the entry, its variable_path, or that document — same as a custom_function pre-tool.
+        post_variable_path = post_tool_entry.get("variable_path") or {}
+        post_api_data = pre_tools_data_map.get(str(post_tool_entry.get("id"))) or {}
+        post_script_id = (
+            post_variable_path.get("script_id") or post_tool_entry.get("script_id") or post_api_data.get("script_id")
+        )
         post_tool_data = {
-            "script_id": post_tool_entry.get("id"),
-            "url": post_tool_entry.get("url"),
+            "script_id": post_script_id,
+            "url": post_tool_entry.get("url") or post_api_data.get("url") or build_function_url(post_script_id),
             "args": post_tool_entry.get("args", {}),
             "_id": post_tool_entry.get("id"),
-            "title": post_tool_entry.get("title"),
+            "title": post_tool_entry.get("title") or post_api_data.get("title"),
         }
     else:
         # Legacy/folder-level shape: a plain object with script_id/url embedded directly.
@@ -279,7 +304,7 @@ async def _prepare_configuration_response(
         effective_built_in_tools,
         gtwy_web_search_filters,
     )
-    add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools or bridges.get("built_in_tools"))
+    add_browser_tool(tools, tool_id_and_name_mapping, effective_built_in_tools)
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
 
@@ -374,12 +399,22 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited, environm
         return {}
 
     bridge_payload = agent_data.get("bridges", {})
-    connected_agents = bridge_payload.get("connected_agents", {})
     connected_agent_details = bridge_payload.get("connected_agent_details", {})
+
+    # New format: connected_tools entries of type "agent" (id is the child bridge_id);
+    # legacy connected_agents dict is still read for versions saved before the switch.
+    agent_infos = [
+        {"bridge_id": str(ct.get("id")), **({"environment": ct["environment"]} if ct.get("environment") else {})}
+        for ct in bridge_payload.get("connected_tools") or []
+        if isinstance(ct, dict) and ct.get("type") == "agent" and ct.get("id")
+    ]
+    agent_infos.extend((bridge_payload.get("connected_agents") or {}).values())
 
     # Build pending list; pre-populate visited to prevent duplicate concurrent fetches
     pending = []
-    for _, agent_info in connected_agents.items():
+    for agent_info in agent_infos:
+        if not isinstance(agent_info, dict):
+            continue
         bridge_id_value = agent_info.get("bridge_id")
         if not bridge_id_value or bridge_id_value in visited:
             continue

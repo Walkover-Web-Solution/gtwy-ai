@@ -3,7 +3,7 @@ from config import Config
 from globals import logger
 from models.mongo_connection import db
 from src.configs.constant import inbuild_tools, tool_types
-from src.services.commonServices.baseService.utils import makeFunctionName
+from src.services.commonServices.baseService.utils import build_function_url, makeFunctionName
 from src.services.utils.built_in_tools.browser import steel_client
 from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
@@ -122,7 +122,7 @@ def process_api_call_tool(api_data, variables_path_bridge):
 
     # Setup tool mapping
     tool_mapping = {
-        "url": api_data.get("url"),
+        "url": api_data.get("url") or build_function_url(api_data.get("script_id")),
         "headers": {},
         "name": api_data.get("script_id"),
         "method": "POST"
@@ -211,26 +211,54 @@ def setup_tools(bridges, variables_path_bridge, extra_tools):
     # Iterate connected_tools where type="tools" — uses variable_path from each entry
     connected_tools = bridges.get("connected_tools", [])
     tool_entries = [ct for ct in connected_tools if ct.get("type") == "tools"]
+    agent_entries = [ct for ct in connected_tools if ct.get("type") == "agent"]
     api_calls_map = _build_api_calls_map(bridges.get("apiCalls", {}))
 
-    # Build variables_path from per-entry variable_path in connected_tools
-    merged_variables_path = {}
+    # variables_path is keyed by a function's script_id and by a connected agent's bridge_id.
+    # Entries that come from connected_tools own their key; the bridge-level map (folder merge,
+    # legacy data) fills in only the keys no entry covers, so a mapping removed in the new
+    # format is not brought back from stale legacy data.
+    connected_tool_ids = set()
+    entry_variables_path = {}
     for tool_entry in tool_entries:
         tool_id = str(tool_entry.get("id", ""))
-        api_data = api_calls_map.get(tool_id)
-        if not api_data:
-            continue
-        entry_variable_path = tool_entry.get("variable_path", {}) or {}
-        script_id = api_data.get("script_id")
-        if entry_variable_path and script_id:
-            existing = merged_variables_path.get(script_id, {}) or {}
-            merged_variables_path[script_id] = {**existing, **entry_variable_path}
+        connected_tool_ids.add(tool_id)
+        script_id = (api_calls_map.get(tool_id) or {}).get("script_id")
+        if script_id:
+            existing = entry_variables_path.get(script_id, {}) or {}
+            entry_variables_path[script_id] = {**existing, **(tool_entry.get("variable_path") or {})}
+    for agent_entry in agent_entries:
+        bridge_id = str(agent_entry.get("id", ""))
+        if bridge_id:
+            entry_variables_path[bridge_id] = agent_entry.get("variable_path") or {}
 
+    merged_variables_path = {
+        key: value for key, value in (bridges.get("variables_path") or {}).items() if key not in entry_variables_path
+    }
+    merged_variables_path.update({key: value for key, value in entry_variables_path.items() if value})
+
+    def add_api_call_tool(api_data):
         tool_format, tool_mapping = process_api_call_tool(api_data, merged_variables_path)
         if tool_format:
             name_of_function = tool_format["name"]
             tools.append(tool_format)
             tool_id_and_name_mapping[name_of_function] = tool_mapping
+
+    for tool_entry in tool_entries:
+        api_data = api_calls_map.get(str(tool_entry.get("id", "")))
+        if api_data:
+            add_api_call_tool(api_data)
+
+    # Folder-level tools are merged into apiCalls by ConfigurationServices without a
+    # connected_tools entry of their own.
+    raw_api_calls = bridges.get("apiCalls") or {}
+    raw_items = raw_api_calls.items() if isinstance(raw_api_calls, dict) else ((None, val) for val in raw_api_calls)
+    for key, api_data in raw_items:
+        if not isinstance(api_data, dict):
+            continue
+        api_id = str(api_data.get("_id") or key or "")
+        if api_id not in connected_tool_ids:
+            add_api_call_tool(api_data)
 
     # Process extra tools
     for tool in extra_tools:
@@ -283,38 +311,6 @@ def setup_api_key(service, bridges, apikey, chatbot):
     if apikey:
         return apikey
     return Helper.decrypt(db_api_key) if db_api_key else None
-
-
-def setup_pre_tools(bridge, agent_data, variables):
-    """Setup pre-tools configuration - reads from connected_tools type='pre_tool'"""
-    connected_tools = bridge.get("connected_tools", [])
-    pre_tool_entries = [ct for ct in connected_tools if ct.get("type") == "pre_tool"]
-    if not pre_tool_entries:
-        return None, None
-
-    pre_tools_data = agent_data.get("bridges", {}).get("pre_tools_data", [])
-    pre_tools_data_map = {pt.get("_id"): pt for pt in pre_tools_data}
-
-    # Get the first pre_tool entry
-    tool_entry = pre_tool_entries[0]
-    tool_id = tool_entry.get("id")
-    api_data = pre_tools_data_map.get(tool_id, {})
-    if not api_data:
-        raise Exception("Didn't find the pre_function")
-
-    name = api_data.get("title") or makeFunctionName(api_data["endpoint_name"] or api_data["function_name"])
-    required = api_data.get("required", [])
-
-    # variable_path is embedded in the tool_entry
-    variable_path = tool_entry.get("variable_path", {})
-    args = {}
-    for param in required:
-        if param in variable_path:
-            args[param] = variable_path[param]
-        elif param in variables:
-            args[param] = variables[param]
-
-    return name, args
 
 
 def add_rag_tool(tools, tool_id_and_name_mapping, rag_data):

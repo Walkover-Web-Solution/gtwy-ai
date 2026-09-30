@@ -380,14 +380,32 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     },
                 }
             },
-            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in 'pre_tools'
+            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in the
+            # legacy 'pre_tools' and in connected_tools entries of type "pre_tool" / "post_tool"
             {
                 "$lookup": {
                     "from": "apicalls",
                     "let": {
                         "pre_tools_ids": {
                             "$map": {
-                                "input": "$pre_tools",
+                                "input": {
+                                    "$concatArrays": [
+                                        {"$ifNull": ["$pre_tools", []]},
+                                        {
+                                            "$map": {
+                                                "input": {
+                                                    "$filter": {
+                                                        "input": {"$ifNull": ["$connected_tools", []]},
+                                                        "as": "ct",
+                                                        "cond": {"$in": ["$$ct.type", ["pre_tool", "post_tool"]]},
+                                                    }
+                                                },
+                                                "as": "ct",
+                                                "in": "$$ct.id",
+                                            }
+                                        },
+                                    ]
+                                },
                                 "as": "id",
                                 "in": {
                                     "$convert": {"input": "$$id", "to": "objectId", "onError": None, "onNull": None}
@@ -985,13 +1003,16 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                 # Add folder pre_tool if not already present
                 if folder_pre_tool_id and folder_pre_tool_id not in bridge_data["pre_tools"]:
                     # Build pre_tools_data with variables_path mapping
+                    from src.services.commonServices.baseService.utils import build_function_url  # local: avoids an import cycle
+
                     script_id = folder_pre_tool.get("script_id")
                     variables_path_pre_tool = folder_result[0].get("variables_path", {}).get(script_id, {}) if script_id else {}
                     pre_tool_data_entry = {
                         "type": 'custom_function',
                         "config":{
                             "function_id": folder_pre_tool_id,
-                            "script_id": script_id
+                            "script_id": script_id,
+                            "url": folder_pre_tool.get("url") or build_function_url(script_id),
                         },
                         "args": variables_path_pre_tool or folder_pre_tool.get("args", {}),
                     }

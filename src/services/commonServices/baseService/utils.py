@@ -196,6 +196,11 @@ def get_saved_tool_response(self, tool_name, args):
     return {"error": f"No saved tool response found for '{tool_name}' with args {args}"}
 
 
+def build_function_url(script_id):
+    """Execution url of a viaSocket function, for tool entries saved before the url was stored."""
+    return f"https://flow.sokt.io/func/{script_id}" if script_id else None
+
+
 async def axios_work(data, function_payload):
     try:
         method = function_payload.get("method", "POST")
