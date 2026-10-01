@@ -477,7 +477,7 @@ async def load_model_configuration(model, configuration, service):
         ):
             if config.get("level") == 0 and key not in configuration:
                 continue
-            if configuration.get(key):
+            if key in configuration and configuration[key] is not None:
                 custom_config[key] = configuration[key]
 
     # response_type is handled even when the model's own schema doesn't declare
