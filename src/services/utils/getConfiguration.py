@@ -6,7 +6,6 @@ import src.db_services.ConfigurationServices as ConfigurationService
 from models.mongo_connection import db
 from src.services.utils.common_utils import updateVariablesWithTimeZone
 from src.db_services.ConfigurationServices import transform_agent_config_to_frontend
-from src.services.commonServices.baseService.utils import build_function_url
 
 from .getConfiguration_utils import (
     add_browser_tool,
@@ -219,7 +218,7 @@ async def _prepare_configuration_response(
                 "config": {
                     "function_id": ct.get("id"),
                     "script_id": script_id,
-                    "url": ct.get("url") or api_data.get("url") or build_function_url(script_id),
+                    "url": ct.get("url") or api_data.get("url"),
                     "required": variable_path.get("required") or variable_path.get("required_params") or api_data.get("required") or [],
                     "params": list(fields.keys()),
                 },
@@ -253,7 +252,7 @@ async def _prepare_configuration_response(
         )
         post_tool_data = {
             "script_id": post_script_id,
-            "url": post_tool_entry.get("url") or post_api_data.get("url") or build_function_url(post_script_id),
+            "url": post_tool_entry.get("url") or post_api_data.get("url"),
             "args": post_tool_entry.get("args", {}),
             "_id": post_tool_entry.get("id"),
             "title": post_tool_entry.get("title") or post_api_data.get("title"),

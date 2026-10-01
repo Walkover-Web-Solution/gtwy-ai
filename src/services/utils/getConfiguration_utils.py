@@ -3,7 +3,7 @@ from config import Config
 from globals import logger
 from models.mongo_connection import db
 from src.configs.constant import inbuild_tools, tool_types
-from src.services.commonServices.baseService.utils import build_function_url, makeFunctionName
+from src.services.commonServices.baseService.utils import makeFunctionName
 from src.services.utils.built_in_tools.browser import steel_client
 from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
@@ -122,7 +122,7 @@ def process_api_call_tool(api_data, variables_path_bridge):
 
     # Setup tool mapping
     tool_mapping = {
-        "url": api_data.get("url") or build_function_url(api_data.get("script_id")),
+        "url": api_data.get("url"),
         "headers": {},
         "name": api_data.get("script_id"),
         "method": "POST"

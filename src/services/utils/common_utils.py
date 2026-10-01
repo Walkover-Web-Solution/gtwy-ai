@@ -28,7 +28,7 @@ from src.services.billing.billing_utils import (
     apply_wallet_fallback,
     fallback_allowed_on_plan,
 )
-from src.services.commonServices.baseService.utils import axios_work, build_function_url, compute_billing_events, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
+from src.services.commonServices.baseService.utils import axios_work, compute_billing_events, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
@@ -90,7 +90,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
         resolved_tools.append({
             "type": "custom_function",
             "name": tool_config.get("script_id"),
-            "url": tool_config.get("url") or build_function_url(tool_config.get("script_id")),
+            "url": tool_config.get("url"),
             "title": tool.get("title"),
             "args": resolved_args,
         })
@@ -669,7 +669,7 @@ async def handle_post_tool(parsed_data, result):
         logger.warning("post_tool configured but no script_id / function_name found; skipping")
         return
 
-    tool_url = post_tool_data.get("url") or build_function_url(script_id)
+    tool_url = post_tool_data.get("url")
 
     try:
         args = {

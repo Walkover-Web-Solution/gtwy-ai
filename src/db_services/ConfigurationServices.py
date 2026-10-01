@@ -915,19 +915,64 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                         }
                     }
                 },
-                # Stage 8b: Extract folder post_tool object directly from config.post_tool
+                # Stage 8b: Lookup folder post_tool from apicalls collection — config.post_tool only
+                # stores {id, script_id, args}; url and title live on the apicalls document.
+                # Legacy folders store just config.post_tool_id.
+                {
+                    "$lookup": {
+                        "from": "apicalls",
+                        "let": {
+                            "post_tool_id_obj": {
+                                "$convert": {
+                                    "input": {
+                                        "$cond": [
+                                            {"$eq": [{"$type": "$config.post_tool"}, "object"]},
+                                            "$config.post_tool.id",
+                                            "$config.post_tool_id",
+                                        ]
+                                    },
+                                    "to": "objectId",
+                                    "onError": None,
+                                    "onNull": None,
+                                }
+                            }
+                        },
+                        "pipeline": [
+                            {"$match": {"$expr": {"$eq": ["$_id", "$$post_tool_id_obj"]}}},
+                            {"$project": {"_id": {"$toString": "$_id"}, "script_id": 1, "url": 1, "title": 1}},
+                        ],
+                        "as": "folder_post_tool_docs",
+                    }
+                },
+                # Stage 8c: Build folder_post_tool from config.post_tool merged over its apicalls document
                 {
                     "$addFields": {
                         "folder_post_tool": {
-                            "$cond": [
-                                {"$and": [
-                                    {"$ne": ["$config.post_tool", None]},
-                                    {"$eq": [{"$type": "$config.post_tool"}, "object"]},
-                                    {"$ne": ["$config.post_tool.id", None]}
-                                ]},
-                                "$config.post_tool",
-                                None
-                            ]
+                            "$let": {
+                                "vars": {
+                                    "doc": {"$arrayElemAt": ["$folder_post_tool_docs", 0]},
+                                    "entry": {
+                                        "$cond": [
+                                            {"$eq": [{"$type": "$config.post_tool"}, "object"]},
+                                            "$config.post_tool",
+                                            {},
+                                        ]
+                                    },
+                                },
+                                "in": {
+                                    "$cond": [
+                                        {"$ne": [{"$ifNull": ["$$doc", None]}, None]},
+                                        {
+                                            "$mergeObjects": [
+                                                {"id": "$$doc._id", "script_id": "$$doc.script_id", "title": "$$doc.title"},
+                                                "$$entry",
+                                                {"url": {"$ifNull": ["$$entry.url", "$$doc.url"]}},
+                                            ]
+                                        },
+                                        {"$cond": [{"$ne": [{"$ifNull": ["$$entry.id", None]}, None]}, "$$entry", None]},
+                                    ]
+                                },
+                            }
                         }
                     }
                 },
@@ -1003,8 +1048,6 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                 # Add folder pre_tool if not already present
                 if folder_pre_tool_id and folder_pre_tool_id not in bridge_data["pre_tools"]:
                     # Build pre_tools_data with variables_path mapping
-                    from src.services.commonServices.baseService.utils import build_function_url  # local: avoids an import cycle
-
                     script_id = folder_pre_tool.get("script_id")
                     variables_path_pre_tool = folder_result[0].get("variables_path", {}).get(script_id, {}) if script_id else {}
                     pre_tool_data_entry = {
@@ -1012,7 +1055,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                         "config":{
                             "function_id": folder_pre_tool_id,
                             "script_id": script_id,
-                            "url": folder_pre_tool.get("url") or build_function_url(script_id),
+                            "url": folder_pre_tool.get("url"),
                         },
                         "args": variables_path_pre_tool or folder_pre_tool.get("args", {}),
                     }
