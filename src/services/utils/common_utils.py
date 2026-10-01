@@ -486,7 +486,12 @@ async def load_model_configuration(model, configuration, service):
     # it (normalize_response_type inlines the schema into the prompt for models
     # that can't enforce it natively) — so it can't be dropped by the
     # schema-driven loop above just because a model has no response_type field.
-    if "response_type" not in custom_config and configuration.get("response_type"):
+    # Image models never accept a response_type param, so skip it for them.
+    if (
+        configuration.get("type") != "image"
+        and "response_type" not in custom_config
+        and configuration.get("response_type")
+    ):
         custom_config["response_type"] = configuration["response_type"]
 
     return model_obj, custom_config, model_output_config
