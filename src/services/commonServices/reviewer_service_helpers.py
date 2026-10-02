@@ -686,12 +686,12 @@ async def _call_tool_reviewer(
         )
 
     first_tool = reviewer_tools_list[0]
-    script_id = first_tool.get("script_id") if isinstance(first_tool, dict) else None
-    if not script_id:
-        raise ValueError(f"Reviewer tool has no script_id for bridge '{main_bridge_id}'")
+    tool_url = first_tool.get("url") if isinstance(first_tool, dict) else None
+    if not tool_url:
+        raise ValueError(f"Reviewer tool has no url for bridge '{main_bridge_id}'")
 
     tool_mapping = {
-        "url": f"https://flow.sokt.io/func/{script_id}",
+        "url": tool_url,
         "headers": {},
         "method": "POST",
     }
