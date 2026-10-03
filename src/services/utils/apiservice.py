@@ -2,6 +2,7 @@ import asyncio
 import base64
 import ssl
 from io import BytesIO
+from urllib.parse import urlparse
 
 import aiohttp
 import certifi
@@ -29,19 +30,20 @@ _TRANSIENT_EXCEPTIONS = (
 
 # Lazy import to break the circular chain:
 #   apiservice → send_alert → alert_utils → apiservice
-async def _fire_gateway_alert(status_code, url, error_text):
+async def _fire_gateway_alert(status_code, url, error_text, service=None):
     try:
         from src.services.commonServices.baseService.utils import unknown_error_handler_alert
         await unknown_error_handler_alert({
             "error_log": {"status_code": status_code, "url": url, "error": error_text[:500]},
-            "service":"openai",
+            # fetch() is shared by non-LLM callers too; fall back to the host.
+            "service": service or urlparse(url).hostname,
             "is_external_error":False
             })
     except Exception as e:
         logger.error(f"_fire_gateway_alert failed: {e}")
 
 
-async def fetch(url, method="GET", headers=None, params=None, json_body=None, image=None):
+async def fetch(url, method="GET", headers=None, params=None, json_body=None, image=None, service=None):
     timeout = aiohttp.ClientTimeout(total=600, connect=15)
     last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
@@ -55,7 +57,7 @@ async def fetch(url, method="GET", headers=None, params=None, json_body=None, im
                     if response.status >= 300:
                         error_response = await response.text()
                         if response.status in _GATEWAY_ERROR_CODES:
-                            asyncio.create_task(_fire_gateway_alert(response.status, url, error_response))
+                            asyncio.create_task(_fire_gateway_alert(response.status, url, error_response, service))
                             if attempt < _MAX_RETRIES:
                                 delay = _RETRY_BASE_DELAY * (2 ** attempt)
                                 logger.warning(
@@ -95,7 +97,7 @@ async def fetch(url, method="GET", headers=None, params=None, json_body=None, im
     raise last_exc
 
 
-async def _fetch_stream_once(url, method, headers, json_body):
+async def _fetch_stream_once(url, method, headers, json_body, service=None):
     """Single streaming attempt; raises ValueError (with status in message) on bad status."""
     timeout = aiohttp.ClientTimeout(total=900, connect=15, sock_read=120)
     connector = aiohttp.TCPConnector(ssl=_ssl_context)
@@ -108,7 +110,7 @@ async def _fetch_stream_once(url, method, headers, json_body):
             if response.status >= 300:
                 error_response = await response.text()
                 if response.status in _GATEWAY_ERROR_CODES:
-                    asyncio.create_task(_fire_gateway_alert(response.status, url, error_response))
+                    asyncio.create_task(_fire_gateway_alert(response.status, url, error_response, service))
                 raise ValueError(f"HTTP {response.status}: {error_response}")
             async for line in response.content:
                 decoded = line.decode("utf-8").strip()
@@ -116,7 +118,7 @@ async def _fetch_stream_once(url, method, headers, json_body):
                     yield decoded
 
 
-async def fetch_stream(url, method="POST", headers=None, json_body=None):
+async def fetch_stream(url, method="POST", headers=None, json_body=None, service=None):
     """Async generator that yields raw SSE lines from a streaming HTTP response."""
     # 10 MiB buffer — large enough for SSE lines that embed base64 payloads
     # (e.g. OpenAI ``response.image_generation_call.partial_image``), which
@@ -125,7 +127,7 @@ async def fetch_stream(url, method="POST", headers=None, json_body=None):
     for attempt in range(_MAX_RETRIES + 1):
         yielded_any = False
         try:
-            async for line in _fetch_stream_once(url, method, headers, json_body):
+            async for line in _fetch_stream_once(url, method, headers, json_body, service):
                 yielded_any = True
                 yield line
             return

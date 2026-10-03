@@ -54,10 +54,16 @@ async def execute_api_call(
             if alert_on_retry and not is_playground:
                 from src.send_alert import send_alert
                 from src.configs.constant import alert_types
+                from src.utils.alert_utils import sanitize_payload_for_alert
                 asyncio.create_task(send_alert(
                     bridge_id=bridge_id,
                     org_id=org_id,
-                    error_log={"error": result.get("error"), "message": "Exception for the code", "message_id": message_id},
+                    error_log={
+                    "error": result.get("error"),
+                    "message": "Exception for the code",
+                    "message_id": message_id,
+                    "request_payload": sanitize_payload_for_alert(config),
+                },
                     error_type=alert_types["retry_mechanism"],
                     bridge_name=name,
                     org_name=org_name,

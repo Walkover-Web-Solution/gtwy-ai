@@ -600,6 +600,8 @@ class BaseService:
             raise ValueError(f"Service key error: {error[0] if error else str(e)}") from e
 
     async def chats(self, configuration, apikey, service, count=0):
+        # Exact payload of the latest provider call — attached to failure alerts.
+        self.last_request_payload = configuration
         try:
             response = {}
             loop = asyncio.get_event_loop()
@@ -752,6 +754,7 @@ class BaseService:
     async def stream(self, configuration, apikey, service, count=0):
         """Parallel to chats() — streams from the per-service SDK, emits SSE/RTLayer events
         via self.streamer, and returns the same complete response dict as chats()."""
+        self.last_request_payload = configuration
         try:
             if count == 0:
                 await self.streamer.emit_start(
