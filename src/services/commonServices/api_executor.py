@@ -4,7 +4,6 @@ import traceback
 from src.configs.service_registry import has_anthropic_shape, has_gemini_shape, has_openai_choices_shape, has_openai_responses_shape
 from src.services.commonServices.baseService.utils import serialize_config
 from src.exceptions import ApiCallError
-from src.services.utils.alert_payload_utils import sanitize_payload_for_alert
 
 
 async def execute_api_call(
@@ -55,6 +54,7 @@ async def execute_api_call(
             if alert_on_retry and not is_playground:
                 from src.send_alert import send_alert
                 from src.configs.constant import alert_types
+                from src.utils.alert_utils import sanitize_payload_for_alert
                 asyncio.create_task(send_alert(
                     bridge_id=bridge_id,
                     org_id=org_id,

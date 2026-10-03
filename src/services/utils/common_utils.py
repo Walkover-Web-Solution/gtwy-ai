@@ -36,7 +36,7 @@ from src.send_alert import send_alert
 from src.services.utils.time import Timer, log_slow_call, SLOW_CALL_THRESHOLDS
 from src.services.utils.token_calculation import TokenCalculator
 from src.services.utils.update_and_check_cost import update_cost, update_last_used
-from src.services.utils.alert_payload_utils import sanitize_payload_for_alert
+from src.utils.alert_utils import sanitize_payload_for_alert
 from src.utils.formatter import apply_variables_to_template_json
 from src.services.utils.helper import Helper
 from ...controllers.conversationController import getThread

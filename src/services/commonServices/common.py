@@ -22,7 +22,6 @@ from src.services.billing.billing_utils import (
 from src.services.cache_service import find_in_cache, store_in_cache
 from src.services.todo.planner_service import prepare_planner_request
 from src.services.todo.todo_handler import handle_todo_mode
-from src.services.utils.alert_payload_utils import sanitize_payload_for_alert
 from src.services.utils.common_utils import (
     add_default_template,
     add_files_to_parse_data,
@@ -60,6 +59,7 @@ from src.services.utils.maximum_iterations_utils import (
     cleanup_tool_count_after,
     init_tool_count,
 )
+from src.utils.alert_utils import sanitize_payload_for_alert
 
 
 from ..utils.ai_middleware_format import Response_formatter
