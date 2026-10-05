@@ -5,13 +5,14 @@ from bson import ObjectId, errors
 
 from globals import BadRequestException, logger
 from models.mongo_connection import db
-from src.configs.constant import redis_keys
+from src.configs.constant import SKILL_TOOL_TYPE, redis_keys
 from typing import Dict, Any, Set
 from src.configs.model_configuration import model_config_document
 
 from ..services.cache_service import delete_in_cache, find_in_cache, store_in_cache
 from ..services.cache_utils import extract_cache_tags, store_in_cache_with_tags
 from ..services.utils.time import log_slow_call, SLOW_CALL_THRESHOLDS, with_timeout
+from ..services.utils.skills_utils import fetch_org_skills, get_attached_skills
 
 configurationModel = db["configurations"]
 apiCallModel = db["apicalls"]
@@ -1079,6 +1080,19 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             bridge_data["folder_usage"] = 0
             bridge_data["folder_type"] = None
 
+        # Skills live upstream, so resolve them into the blob here instead of per request.
+        bridge_data["skills_data"] = []
+        skill_ids = [
+            ct.get("id")
+            for ct in bridge_data.get("connected_tools") or []
+            if isinstance(ct, dict) and ct.get("type") == SKILL_TOOL_TYPE and ct.get("id")
+        ]
+        if skill_ids:
+            try:
+                catalogue = await fetch_org_skills(org_id, bridge_data.get("user_id"))
+                bridge_data["skills_data"] = get_attached_skills(bridge_data["connected_tools"], catalogue)
+            except Exception as exc:
+                logger.error(f"skills lookup failed for org {org_id}: {exc}")
 
         # Structure the final response
         response = {"success": True, "bridges": bridge_data}

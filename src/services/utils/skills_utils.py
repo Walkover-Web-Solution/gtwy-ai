@@ -1,20 +1,12 @@
 import asyncio
-import json
 from typing import Any
 
 import jwt
 
 from config import Config
-from src.configs.constant import SKILL_TOOL_TYPE, redis_keys
-from src.services.cache_service import find_in_cache, store_in_cache
+from src.configs.constant import SKILL_TOOL_TYPE
 from src.services.utils.apiservice import fetch
 from src.services.utils.logger import logger
-
-# Short TTL so a renamed skill surfaces quickly; the payload is tiny.
-ORG_SKILLS_CACHE_TTL = 300
-
-# Content is bigger and changes rarely, so it can be cached longer.
-SKILL_CONTENT_CACHE_TTL = 1800
 
 # The tool loop is blocked while this runs, so cap it.
 SKILL_FETCH_TIMEOUT_SECONDS = 20
@@ -46,8 +38,7 @@ def _parse_skill_list(payload: Any) -> list[dict[str, Any]]:
 
 
 def _parse_skill(payload: Any) -> dict[str, Any] | None:
-    """Pull one skill out of the envelope. None unless it actually looks like a skill,
-    so an unexpected 200 body is not cached as a blank skill."""
+    """Pull one skill out of the envelope; None unless the body really is a skill."""
     if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
         payload = payload["data"]
     if not isinstance(payload, dict) or not ("content" in payload or "_id" in payload):
@@ -55,19 +46,19 @@ def _parse_skill(payload: Any) -> dict[str, Any] | None:
     return payload
 
 
+def _envelope(response: Any, skill_id: str | None, ok: bool = True) -> dict[str, Any]:
+    """The {response, metadata, status} shape every tool executor returns."""
+    metadata: dict[str, Any] = {"type": "skill"}
+    if skill_id:
+        metadata["skill_id"] = skill_id
+    return {"response": response, "metadata": metadata, "status": 1 if ok else 0}
+
+
 async def fetch_org_skills(org_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
     """Return the org's skills as [{_id, name, description}, ...]. Never raises - a failure just means no skills."""
     token = _create_token(org_id, user_id)
     if not token:
         return []
-
-    cache_key = f"{redis_keys['org_skills_']}{org_id}"
-    cached = await find_in_cache(cache_key)
-    if cached:
-        try:
-            return json.loads(cached)
-        except (json.JSONDecodeError, TypeError) as exc:
-            logger.warning(f"fetch_org_skills: bad cache entry for org {org_id}: {exc}")
 
     try:
         response, _ = await fetch(Config.SKILL_API_URL, "GET", _auth_headers(token), None, None)
@@ -83,10 +74,7 @@ async def fetch_org_skills(org_id: str, user_id: str | None = None) -> list[dict
         }
         for skill in _parse_skill_list(response)
     ]
-    skills = [skill for skill in skills if skill["_id"]]
-
-    await store_in_cache(cache_key, skills, ORG_SKILLS_CACHE_TTL)
-    return skills
+    return [skill for skill in skills if skill["_id"]]
 
 
 def get_attached_skills(connected_tools: Any, org_skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -106,63 +94,38 @@ def get_attached_skills(connected_tools: Any, org_skills: list[dict[str, Any]]) 
     return [skills_by_id[skill_id] for skill_id in attached_ids if skill_id in skills_by_id]
 
 
-async def _fetch_content(skill_id: str, token: str) -> dict[str, Any]:
-    cache_key = f"{redis_keys['skill_content_']}{skill_id}"
-    cached = await find_in_cache(cache_key)
-    if cached:
-        try:
-            return {"response": json.loads(cached), "metadata": {"type": "skill", "skill_id": skill_id}, "status": 1}
-        except (json.JSONDecodeError, TypeError) as exc:
-            logger.warning(f"fetch_skill_content: bad cache entry for skill {skill_id}: {exc}")
-
+async def _request_skill(skill_id: str, token: str) -> dict[str, Any]:
+    """Fetch one skill and reduce it to what the model needs."""
     response, _ = await fetch(f"{Config.SKILL_API_URL}/{skill_id}", "GET", _auth_headers(token), None, None)
     skill = _parse_skill(response)
     if not skill:
-        return {
-            "response": {"error": f"Skill '{skill_id}' returned no data"},
-            "metadata": {"type": "skill", "skill_id": skill_id},
-            "status": 0,
-        }
+        return _envelope({"error": f"Skill '{skill_id}' returned no data"}, skill_id, ok=False)
 
-    content = {
-        "name": skill.get("name") or "",
-        "description": skill.get("description") or "",
-        "content": skill.get("content") or "",
-    }
-    await store_in_cache(cache_key, content, SKILL_CONTENT_CACHE_TTL)
-    return {"response": content, "metadata": {"type": "skill", "skill_id": skill_id}, "status": 1}
+    return _envelope(
+        {
+            "name": skill.get("name") or "",
+            "description": skill.get("description") or "",
+            "content": skill.get("content") or "",
+        },
+        skill_id,
+    )
 
 
 async def fetch_skill_content(skill_id: str | None, org_id: str | None = None, user_id: str | None = None) -> dict[str, Any]:
-    """Executor for load_skill. Always returns the tool envelope and never raises."""
+    """Executor for load_skill; always returns the tool envelope and never raises."""
+    # Deliberately uncached: the model is mid-tool-call and stale instructions are the worst failure.
     if not skill_id:
-        return {
-            "response": {"error": "skill_id is required to load a skill"},
-            "metadata": {"type": "skill"},
-            "status": 0,
-        }
+        return _envelope({"error": "skill_id is required to load a skill"}, None, ok=False)
 
     token = _create_token(org_id, user_id)
     if not token:
-        return {
-            "response": {"error": "Skills are not configured on this gateway"},
-            "metadata": {"type": "skill", "skill_id": skill_id},
-            "status": 0,
-        }
+        return _envelope({"error": "Skills are not configured on this gateway"}, skill_id, ok=False)
 
     try:
-        return await asyncio.wait_for(_fetch_content(skill_id, token), timeout=SKILL_FETCH_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(_request_skill(skill_id, token), timeout=SKILL_FETCH_TIMEOUT_SECONDS)
     except TimeoutError:
         logger.error(f"fetch_skill_content timed out for skill {skill_id} (org {org_id})")
-        return {
-            "response": {"error": f"Loading skill '{skill_id}' timed out"},
-            "metadata": {"type": "skill", "skill_id": skill_id},
-            "status": 0,
-        }
+        return _envelope({"error": f"Loading skill '{skill_id}' timed out"}, skill_id, ok=False)
     except Exception as exc:
         logger.error(f"fetch_skill_content failed for skill {skill_id} (org {org_id}): {exc}")
-        return {
-            "response": {"error": str(exc)},
-            "metadata": {"type": "skill", "skill_id": skill_id},
-            "status": 0,
-        }
+        return _envelope({"error": str(exc)}, skill_id, ok=False)

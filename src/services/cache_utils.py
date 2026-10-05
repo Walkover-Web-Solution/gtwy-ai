@@ -43,6 +43,12 @@ def extract_cache_tags(bridge_response: dict, environment: str | None = None) ->
         for tool_id in api_calls.keys():
             _add(tag_keys["tool"], tool_id)
 
+    skills_data = bridge.get("skills_data")
+    if isinstance(skills_data, list):
+        for skill in skills_data:
+            if isinstance(skill, dict):
+                _add(tag_keys["skill"], skill.get("_id"))
+
     pre_tools_data = bridge.get("pre_tools_data")
     if isinstance(pre_tools_data, list):
         for pre in pre_tools_data:

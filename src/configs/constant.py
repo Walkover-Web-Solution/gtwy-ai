@@ -95,9 +95,6 @@ redis_keys = {
     "timezone_and_org_": "cd_timezone_and_org_",
     "conversation_": "cd_conversation_",
     "last_transffered_agent_": "cd_last_transffered_agent_",
-    # Skills: the org's catalogue, and one entry per skill's content.
-    "org_skills_": "cd_org_skills_",
-    "skill_content_": "cd_skill_content_",
     # Protected — source of truth or cost/metrics accumulators
     "bridgeusedcost_": "nd_bridgeusedcost_",
     "folderusedcost_": "nd_folderusedcost_",
@@ -141,6 +138,7 @@ tag_keys = {
     "connected_agent": "tag:connected_agent:",
     "wrapper": "tag:wrapper:",
     "rag": "tag:rag:",
+    "skill": "tag:skill:",
 }
 
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
