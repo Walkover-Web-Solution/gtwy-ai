@@ -11,6 +11,7 @@ from .getConfiguration_utils import (
     add_browser_tool,
     add_connected_agents,
     add_rag_tool,
+    add_skills_tool,
     add_web_crawling_tool,
     get_bridge_data,
     setup_api_key,
@@ -282,6 +283,12 @@ async def _prepare_configuration_response(
     add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools or bridges.get("built_in_tools"))
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
+
+    # Skills - already resolved into the cached bridge blob, so no fetch here.
+    attached_skills = bridges.get("skills_data") or []
+    if attached_skills:
+        add_skills_tool(tools, tool_id_and_name_mapping, attached_skills)
+        configuration["prompt"] = Helper.add_skills_to_prompt(configuration["prompt"], attached_skills)
 
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 

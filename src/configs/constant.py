@@ -138,13 +138,18 @@ tag_keys = {
     "connected_agent": "tag:connected_agent:",
     "wrapper": "tag:wrapper:",
     "rag": "tag:rag:",
+    "skill": "tag:skill:",
 }
 
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
 
 inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search", "Gtwy_Browser": "Gtwy_Browser"}
 
-tool_types = {"AGENT": "AGENT"}
+tool_types = {"AGENT": "AGENT", "SKILL": "SKILL"}
+
+# The connected_tools type for a skill, and the tool the model calls to load one.
+SKILL_TOOL_TYPE = "skills"
+SKILL_TOOL_NAME = "load_skill"
 
 VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
 
