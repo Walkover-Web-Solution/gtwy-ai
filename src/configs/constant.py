@@ -15,6 +15,7 @@ class WireFormat(StrEnum):
     ANTHROPIC = "anthropic"
     GEMINI = "gemini"
     DEEPGRAM = "deepgram"
+    TYPESAFE = "typesafe"
 
 
 class Client(StrEnum):
@@ -29,6 +30,7 @@ class Client(StrEnum):
     MISTRAL_SDK = "mistral_sdk"
     MINIMAX_SDK = "minimax_sdk"
     DEEPGRAM_SDK = "deepgram_sdk"
+    TYPESAFE_HTTP = "typesafe_http"
 
 
 api_key_status = {
@@ -53,6 +55,7 @@ service_name = {
     "neev_cloud": "neev_cloud",
     "moonshot": "moonshot",
     "minimax": "minimax",
+    "typesafe": "typesafe",
 }
 
 bridge_ids = {

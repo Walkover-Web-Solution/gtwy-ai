@@ -18,6 +18,7 @@ from src.services.utils.formatters.grok_formatter import format_grok
 from src.services.utils.formatters.groq_formatter import format_groq
 from src.services.utils.formatters.openai_compatible_formatter import format_openai_compatible
 from src.services.utils.formatters.openai_formatter import format_openai
+from src.services.utils.formatters.typesafe_formatter import format_typesafe
 
 __all__ = [
     "Response_formatter",
@@ -117,6 +118,8 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
         formatted = format_openai_compatible(response, tools_data, images)
     elif service == service_name["deepgram"]:
         formatted = format_deepgram(response, tools_data, images)
+    elif service == service_name["typesafe"]:
+        formatted = format_typesafe(response, tools_data, images)
 
     return _stamp_request_model(formatted, model)
 
