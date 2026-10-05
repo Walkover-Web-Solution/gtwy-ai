@@ -24,6 +24,7 @@ from ..commonServices.anthropic.anthropic_batch import AnthropicBatch
 from ..commonServices.anthropic.anthropicCall import Anthropic
 from ..commonServices.baseService.utils import sendResponse
 from ..commonServices.deepgram.deepgramCall import Deepgram
+from ..commonServices.typesafe.typesafeCall import TypeSafe
 from ..commonServices.Google.geminiCall import GeminiHandler
 from ..commonServices.Google.gemini_batch import GeminiBatch
 from ..commonServices.grok.grokCall import Grok
@@ -280,6 +281,9 @@ class Helper:
             # deepseek shares the generic runner but keeps its own handler
             # (different conversation builder); must precede the uses_openai_sdk branch.
             class_obj = Deepseek(params)
+        elif service == service_name["typesafe"]:
+            # TypeSafe/Jev: non-chat "System One" API (state + typed questions -> answers)
+            class_obj = TypeSafe(params)
         elif uses_openai_sdk(service):
             # open_router / neev_cloud / moonshot / openai_completion
             # (+ future openai_sdk services)

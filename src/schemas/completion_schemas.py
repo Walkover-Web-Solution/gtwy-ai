@@ -24,6 +24,7 @@ _SERVICE_NAMES = Literal[
     "neev_cloud",
     "moonshot",
     "minimax",
+    "typesafe",
 ]
 
 

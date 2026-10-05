@@ -126,6 +126,14 @@ class TokenCalculator:
 
                 usage["audioDurationSeconds"] = audio_duration_seconds
 
+            case "typesafe":
+                # Jev bills input tokens only; output tokens are reported but free.
+                _usage = model_response.get("usage") or {}
+                usage["inputTokens"] = _usage.get("input_tokens", 0)
+                usage["outputTokens"] = _usage.get("output_tokens", 0)
+                usage["totalTokens"] = usage["inputTokens"] + usage["outputTokens"]
+                usage["cachedTokens"] = 0
+
             case _:
                 # Unknown / newly-registered service. The service registry is DB-driven
                 # and designed so a new OpenAI-Chat-compatible service can be added with

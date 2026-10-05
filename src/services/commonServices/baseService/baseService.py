@@ -24,6 +24,7 @@ from ....services.cache_service import make_json_serializable
 from ....services.commonServices.queueService.queueLogService import sub_queue_obj
 from ..anthropic.anthropicModelRun import anthropic_runmodel, anthropic_stream
 from ..deepgram.deepgramModelRun import deepgram_runmodel
+from ..typesafe.typesafeModelRun import typesafe_runmodel
 from ..Google.gemini_image_model import gemini_image_model
 from ..Google.gemini_modelrun import gemini_modelrun, gemini_modelrun_stream
 from ..Google.gemini_video_model import gemini_video_model
@@ -724,6 +725,21 @@ class BaseService:
                 )
             elif service == service_name["deepgram"]:
                 response = await deepgram_runmodel(
+                    configuration,
+                    apikey,
+                    self.execution_time_logs,
+                    self.bridge_id,
+                    self.timer,
+                    self.message_id,
+                    self.org_id,
+                    self.name,
+                    self.org_name,
+                    service,
+                    count,
+                    self.token_calculator,
+                )
+            elif service == service_name["typesafe"]:
+                response = await typesafe_runmodel(
                     configuration,
                     apikey,
                     self.execution_time_logs,
