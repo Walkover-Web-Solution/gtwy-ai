@@ -15,20 +15,6 @@ from ..api_executor import execute_api_call
 TYPESAFE_TIMEOUT_SECONDS = 60.0
 
 
-def _extract_error_message(response: httpx.Response) -> str:
-    """TypeSafe errors look like ``{"detail": {"error_type": ..., "message": ...}}``."""
-    try:
-        body = response.json()
-    except ValueError:
-        return response.text or f"HTTP {response.status_code}"
-    detail = body.get("detail") if isinstance(body, dict) else None
-    if isinstance(detail, dict):
-        return detail.get("message") or detail.get("error_type") or str(detail)
-    if isinstance(detail, (str, list)):
-        return str(detail)
-    return str(body)
-
-
 async def typesafe_runmodel(
     configuration,
     api_key,
@@ -56,9 +42,13 @@ async def typesafe_runmodel(
             return {"success": False, "error": f"TypeSafe request failed: {error}", "status_code": 503}
 
         if http_response.status_code >= 400:
+            error_message = _extract_error_message(http_response)
+            failed_request_id = http_response.headers.get("x-typesafe-request-id")
+            if failed_request_id:
+                error_message = f"{error_message} (request_id: {failed_request_id})"
             return {
                 "success": False,
-                "error": _extract_error_message(http_response),
+                "error": error_message,
                 "status_code": http_response.status_code,
             }
 
@@ -70,7 +60,11 @@ async def typesafe_runmodel(
         if not isinstance(payload, dict) or not isinstance(payload.get("answers"), dict):
             return {"success": False, "error": "TypeSafe response has no answers", "status_code": 502}
 
-        request_id = http_response.headers.get("x-request-id") or http_response.headers.get("request-id")
+        request_id = (
+            http_response.headers.get("x-typesafe-request-id")
+            or http_response.headers.get("x-request-id")
+            or http_response.headers.get("request-id")
+        )
         if request_id and not payload.get("request_id"):
             payload["request_id"] = request_id
         return {"success": True, "response": payload}
@@ -93,3 +87,27 @@ async def typesafe_runmodel(
         )
     except Exception as error:
         raise ApiCallError(str(error), status_code=getattr(error, "status_code", None), service=service) from error
+
+
+def _extract_error_message(response: httpx.Response) -> str:
+    """TypeSafe errors look like ``{"detail": {"error_type": ..., "message": ...}}``."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text or f"HTTP {response.status_code}"
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        return detail.get("message") or detail.get("error_type") or str(detail)
+    if isinstance(detail, list):
+        # 422 validation errors: [{"loc": ["body", "questions", "q", "choice", "criteria"], "msg": "Field required"}]
+        parts = []
+        for item in detail:
+            if not isinstance(item, dict):
+                parts.append(str(item))
+                continue
+            loc = [str(p) for p in item.get("loc", []) if p != "body"]
+            parts.append(f"{'.'.join(loc)}: {item.get('msg', 'invalid')}" if loc else str(item.get("msg", item)))
+        return "; ".join(parts) or "Request validation failed"
+    if isinstance(detail, str):
+        return detail
+    return str(body)
