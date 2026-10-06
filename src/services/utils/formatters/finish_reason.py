@@ -16,6 +16,7 @@ def finish_reason_mapping(finish_reason):
         "length": "truncated",  # openai #open_router #gemini
         "max_tokens": "truncated",  # anthropic
         "max_output_tokens": "truncated",  # openai_response
+        "model_context_window_exceeded": "truncated",  # anthropic
         # Tool / function invocation
         "tool_calls": "tool_call",  # openai #gemini
         "tool_use": "tool_call",  # anthropic
