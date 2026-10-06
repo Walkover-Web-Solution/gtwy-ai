@@ -6,10 +6,16 @@ from config import Config
 from globals import logger
 from models.mongo_connection import db
 from src.services.commonServices.baseService.utils import send_message
-from src.services.utils.load_model_configs import get_model_configurations
+from src.services.utils.load_model_configs import get_model_configurations, get_platform_apikeys
 
 model_config_model = db["modelconfigurations"]
 model_config_document = {}
+
+# Platform-owned provider keys (service -> plaintext key), decrypted at load.
+# Loaded together with the model configuration and refreshed by its own change
+# stream; billing_utils.get_platform_apikey reads it on the request gate.
+platform_apikeys_model = db["platform_apikeys"]
+platform_apikey_document = {}
 
 
 async def init_model_configuration():
@@ -22,6 +28,26 @@ async def init_model_configuration():
         logger.info("Model configurations refreshed successfully.")
     except Exception as e:
         logger.error(f"Error refreshing model configurations: {e}")
+    await init_platform_apikeys()
+
+
+async def init_platform_apikeys():
+    """Initializes or refreshes the platform apikey document."""
+    try:
+        new_keys = await get_platform_apikeys()
+        # Only swap when the collection is readable — an empty dict on a
+        # transient DB error would strip every wallet agent of its key.
+        if new_keys or not platform_apikey_document:
+            platform_apikey_document.clear()
+            platform_apikey_document.update(new_keys)
+            logger.info(f"Platform apikeys refreshed successfully ({len(new_keys)} services).")
+        if not new_keys:
+            # Mongo is the ONLY source (no env fallback): empty collection
+            # means every wallet-billed agent is keyless and wallet traffic
+            # cannot run. Seed it: node scripts/seedPlatformApiKeys.js (Node repo).
+            logger.error("platform_apikeys collection is EMPTY — wallet traffic has no provider keys.")
+    except Exception as e:
+        logger.error(f"Error refreshing platform apikeys: {e}")
 
 
 async def _async_change_listener():
@@ -63,5 +89,30 @@ async def background_listen_for_changes():
         except Exception as e:
             logger.error(
                 f"An unexpected error occurred in background_listen_for_changes: {e}. Restarting in 10 seconds..."
+            )
+            await asyncio.sleep(10)
+
+
+async def _async_platform_apikey_listener():
+    """Refresh platform apikeys whenever the collection changes."""
+    pipeline = [{"$match": {"operationType": {"$in": ["insert", "update", "replace", "delete"]}}}]
+    async with platform_apikeys_model.watch(pipeline) as stream:
+        logger.info("MongoDB change stream is now listening for platform apikey changes.")
+        async for change in stream:
+            logger.info(f"Change detected in platform apikeys: {change['operationType']}")
+            await init_platform_apikeys()
+
+
+async def background_listen_for_platform_apikey_changes():
+    """Retry wrapper for the platform apikey change stream (same shape as above)."""
+    while True:
+        try:
+            await _async_platform_apikey_listener()
+        except (OperationFailure, PyMongoError) as e:
+            logger.error(f"MongoDB connection error in platform apikey change stream: {e}. Reconnecting in 5 seconds...")
+            await asyncio.sleep(5)
+        except Exception as e:
+            logger.error(
+                f"An unexpected error occurred in background_listen_for_platform_apikey_changes: {e}. Restarting in 10 seconds..."
             )
             await asyncio.sleep(10)

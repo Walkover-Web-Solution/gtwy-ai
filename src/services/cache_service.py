@@ -58,6 +58,88 @@ async def incr_in_cache(identifier: str, ttl: int = DEFAULT_REDIS_TTL) -> int:
         return 0
 
 
+async def incrbyfloat_in_cache(identifier: str, amount: float) -> float | None:
+    """Atomically add ``amount`` to a numeric key and return the new total.
+
+    Atomic, unlike a read-parse-add-write cycle: two requests finishing together
+    cannot each read the same starting value and lose one of the increments.
+    Requires the key to hold a bare number, which is why the usage counter is
+    stored on its own rather than inside a JSON blob.
+    """
+    try:
+        key = f"{REDIS_PREFIX}{identifier}"
+        _t = _time.time()
+        value = await client.incrbyfloat(key, amount)
+        log_slow_call(f"Redis INCRBYFLOAT {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
+        return float(value)
+    except Exception as e:
+        logger.error(f"Error incrementing float in cache: {str(e)}")
+        return None
+
+
+async def get_float_in_cache(identifier: str) -> float | None:
+    """Read a numeric key. ``None`` means the key does not exist."""
+    raw = await find_in_cache(identifier)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.error(f"Non-numeric value in cache for {identifier}: {raw!r}")
+        return None
+
+
+async def expire_if_unset(identifier: str, ttl: int) -> bool:
+    """Set a TTL only when the key does not already have one.
+
+    Calling EXPIRE on every write restarts the clock, so a key that is written
+    often would never expire. ``EXPIRE .. NX`` is one round trip on Redis >= 7.0;
+    older servers reject the flag, so we fall back to checking the TTL first.
+    """
+    try:
+        key = f"{REDIS_PREFIX}{identifier}"
+        try:
+            return bool(await client.expire(key, int(ttl), nx=True))
+        except Exception:
+            # Server predates EXPIRE .. NX -- only set it when none is present.
+            # -1 means "key exists, no expiry"; -2 means the key is already gone.
+            if await client.ttl(key) == -1:
+                return bool(await client.expire(key, int(ttl)))
+            return False
+    except Exception as e:
+        logger.error(f"Error setting expiry for {identifier}: {str(e)}")
+        return False
+
+
+async def sadd_in_cache(identifier: str, *members: str) -> int:
+    """Add members to a Redis set, returning how many were newly added."""
+    clean = [str(m) for m in members if m]
+    if not clean:
+        return 0
+    try:
+        key = f"{REDIS_PREFIX}{identifier}"
+        _t = _time.time()
+        added = await client.sadd(key, *clean)
+        log_slow_call(f"Redis SADD {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
+        return int(added)
+    except Exception as e:
+        logger.error(f"Error adding to set {identifier}: {str(e)}")
+        return 0
+
+
+async def smembers_in_cache(identifier: str) -> list[str]:
+    """Read every member of a Redis set. Empty list when the key is absent."""
+    try:
+        key = f"{REDIS_PREFIX}{identifier}"
+        _t = _time.time()
+        members = await client.smembers(key)
+        log_slow_call(f"Redis SMEMBERS {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
+        return [m.decode("utf-8") if isinstance(m, bytes) else str(m) for m in (members or set())]
+    except Exception as e:
+        logger.error(f"Error reading set {identifier}: {str(e)}")
+        return []
+
+
 async def delete_in_cache(identifiers: str | list[str]) -> bool:
     if not await client.ping():
         return False

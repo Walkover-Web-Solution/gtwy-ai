@@ -1,13 +1,31 @@
 import src.db_services.ConfigurationServices as ConfigurationService
 from config import Config
+from globals import logger
 from models.mongo_connection import db
-from src.configs.constant import inbuild_tools
+from src.configs.constant import inbuild_tools, tool_types
 from src.services.commonServices.baseService.utils import makeFunctionName
+from src.services.utils.built_in_tools.browser import steel_client
+from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
 from src.services.utils.service_config_utils import tool_choice_function_name_formatter
 
 apiCallModel = db["apicalls"]
+
+
+def strip_gateway_filled_args(properties, required, tool_variables_path):
+    """Drop the args the gateway fills from what we hand the model.
+
+    An arg with a variable_path is owned by the user, so it must never reach the
+    model: it is popped from `properties` (in place) and dropped from `required`,
+    since a required name with no matching property is an invalid schema. Each
+    caller passes its own slice of variables_path, keyed by whatever identifies
+    that tool type — script_id, tool name, bridge_id.
+    """
+    gateway_filled = list((tool_variables_path or {}).keys())
+    for key in gateway_filled:
+        properties.pop(key, None)
+    return [key for key in (required or []) if key not in gateway_filled]
 
 
 async def validate_bridge(agent_data):
@@ -104,24 +122,16 @@ def process_api_call_tool(api_data, variables_path_bridge):
 
     # Setup tool mapping
     tool_mapping = {
-        "url": f"https://flow.sokt.io/func/{api_data.get('script_id')}",
+        "url": api_data.get("url"),
         "headers": {},
         "name": api_data.get("script_id"),
         "method": "POST"
     }
 
-    # Process variables filled by gateway
-    variables_fill_by_gtwy = list(variables_path_bridge.get(api_data.get("script_id"), {}).keys())
-
     properties = api_data.get("fields", {})
-
-    # Remove properties that are filled by gateway
-    for key in variables_fill_by_gtwy:
-        properties.pop(key, None)
-
-    # Filter required parameters
-    required = api_data.get("required", [])
-    required = [key for key in required if key not in variables_fill_by_gtwy]
+    required = strip_gateway_filled_args(
+        properties, api_data.get("required", []), variables_path_bridge.get(api_data.get("script_id"), {})
+    )
 
     # Create tool format
     tool_format = {
@@ -152,6 +162,9 @@ def process_extra_tool(tool):
     if not isinstance(required, list):
         required = []
 
+    variable_path = tool.get("tool_and_variable_path", {}) or {}
+    required = strip_gateway_filled_args(properties, required, variable_path)
+
     tool_format = {
         "type": "function",
         "name": makeFunctionName(tool_name),
@@ -170,26 +183,83 @@ def process_extra_tool(tool):
         "method": tool.get("method", "POST").upper(),
         "query_params": query_params,
     }
-    variable_path = tool.get("tool_and_variable_path", {}) or {}
-    # Remove properties that are filled by gateway
-    for key in variable_path:
-        properties.pop(key, None)
-
     return tool_format, tool_mapping, {tool_name: variable_path}
 
 
+def _build_api_calls_map(api_calls):
+    """Normalize apiCalls (dict or list) into a lookup map keyed by string id."""
+    api_calls_map = {}
+    if isinstance(api_calls, dict):
+        for key, val in api_calls.items():
+            api_calls_map[str(key)] = val
+            if isinstance(val, dict) and val.get("_id"):
+                api_calls_map[str(val["_id"])] = val
+    elif isinstance(api_calls, list):
+        for val in api_calls:
+            if isinstance(val, dict) and val.get("_id"):
+                api_calls_map[str(val["_id"])] = val
+    return api_calls_map
+
+
 def setup_tools(bridges, variables_path_bridge, extra_tools):
-    """Setup tools and tool mappings"""
+    """Setup tools by iterating connected_tools (type='tools') and looking up
+    tool metadata from the joined apiCalls data."""
     tools = []
     tool_id_and_name_mapping = {}
     variable_path = {}
-    # Process API calls
-    for _, api_data in bridges.get("apiCalls", {}).items():
-        tool_format, tool_mapping = process_api_call_tool(api_data, variables_path_bridge)
+
+    # Iterate connected_tools where type="tools" — uses variable_path from each entry
+    connected_tools = bridges.get("connected_tools", [])
+    tool_entries = [ct for ct in connected_tools if ct.get("type") == "tools"]
+    agent_entries = [ct for ct in connected_tools if ct.get("type") == "agent"]
+    api_calls_map = _build_api_calls_map(bridges.get("apiCalls", {}))
+
+    # variables_path is keyed by a function's script_id and by a connected agent's bridge_id.
+    # Entries that come from connected_tools own their key; the bridge-level map (folder merge,
+    # legacy data) fills in only the keys no entry covers, so a mapping removed in the new
+    # format is not brought back from stale legacy data.
+    connected_tool_ids = set()
+    entry_variables_path = {}
+    for tool_entry in tool_entries:
+        tool_id = str(tool_entry.get("id", ""))
+        connected_tool_ids.add(tool_id)
+        script_id = (api_calls_map.get(tool_id) or {}).get("script_id")
+        if script_id:
+            existing = entry_variables_path.get(script_id, {}) or {}
+            entry_variables_path[script_id] = {**existing, **(tool_entry.get("variable_path") or {})}
+    for agent_entry in agent_entries:
+        bridge_id = str(agent_entry.get("id", ""))
+        if bridge_id:
+            entry_variables_path[bridge_id] = agent_entry.get("variable_path") or {}
+
+    merged_variables_path = {
+        key: value for key, value in (bridges.get("variables_path") or {}).items() if key not in entry_variables_path
+    }
+    merged_variables_path.update({key: value for key, value in entry_variables_path.items() if value})
+
+    def add_api_call_tool(api_data):
+        tool_format, tool_mapping = process_api_call_tool(api_data, merged_variables_path)
         if tool_format:
             name_of_function = tool_format["name"]
             tools.append(tool_format)
             tool_id_and_name_mapping[name_of_function] = tool_mapping
+
+    for tool_entry in tool_entries:
+        api_data = api_calls_map.get(str(tool_entry.get("id", "")))
+        if api_data:
+            add_api_call_tool(api_data)
+
+    # Folder-level tools are merged into apiCalls by ConfigurationServices without a
+    # connected_tools entry of their own.
+    raw_api_calls = bridges.get("apiCalls") or {}
+    raw_items = raw_api_calls.items() if isinstance(raw_api_calls, dict) else ((None, val) for val in raw_api_calls)
+    for key, api_data in raw_items:
+        if not isinstance(api_data, dict):
+            continue
+        api_id = str(api_data.get("_id") or key or "")
+        if api_id not in connected_tool_ids:
+            add_api_call_tool(api_data)
+
     # Process extra tools
     for tool in extra_tools:
         tool_format, tool_mapping, path = process_extra_tool(tool)
@@ -198,7 +268,7 @@ def setup_tools(bridges, variables_path_bridge, extra_tools):
             name_of_function = tool_format["name"]
             tools.append(tool_format)
             tool_id_and_name_mapping[name_of_function] = tool_mapping
-    return tools, tool_id_and_name_mapping, {**variables_path_bridge, **variable_path}
+    return tools, tool_id_and_name_mapping, {**merged_variables_path, **variable_path}
 
 
 def setup_api_key(service, bridges, apikey, chatbot):
@@ -224,11 +294,6 @@ def setup_api_key(service, bridges, apikey, chatbot):
             # Use Config.OPENAI_API_KEY only if model is gpt-5-nano
             if model == "gpt-5-nano":
                 apikey = Config.OPENAI_API_KEY_GPT_5_NANO
-            else:
-                raise Exception("Could not find api key or Agent is not Published")
-
-    if not (apikey or db_api_key):
-        raise Exception("Could not find api key or Agent is not Published")
 
     # Handle fallback configuration
     fallback_config = bridges.get("settings", {}).get("fall_back")
@@ -243,29 +308,9 @@ def setup_api_key(service, bridges, apikey, chatbot):
             bridges["settings"]["fall_back"]["apikey"] = Helper.decrypt(fallback_apikey)
             bridges["settings"]["fall_back"]["apikey_object_id"] = db_apikeys_object_id.get(fallback_service)
 
-    # Use provided API key or decrypt from database
-    return apikey if apikey else Helper.decrypt(db_api_key)
-
-
-def setup_pre_tools(bridge, agent_data, variables):
-    """Setup pre-tools configuration"""
-    pre_tools = bridge.get("pre_tools", [])
-    if not pre_tools:
-        return None, None
-
-    api_data = agent_data.get("bridges", {}).get("pre_tools_data", [{}])[0]
-    if api_data is None:
-        raise Exception("Didn't find the pre_function")
-
-    name = api_data.get("title") or makeFunctionName(api_data["endpoint_name"] or api_data["function_name"])
-    required = api_data.get("required", [])
-
-    args = {}
-    for param in required:
-        if param in variables:
-            args[param] = variables[param]
-
-    return name, args
+    if apikey:
+        return apikey
+    return Helper.decrypt(db_api_key) if db_api_key else None
 
 
 def add_rag_tool(tools, tool_id_and_name_mapping, rag_data):
@@ -358,40 +403,61 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
     }
 
 
-def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag):
-    """Add connected agents as tools"""
-    connected_agents = bridges.get("connected_agents", {})
+
+def _should_enable_browser_tool(built_in_tools):
+    if not built_in_tools:
+        return False
+    return inbuild_tools["Gtwy_Browser"] in built_in_tools
+
+
+def add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools):
+    """Add the Steel-backed browser tool when requested via built-in tools."""
+    if not _should_enable_browser_tool(built_in_tools):
+        return
+    if not steel_client.is_configured():
+        logger.warning("Gtwy_Browser requested but no Steel host is configured (STEEL_API_URLS / STEEL_API_URL); tool not registered")
+        return
+
+    tools.append(build_browser_tool_schema())
+    tool_id_and_name_mapping[inbuild_tools["Gtwy_Browser"]] = {
+        "type": inbuild_tools["Gtwy_Browser"],
+        "name": inbuild_tools["Gtwy_Browser"],
+    }
+
+
+def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag, variables_path_bridge):
+    """Add connected agents as tools - reads from connected_tools type='agent'"""
+    connected_tools = bridges.get("connected_tools", [])
+    agent_entries = [ct for ct in connected_tools if ct.get("type") == "agent"]
     connected_agent_details = bridges.get("connected_agent_details", {})
     agent_name_info = bridges.get("agent_name_info", {})
 
-    if not connected_agents:
+    if not agent_entries:
         return
 
     # Check if type is orchestrator
     is_orchestrator = orchestrator_flag or bridges.get("orchestrator", False)
 
-    for _, bridge_info in connected_agents.items():
-        bridge_id_value = bridge_info.get("bridge_id", "")
-        environment_value = bridge_info.get("environment", "")
-        # If environment is present, use connected_agents data, otherwise use connected_agent_details
+    for agent_entry in agent_entries:
+        bridge_id_value = agent_entry.get("id", "")
+        environment_value = agent_entry.get("environment", "")
+        # If environment is present, use agent_entry data, otherwise use connected_agent_details
         if environment_value:
-            # Use data from connected_agents when environment is present
-            description = bridge_info.get("description", "")
-            variables = bridge_info.get("variables", {})
+            description = agent_entry.get("description", "")
+            variables = agent_entry.get("variables", {})
             fields = variables.get("fields", {})
             required = variables.get("required", [])
         else:
-            # Use data from connected_agent_details when environment is not present
-            agent_details = connected_agent_details.get(bridge_id_value)
-            if agent_details and agent_details is not None:
-                description = agent_details.get("description", bridge_info.get("description", ""))
+            agent_details = connected_agent_details.get(bridge_id_value) or {}
+            if agent_details:
+                description = agent_details.get("description", agent_entry.get("description", ""))
                 variables = agent_details.get("agent_variables", {})
                 fields = variables.get("fields", {})
                 required = variables.get("required", [])
             else:
-                # Final fallback to connected_agents data
-                description = bridge_info.get("description", "")
-                variables = bridge_info.get("variables", {})
+                # Final fallback to agent_entry data
+                description = agent_entry.get("description", "")
+                variables = agent_entry.get("variables", {})
                 fields = variables.get("fields", {})
                 required = variables.get("required", [])
 
@@ -408,6 +474,9 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
             },
             **fields,
         }
+
+        # Connected agents key variables_path by bridge_id.
+        required = strip_gateway_filled_args(properties, required, variables_path_bridge.get(bridge_id_value, {}))
 
         # Add action_type only if type is orchestrator
         if is_orchestrator:
@@ -435,7 +504,7 @@ def add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_
         )
 
         tool_id_and_name_mapping[name] = {
-            "type": "AGENT",
+            "type": tool_types["AGENT"],
             "bridge_id": bridge_id_value,
-            "requires_thread_id": bridge_info.get("thread_id", False),
+            "requires_thread_id": agent_entry.get("thread_id", False),
         }

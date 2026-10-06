@@ -8,6 +8,7 @@ from src.services.utils.common_utils import updateVariablesWithTimeZone
 from src.db_services.ConfigurationServices import transform_agent_config_to_frontend
 
 from .getConfiguration_utils import (
+    add_browser_tool,
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
@@ -166,17 +167,21 @@ async def _prepare_configuration_response(
     # Tool choice
     configuration["tool_choice"] = setup_tool_choice(configuration, bridges, service)
 
-    variables_path_bridge = bridges.get("variables_path", {})
-
-    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(bridges, variables_path_bridge, extra_tools)
+    tools, tool_id_and_name_mapping, variables_path_bridge = setup_tools(bridges, {}, extra_tools)
     configuration.pop("tools", None)
     configuration["tools"] = tools
 
     RTLayer = True if configuration and "RTLayer" in configuration else False
 
     template_content = await ConfigurationService.get_template_by_id(template_id) if template_id else None
+    
+    connected_tools = bridges.get("connected_tools", [])
+    pre_tools_data_map = {
+        str(pt.get("_id")): pt for pt in bridges.get("pre_tools_data", [])
+    }
 
     # Pre-tools — build list for later processing in chat_multiple_agents
+    # Title is already merged into pre_tools entries by the MongoDB pipeline
     pre_tools_data_for_later = []
     raw_pre_tools = bridges.get("pre_tools", [])
 
@@ -187,23 +192,92 @@ async def _prepare_configuration_response(
             tool_type = tool_entry.get("type")
             tool_config = tool_entry.get("config", {})
             tool_args = tool_entry.get("args", {})
+            entry_title = tool_entry.get("title")
             pre_tools_data_for_later.append({
                 "_type": tool_type,
                 "config": tool_config,
                 "args": tool_args,
+                "title": entry_title,
             })
-    raw_post_tool = bridges.get("folder_post_tool") or {}
-    raw_post_tool_script_id = raw_post_tool.get('script_id', {}) if raw_post_tool else {}
-    post_tool_data = None
-    if raw_post_tool:
-        variables_path_post_tool = bridges.get("variables_path", {}).get(raw_post_tool_script_id, {})
-        post_tool_data = {
-            **raw_post_tool,
-            "args": variables_path_post_tool,
-            "config": raw_post_tool.get("config", {}),
-        }
 
-    rag_data = bridges.get("doc_ids")
+    # New format: connected_tools entries of type "pre_tool" take precedence over the legacy list
+    # (only the first pre-tool runs). For every pre_tool_type, variable_path holds the static
+    # config and args maps each param to an agent variable.
+    version_pre_tools = []
+    for ct in connected_tools:
+        if not isinstance(ct, dict) or ct.get("type") != "pre_tool" or not ct.get("pre_tool_type"):
+            continue
+        variable_path = ct.get("variable_path") or {}
+        if ct.get("pre_tool_type") == "custom_function":
+            # id is the apicalls _id; script_id, url and title come from the entry or that document.
+            api_data = pre_tools_data_map.get(str(ct.get("id"))) or {}
+            script_id = variable_path.get("script_id") or ct.get("script_id") or api_data.get("script_id")
+            fields = api_data.get("fields") if isinstance(api_data.get("fields"), dict) else {}
+            version_pre_tools.append({
+                "_type": "custom_function",
+                "config": {
+                    "function_id": ct.get("id"),
+                    "script_id": script_id,
+                    "url": ct.get("url") or api_data.get("url"),
+                    "required": variable_path.get("required") or variable_path.get("required_params") or api_data.get("required") or [],
+                    "params": list(fields.keys()),
+                },
+                "args": ct.get("args") or {},
+                "title": ct.get("title") or api_data.get("title"),
+            })
+        else:
+            config = {**variable_path}
+            if ct.get("url"):
+                config["url"] = ct.get("url")
+            version_pre_tools.append({
+                "_type": ct.get("pre_tool_type"),
+                "config": config,
+                "args": ct.get("args") or {},
+                "title": ct.get("title"),
+            })
+    pre_tools_data_for_later = version_pre_tools + pre_tools_data_for_later
+
+    # Handle post_tool: a connected_tools entry of type "post_tool" (bridge/version-level)
+    # takes precedence over the folder-level post_tool merged in by ConfigurationServices.
+    post_tool_entry = next((ct for ct in connected_tools if isinstance(ct, dict) and ct.get("type") == "post_tool"), None)
+
+    post_tool_data = None
+    if post_tool_entry:
+        # id is the apicalls _id (joined into pre_tools_data); script_id, url and title come
+        # from the entry, its variable_path, or that document — same as a custom_function pre-tool.
+        post_variable_path = post_tool_entry.get("variable_path") or {}
+        post_api_data = pre_tools_data_map.get(str(post_tool_entry.get("id"))) or {}
+        post_script_id = (
+            post_variable_path.get("script_id") or post_tool_entry.get("script_id") or post_api_data.get("script_id")
+        )
+        post_tool_data = {
+            "script_id": post_script_id,
+            "url": post_tool_entry.get("url") or post_api_data.get("url"),
+            "args": post_tool_entry.get("args", {}),
+            "_id": post_tool_entry.get("id"),
+            "title": post_tool_entry.get("title") or post_api_data.get("title"),
+        }
+    else:
+        # Legacy/folder-level shape: a plain object with script_id/url embedded directly.
+        raw_post_tool = bridges.get("post_tool") or {}
+        if raw_post_tool:
+            post_tool_data = {
+                "script_id": raw_post_tool.get("script_id"),
+                "url": raw_post_tool.get("url"),
+                "args": raw_post_tool.get("args", {}),
+                "_id": raw_post_tool.get("id") or raw_post_tool.get("_id"),
+                "title": raw_post_tool.get("title"),
+            }
+
+    # Docs — read directly from connected_tools where type="docs"
+    rag_data = []
+    for entry in connected_tools:
+        if not isinstance(entry, dict) or entry.get("type") != "docs":
+            continue
+        eid = str(entry.get("id", ""))
+        doc = {**entry}
+        doc.setdefault("resource_id", eid)
+        rag_data.append(doc)
     gpt_memory_context = bridges.get("gpt_memory_context")
     gpt_memory = bridges.get("gpt_memory")
 
@@ -215,20 +289,42 @@ async def _prepare_configuration_response(
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
 
-    gtwy_web_search_filters = web_search_filters or bridges.get("gtwy_web_search_filters") or {}
+    # Built-in tools — read directly from connected_tools where type="built_in_tools"
+    built_in_entry = next((ct for ct in connected_tools if ct.get("type") == "built_in_tools"), {}) or {}
+    built_in_from_connected = built_in_entry.get("built_in_tools") or []
+    if isinstance(built_in_from_connected, str):
+        built_in_from_connected = [built_in_from_connected]
+    effective_built_in_tools = built_in_tools or built_in_from_connected
+
+    gtwy_web_search_filters = web_search_filters or built_in_entry.get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
         tools,
         tool_id_and_name_mapping,
-        built_in_tools or bridges.get("built_in_tools"),
+        effective_built_in_tools,
         gtwy_web_search_filters,
     )
+    add_browser_tool(tools, tool_id_and_name_mapping, effective_built_in_tools)
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
 
     variables, org_name = await updateVariablesWithTimeZone(variables, org_id)
 
-    add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag)
-    web_search_filters_value = web_search_filters or bridges.get("web_search_filters") or {}
+    add_connected_agents(bridges, tools, tool_id_and_name_mapping, orchestrator_flag, variables_path_bridge)
+    web_search_filters_value = web_search_filters or built_in_entry.get("web_search_filters") or {}
+
+    # Fetch reviewer tools definitions if configured
+    reviewer_tools_data = bridges.get("reviewer_tools_data") or []
+    reviewer_tools_resolved = []
+    if reviewer_tools_data:
+        tool_doc = reviewer_tools_data[0]
+        script_id = tool_doc.get("script_id")
+        if script_id:
+            reviewer_tools_resolved.append({
+                "script_id": script_id,
+                "url": tool_doc.get("url"),
+                "title": tool_doc.get("title") or script_id,
+                "_id": str(tool_doc.get("_id", "")),
+            })
 
     base_config = {
         "configuration": configuration,
@@ -257,19 +353,22 @@ async def _prepare_configuration_response(
         "name": bridges.get("name") or "",
         "org_name": org_name,
         "bridge_id": bridges.get("parent_id", bridges.get("_id")),
-        "variables_state": bridges.get("agent_info", {}).get("variables_state", {}),
+        "agent_info": bridges.get("agent_info", {}),
         "ai_matching_custom_prompt": bridges.get("agent_info", {}).get("ai_matching_custom_prompt", ""),
-        "built_in_tools": built_in_tools or bridges.get("built_in_tools"),
+        "built_in_tools": effective_built_in_tools,
         "is_embed": bridges.get("folder_type") == "embed",
         "user_id": bridges.get("user_id"),
         "folder_id": bridges.get("folder_id"),
         "wrapper_id": bridges.get("wrapper_id"),
         "web_search_filters": web_search_filters_value,
+        "chatbot": chatbot,
         "chatbot_auto_answers": chatbot_auto_answers,
         "cache_on": cache_on,
         "richui_templates": bridges.get("richui_templates"),
         "meta": bridges.get("meta"),
-        "reviewer_agent": str(bridges.get("settings", {}).get("reviewer_agent") or ""),
+        "reviewer_agent": str(bridges.get("settings", {}).get("review_agent", {}).get("reviewer_agent") or ""),
+        "reviewer_prompt": str(bridges.get("settings", {}).get("review_agent", {}).get("reviewer_prompt") or ""),
+        "reviewer_tools": reviewer_tools_resolved,
         "api_collection": apikey_src,
         "limit": {
             "bridge": {
@@ -299,12 +398,22 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited, environm
         return {}
 
     bridge_payload = agent_data.get("bridges", {})
-    connected_agents = bridge_payload.get("connected_agents", {})
     connected_agent_details = bridge_payload.get("connected_agent_details", {})
+
+    # New format: connected_tools entries of type "agent" (id is the child bridge_id);
+    # legacy connected_agents dict is still read for versions saved before the switch.
+    agent_infos = [
+        {"bridge_id": str(ct.get("id")), **({"environment": ct["environment"]} if ct.get("environment") else {})}
+        for ct in bridge_payload.get("connected_tools") or []
+        if isinstance(ct, dict) and ct.get("type") == "agent" and ct.get("id")
+    ]
+    agent_infos.extend((bridge_payload.get("connected_agents") or {}).values())
 
     # Build pending list; pre-populate visited to prevent duplicate concurrent fetches
     pending = []
-    for _, agent_info in connected_agents.items():
+    for agent_info in agent_infos:
+        if not isinstance(agent_info, dict):
+            continue
         bridge_id_value = agent_info.get("bridge_id")
         if not bridge_id_value or bridge_id_value in visited:
             continue
@@ -382,7 +491,7 @@ async def _collect_connected_agent_configs(agent_data, org_id, visited, environm
             nested = await _collect_connected_agent_configs(child_agent_data, org_id, visited, environment=resolved_env)
             aggregated_configs.update(nested)
 
-    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("reviewer_agent")
+    reviewer_bridge_id_raw = bridge_payload.get("settings", {}).get("review_agent", {}).get("reviewer_agent")
     reviewer_bridge_id = str(reviewer_bridge_id_raw) if reviewer_bridge_id_raw else ""
     if reviewer_bridge_id and reviewer_bridge_id not in visited:
         try:

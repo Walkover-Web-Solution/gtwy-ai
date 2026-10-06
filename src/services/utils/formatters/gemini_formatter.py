@@ -6,6 +6,7 @@ parts), image generation, and video. Returns None for unsupported variants
 """
 
 from src.services.utils.formatters.finish_reason import finish_reason_mapping
+from src.services.utils.formatters.web_search_extractor import extract_web_search_annotations
 
 
 def format_gemini(response, tools_data, images, type="chat", isBatch=False):
@@ -32,7 +33,7 @@ def _format_batch(response, tools_data, images):
             "role": candidates[0].get("content", {}).get("role", "model") if candidates else "model",
             "tools_data": tools_data or {},
             "images": images,
-            "annotations": None,
+            "annotations": extract_web_search_annotations(response, "gemini") or None,
             "fallback": response.get("fallback") or False,
             "firstAttemptError": response.get("firstAttemptError") or "",
             "finish_reason": finish_reason_mapping(candidates[0].get("finishReason", "").lower() if candidates else ""),
@@ -60,7 +61,7 @@ def _format_chat(response, tools_data, images):
             "role" : "assistant",
             "tools_data": tools_data or {},
             "images" : images,
-            "annotations" : None,
+            "annotations" : extract_web_search_annotations(response, "gemini") or None,
             "fallback" : response.get('fallback') or False,
             "firstAttemptError" : response.get('firstAttemptError') or '',
             "finish_reason": finish_reason_mapping(candidates[0].get("finish_reason").value.lower() if candidates and candidates[0].get("finish_reason") else "")

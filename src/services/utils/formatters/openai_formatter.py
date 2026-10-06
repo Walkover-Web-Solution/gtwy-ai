@@ -5,6 +5,7 @@ and reasoning), embeddings, and image generation.
 """
 
 from src.services.utils.formatters.finish_reason import finish_reason_mapping
+from src.services.utils.formatters.web_search_extractor import extract_web_search_annotations
 
 
 def format_openai(response, tools_data, images, type="chat"):
@@ -79,7 +80,8 @@ def _format_chat(response, tools_data, images):
             else finish_reason_mapping(response.get("incomplete_details", {}).get("reason", None)),
             "tools_data": tools_data or {},
             "images": images,
-            "annotations": ((response.get("output") or [{}])[0].get("content") or [{}])[0].get("annotations", None),
+            "annotations": extract_web_search_annotations(response, "openai")
+            or ((response.get("output") or [{}])[0].get("content") or [{}])[0].get("annotations", None),
             "fallback": response.get("fallback") or False,
             "firstAttemptError": response.get("firstAttemptError") or "",
         },

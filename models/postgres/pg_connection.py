@@ -16,7 +16,7 @@ DB_USER = Config.DB_USER
 DB_PASS = Config.DB_PASS
 DB_HOST = Config.DB_HOST
 
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}"
+DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}"
 engine = sa.create_engine(DATABASE_URL, pool_pre_ping=True)
 Session = sessionmaker(bind=engine, autoflush=False)
 

@@ -2,7 +2,7 @@ from src.configs.constant import service_name
 from src.configs.model_configuration import model_config_document
 from src.services.utils.ai_middleware_format import Response_formatter
 
-from ....services.utils.apiservice import fetch_images_b64
+from src.services.utils.image_compression import fetch_images_b64
 from ..baseService.baseService import BaseService
 from src.services.utils.mcp_utils import merge_server_side_mcp_into_tools
 from ..createConversations import ConversationService
@@ -19,7 +19,11 @@ class Anthropic(BaseService):
                 self.configuration.get("conversation"), self.memory, self.files
             )
         ).get("messages", [])
-        self.customConfig["system"] = self.configuration.get("prompt")
+        prompt_blocks = self.configuration.get("prompt_blocks")
+        if prompt_blocks:
+            self.customConfig["system"] = [{"type": "text", "text": part} for part in prompt_blocks if part]
+        else:
+            self.customConfig["system"] = self.configuration.get("prompt")
         if self.image_data:
             images_data = await fetch_images_b64(self.image_data)
             images_input = [

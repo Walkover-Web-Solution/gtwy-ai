@@ -29,9 +29,10 @@ from src.configs.constant import (
     usage_mail_types,
 )
 
-from ..cache_service import acquire_lock, find_in_cache, store_in_cache
+from ..cache_service import acquire_lock, find_in_cache, get_float_in_cache, store_in_cache
 from .apiservice import fetch
 from .limit_ttl_utils import calculate_limit_ttl
+from .period_key import period_key, redis_ttl_for
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ async def _bump_daily_bucket(scope: str, identifier: str, cost: float) -> float:
     return new_total
 
 
-async def _current_usage(scope: str, identifier: str, redis_usage: dict) -> float:
+async def _current_usage(scope: str, identifier: str, redis_usage: dict, reset_period: str | None = None) -> float:
     """Authoritative cumulative usage for the scope (from redis_usage, else cache)."""
     data = redis_usage.get(scope)
     if isinstance(data, dict) and data.get("usage_value") is not None:
@@ -82,6 +83,13 @@ async def _current_usage(scope: str, identifier: str, redis_usage: dict) -> floa
             return float(data["usage_value"])
         except (TypeError, ValueError):
             pass
+
+    # apikey counters are period-keyed and hold a bare number; bridge and folder
+    # still store the legacy JSON blob.
+    if scope == "apikey":
+        counter = f"{redis_keys['apikeyperiodcost_']}{identifier}_{period_key(reset_period)}"
+        return await get_float_in_cache(counter) or 0.0
+
     cached = await find_in_cache(f"{redis_keys[f'{scope}usedcost_']}{identifier}")
     if cached:
         try:
@@ -136,6 +144,20 @@ async def send_usage_alert_email(mail_type: str, scope: str, parsed_data: dict, 
         return False
 
 
+async def _avg_daily_spend(scope: str, identifier: str, window_days: int) -> float:
+    """Average of the trailing ``window_days`` daily spend buckets (today excluded).
+
+    Returns 0.0 when there is no prior-day history yet.
+    """
+    today = _today()
+    date_strs = [_date_str(today - timedelta(days=i)) for i in range(1, int(window_days) + 1)]
+    values = await asyncio.gather(*(_read_bucket(_daily_key(scope, identifier, ds)) for ds in date_strs))
+    values = [v for v in values if v > 0]
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
 async def _check_threshold_and_limit(
     scope: str,
     identifier: str,
@@ -144,16 +166,22 @@ async def _check_threshold_and_limit(
     limit_value: float,
     reset_period: str,
     setup_date,
+    today_total: float
 ) -> None:
     """Send a threshold (e.g. 80%) email, then a limit-reached (100%) email."""
     percent = (usage_value / limit_value) if limit_value > 0 else 0.0
-    # Markers re-arm each new period: TTL = time until the limit resets.
-    ttl = calculate_limit_ttl(reset_period, setup_date)
+    # Markers re-arm each new period: TTL = time until the limit resets. apikey
+    # windows are calendar-anchored now, so calculate_limit_ttl (which anchors to
+    # the configured start date) would be misaligned for that scope.
+    ttl = redis_ttl_for(reset_period) if scope == "apikey" else calculate_limit_ttl(reset_period, setup_date)
+    avg_daily_spend = await _avg_daily_spend(scope, identifier, usage_alert_config["spike_window_days"])
     details = {
         "current_usage": round(usage_value, 6),
         "limit_value": limit_value,
         "percent_used": round(percent * 100, 2),
         "reset_period": reset_period,
+        "today_spend": today_total,
+        "avg_daily_spend": round(avg_daily_spend, 6),
     }
 
     if usage_value >= limit_value:
@@ -247,7 +275,7 @@ async def evaluate_usage_alerts(parsed_data: dict, redis_usage: dict | None = No
 
             reset_period = scope_limit.get("limit_reset_period") or "monthly"
             setup_date = scope_limit.get("limit_start_date")
-            usage_value = await _current_usage(scope, identifier, redis_usage)
+            usage_value = await _current_usage(scope, identifier, redis_usage, reset_period)
 
             # TEMP debug: shows why an alert did / didn't fire. Remove once verified.
             logger.info(
@@ -265,7 +293,7 @@ async def evaluate_usage_alerts(parsed_data: dict, redis_usage: dict | None = No
 
             await _check_spike(scope, identifier, parsed_data, today_total, usage_value, limit_value, reset_period)
             await _check_threshold_and_limit(
-                scope, identifier, parsed_data, usage_value, limit_value, reset_period, setup_date
+                scope, identifier, parsed_data, usage_value, limit_value, reset_period, setup_date, today_total
             )
 
     except Exception as e:

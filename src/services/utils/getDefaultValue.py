@@ -2,8 +2,6 @@ from fastapi import HTTPException
 
 from src.configs.model_configuration import model_config_document
 
-from ...configs.constant import service_name
-
 
 def validate_fall_back(fall_back_data):
     """
@@ -113,32 +111,15 @@ async def get_default_values_controller(service, model, current_configuration, t
 
             return default_values
 
+        if service not in model_config_document or model not in model_config_document.get(service, {}):
+            raise HTTPException(status_code=404, detail=f"Service '{service}' or model '{model}' not found.")
+
         modelObj = model_config_document[service][model]
 
         if modelObj is None:
             raise HTTPException(status_code=400, detail=f"Invalid model: {model}")
 
-        if service == service_name["openai"]:
-            return get_default_values(modelObj)
-        elif service == service_name["anthropic"]:
-            return get_default_values(modelObj)
-        elif service == service_name["groq"]:
-            return get_default_values(modelObj)
-        elif service == service_name["grok"]:
-            return get_default_values(modelObj)
-        elif service == service_name["deepseek"]:
-            return get_default_values(modelObj)
-        elif service == service_name["open_router"]:
-            return get_default_values(modelObj)
-        elif service == service_name["mistral"]:
-            return get_default_values(modelObj)
-        elif service == service_name["gemini"]:
-            return get_default_values(modelObj)
-        elif service == service_name["openai_completion"]:
-            return get_default_values(modelObj)
-
-        else:
-            raise HTTPException(status_code=404, detail=f"Service '{service}' not found.")
+        return get_default_values(modelObj)
 
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e)) from e

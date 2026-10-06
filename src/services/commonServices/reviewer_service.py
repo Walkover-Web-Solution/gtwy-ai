@@ -85,8 +85,12 @@ async def run_review_loop(
     NOT called here — the parent finalizer owns the single emit_done.
     """
     reviewer_bridge_id = parsed_data.get("_reviewer_bridge_id") or ""
-    if not reviewer_bridge_id:
+    reviewer_prompt = parsed_data.get("_reviewer_prompt") or ""
+    reviewer_tools = parsed_data.get("_reviewer_tools") or []
+    if not reviewer_bridge_id and not reviewer_prompt and not reviewer_tools:
         return main_result, None
+
+    effective_reviewer_bridge_id = reviewer_bridge_id or (reviewer_tools[0] if reviewer_tools else "") or parsed_data.get("bridge_id") or ""
 
     # Per-session reviewer sub_thread_id. All rounds (1..N) of THIS review loop
     # share it, so they group together in conversation_logs as one session.
@@ -116,6 +120,9 @@ async def run_review_loop(
     reviewer_tokens_accum = _zero_tokens()  # only used for the returned summary
 
     main_response_text = _extract_response_text(main_result)
+    accumulated_tools_call_data = list(
+        (main_result.get("historyParams") or {}).get("tools_call_data") or []
+    )
     last_verdict = {"passed": False, "reason": ""}
     rounds_run = 0
     # Per-round records collected during the loop and published after it. Each
@@ -152,23 +159,42 @@ async def run_review_loop(
                 logger.error(f"emit_review_phase(reviewer_start) failed: {exc}")
 
         try:
-            (
-                reviewer_result,
-                reviewer_parsed_data,
-                round_tokens,
-                round_latency,
-                round_params,
-            ) = await _call_reviewer(
-                reviewer_bridge_id,
-                bridge_configurations,
-                review_user_message,
-                parsed_data,
-                thread_info,
-                timer,
-                reviewer_sub_thread_id=reviewer_sub_thread_id,
-                streamer=streamer,
-                prior_conversation=reviewer_conversation_pairs,
-            )
+            if reviewer_tools and not reviewer_bridge_id and not reviewer_prompt:
+                from src.services.commonServices.reviewer_service_helpers import _call_tool_reviewer
+                (
+                    reviewer_result,
+                    reviewer_parsed_data,
+                    round_tokens,
+                    round_latency,
+                    round_params,
+                    verdict,
+                ) = await _call_tool_reviewer(
+                    bridge_configurations,
+                    original_user_query,
+                    main_response_text,
+                    parsed_data,
+                    thread_info,
+                    timer,
+                )
+            else:
+                (
+                    reviewer_result,
+                    reviewer_parsed_data,
+                    round_tokens,
+                    round_latency,
+                    round_params,
+                ) = await _call_reviewer(
+                    effective_reviewer_bridge_id,
+                    bridge_configurations,
+                    review_user_message,
+                    parsed_data,
+                    thread_info,
+                    timer,
+                    reviewer_sub_thread_id=reviewer_sub_thread_id,
+                    streamer=streamer,
+                    prior_conversation=reviewer_conversation_pairs,
+                )
+                verdict = parse_reviewer_json(_extract_response_text(reviewer_result))
         except Exception as exc:
             logger.error(f"Reviewer call failed on round {round_num}: {exc}")
             # Capture the error on the round record so a reviewer
@@ -211,7 +237,6 @@ async def run_review_loop(
             reviewer_rounds.append(round_record)
             break
 
-        verdict = parse_reviewer_json(_extract_response_text(reviewer_result))
         round_record["verdict"] = verdict
         last_verdict = verdict
 
@@ -323,6 +348,9 @@ async def run_review_loop(
         parsed_data["usage"]["total_tokens"] = summed_main_tokens["total"]
         parsed_data["usage"]["expectedCost"] = summed_main_tokens["expected_cost"]
 
+        accumulated_tools_call_data.extend(
+            (new_main_result.get("historyParams") or {}).get("tools_call_data") or []
+        )
         main_result = new_main_result
         main_response_text = _extract_response_text(main_result)
 
@@ -338,12 +366,13 @@ async def run_review_loop(
             "passed": bool(last_verdict.get("passed")),
         }
         history_params["AiConfig"] = ai_config
+    history_params["tools_call_data"] = accumulated_tools_call_data
     main_result["historyParams"] = history_params
 
     if not reviewer_rounds:
         return main_result, None
 
-    reviewer_cfg = bridge_configurations.get(reviewer_bridge_id, {}) or {}
+    reviewer_cfg = bridge_configurations.get(effective_reviewer_bridge_id, {}) or {}
 
     # Publish each round in order. Rounds 1..N-1 use a minimal history-only
     # message (no side-effects). The final round (the last entry in
@@ -354,7 +383,7 @@ async def run_review_loop(
     for idx, record in enumerate(reviewer_rounds):
         is_final = idx == last_idx
         round_history_params = _build_reviewer_history_params_for_round(
-            record, parsed_data, reviewer_cfg, reviewer_bridge_id, reviewer_sub_thread_id
+            record, parsed_data, reviewer_cfg, effective_reviewer_bridge_id, reviewer_sub_thread_id
         )
         round_dataset_entry = _build_reviewer_dataset_entry_for_round(
             record, parsed_data, reviewer_cfg, round_history_params
@@ -378,7 +407,7 @@ async def run_review_loop(
             reviewer_result=record["result"],
             reviewer_params=record["params"],
             is_final=is_final,
-            bridge_id=reviewer_bridge_id,
+            bridge_id=effective_reviewer_bridge_id,
             round_num=record["round_num"],
             error=record["error"],
         )
@@ -391,7 +420,7 @@ async def run_review_loop(
         "error": last_record["error"],
         "tokens": reviewer_tokens_accum,
         "latency": last_record["latency"] or {},
-        "bridge_id": reviewer_bridge_id,
+        "bridge_id": effective_reviewer_bridge_id,
     }
 
     return main_result, reviewer_summary

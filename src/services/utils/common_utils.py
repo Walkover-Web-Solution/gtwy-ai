@@ -22,8 +22,13 @@ from src.db_services.metrics_service import (
 )
 from src.services.cache_service import find_in_cache, store_in_cache, make_json_serializable
 from src.services.utils.gpt_memory import get_gpt_memory, parse_memory
-from src.configs.constant import bridge_ids, redis_keys, alert_types
-from src.services.commonServices.baseService.utils import axios_work, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
+from src.configs.constant import bridge_ids, inbuild_tools, redis_keys, alert_types
+from src.services.billing.billing_utils import (
+    apply_billing_events,
+    apply_wallet_fallback,
+    fallback_allowed_on_plan,
+)
+from src.services.commonServices.baseService.utils import axios_work, compute_billing_events, make_request_data_and_publish_sub_queue, remove_additional_properties_with_anyof, unknown_error_handler_alert
 from src.services.commonServices.queueService.queueLogService import sub_queue_obj
 from src.services.commonServices.queueService.queueMetricsService import metrics_queue_obj
 from src.services.proxy.Proxyservice import get_timezone_and_org_name
@@ -58,12 +63,12 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
             value = pydash.get(agent_variables, var_name, _MISSING)
             if value is not _MISSING:
                 resolved[param] = value
-        for param in tool_config.get("required", []):
+        for param in [*(tool_config.get("required") or []), *(tool_config.get("params") or [])]:
             if param not in resolved and param in agent_variables:
                 resolved[param] = agent_variables[param]
         return resolved
 
-    resolved_tools = []
+    # pre_tools: list with single tool at index 0 — resolve args if they contain variable references
     if isinstance(tool_data, list):
         tool = tool_data[0]
     else:
@@ -75,6 +80,7 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
             "args": resolved_args,
             "config": tool_config
         }
+    resolved_tools = []
     tool_type = tool.get("_type")
     tool_config = tool.get("config", {})
     tool_args_mapping = tool.get("args", {})
@@ -84,17 +90,23 @@ def setup_agent_tools(parsed_data, bridge_configurations, tool_data):
         resolved_tools.append({
             "type": "custom_function",
             "name": tool_config.get("script_id"),
+            "url": tool_config.get("url"),
+            "title": tool.get("title"),
             "args": resolved_args,
         })
     else:
+        # Built-in pre-tools read their static settings (prompt, resource_id/collection_id,
+        # url/formats) from args; values mapped to agent variables override them.
+        static_config = {key: value for key, value in tool_config.items() if key != "required"}
         resolved_tools.append({
             "type": tool_type,
-            "args": resolved_args,
+            "args": {**static_config, **resolved_args},
             "config": tool_config,
+            "title": tool.get("title"),
         })
-    
+
     return resolved_tools
-    
+
 async def handle_agent_transfer(
     result, request_body, bridge_configurations, chat_function, current_bridge_id=None, transfer_request_id=None
 ):
@@ -144,6 +156,22 @@ async def handle_agent_transfer(
     return transfer_result
 
 
+GTWY_BROWSER_MIN_ITERATIONS = 25
+
+
+def _resolve_maximum_iterations(body):
+    """Tool-loop limit for this request.
+
+    Default is 3. When Gtwy_Browser is enabled the browser needs many snapshot/act
+    rounds, so the limit is raised to at least 25 even if the bridge stores the UI
+    default of 3; a larger explicit value still wins.
+    """
+    configured = (body.get("settings") or {}).get("maximum_iterations") or 3
+    if inbuild_tools["Gtwy_Browser"] in (body.get("built_in_tools") or []):
+        return max(int(configured), GTWY_BROWSER_MIN_ITERATIONS)
+    return configured
+
+
 def parse_request_body(request_body):
     body = request_body.get("body", {})
     state = request_body.get("state", {})
@@ -168,6 +196,17 @@ def parse_request_body(request_body):
         "thread_id": body.get("thread_id"),
         "sub_thread_id": body.get("sub_thread_id") or body.get("thread_id"),
         "org_id": state.get("profile", {}).get("org", {}).get("id", "") or body.get("org_id"),
+        "wallet": body.get("wallet", False),
+        # Who the run is billed to (the FIRST agent's owner) — propagated
+        # unchanged into nested/transfer frames.
+        "billing_attribution": body.get("billing_attribution") or {},
+        # True in agent-to-agent child frames (set by call_gtwy_agent). Copied
+        # along by transfers, so a chain started from a child stays nested.
+        "nested_agent_call": bool(body.get("_nested_agent_call")),
+        "org_billing_plan": body.get("org_billing_plan"),
+        # Set by reserve_credits_and_api_key_setup when the org's plan charges
+        # the per-hit fee even on its own API key (OWN_KEY_HIT_FEE_PLANS).
+        "charge_hit_fee": bool(body.get("charge_hit_fee")),
         "user": body.get("user"),
         "original_user": body.get("user"),
         "tools": body.get("configuration", {}).get("tools"),
@@ -219,7 +258,7 @@ def parse_request_body(request_body):
             for url in body.get("user_urls", [])
             if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
         ],
-        "maximum_iterations": body.get("settings", {}).get("maximum_iterations") or 3,
+        "maximum_iterations": _resolve_maximum_iterations(body),
         "tokens": {},
         "memory": "",
         "bridge_summary": body.get("bridge_summary"),
@@ -233,7 +272,11 @@ def parse_request_body(request_body):
         "variables_state": body.get("agent_info", {}).get("variables_state"),
         "built_in_tools": body.get("built_in_tools") or [],
         "thread_flag": body.get("thread_flag") or False,
-        "files": body.get("files") or [],
+        "files": body.get("files") or [
+            url.get("url")
+            for url in body.get("user_urls", [])
+            if isinstance(url, dict) and url.get("type") != "image" and url.get("url")
+        ],
         "fall_back": body.get("settings", {}).get("fall_back") or {},
         "skip_history": body.get("skip_history", False),
         "guardrails": body.get("settings", {}).get("guardrails") or {},
@@ -442,6 +485,18 @@ async def load_model_configuration(model, configuration, service):
             if configuration.get(key):
                 custom_config[key] = configuration[key]
 
+    # response_type is handled even when the model's own schema doesn't declare
+    # it (normalize_response_type inlines the schema into the prompt for models
+    # that can't enforce it natively) — so it can't be dropped by the
+    # schema-driven loop above just because a model has no response_type field.
+    # Image models never accept a response_type param, so skip it for them.
+    if (
+        configuration.get("type") != "image"
+        and "response_type" not in custom_config
+        and configuration.get("response_type")
+    ):
+        custom_config["response_type"] = configuration["response_type"]
+
     return model_obj, custom_config, model_output_config
 
 
@@ -467,16 +522,20 @@ async def handle_pre_tools(parsed_data, custom_config, timer = None):
             timer.start()
 
         tool_type = tool.get("type")
+        tool_id = tool.get("id") or tool.get("name")
         args = dict(tool.get("args", {}))
         args["user"] = parsed_data["user"]
         args["_response_type"] = parsed_data["configuration"]["response_type"]
+
+        # Initialize entry with id for all tool types
+        entry = {"id": tool_id, "type": "pre_tool"}
 
         if tool_type == "custom_function":
             try:
                 _pre_t = _time.time()
                 pre_tool_response = await axios_work(
                     args,
-                    {"url": f"https://flow.sokt.io/func/{tool.get('name')}"},
+                    {"url": tool.get("url")},
                 )
                 log_slow_call(f"pre_function {tool.get('name')}", _time.time() - _pre_t, SLOW_CALL_THRESHOLDS["pre_function"])
                 if pre_tool_response.get("status") == 0:
@@ -493,7 +552,7 @@ async def handle_pre_tools(parsed_data, custom_config, timer = None):
                     "data": pre_tool_response,
                     "type": "pre_tool",
                     "error": pre_tool_response.get("status", 0) != 1,
-                    "name": tool.get('name', "")
+                    "name": tool.get("title")
                 }
             except Exception as pre_func_err:
                 error_msg = f"Error while calling prefunction. Error message: {str(pre_func_err)}"
@@ -513,7 +572,7 @@ async def handle_pre_tools(parsed_data, custom_config, timer = None):
                     "data": {"response": str(pre_func_err), "status": 0},
                     "type": "pre_tool",
                     "error": True,
-                    "name": tool.get('name', "")
+                    "name": tool.get("title")
                 }
         
         elif tool_type == "query_refiner":
@@ -615,6 +674,8 @@ async def handle_post_tool(parsed_data, result):
         logger.warning("post_tool configured but no script_id / function_name found; skipping")
         return
 
+    tool_url = post_tool_data.get("url")
+
     try:
         args = {
             **dict(post_tool_data.get("args", {})),
@@ -626,11 +687,11 @@ async def handle_post_tool(parsed_data, result):
         }
         response_data = (result or {}).get("response", {}).get("data") if isinstance(result, dict) else None
         if response_data:
-            args["ai_response"] = response_data.get("content") or response_data
+            args["ai_response"] = response_data
 
         post_tool_response = await axios_work(
             args,
-            {"url": f"https://flow.sokt.io/func/{script_id}"},
+            {"url": tool_url},
         )
     except Exception as err:
         logger.error(f"post_tool execution error (script_id={script_id}): {err}")
@@ -651,6 +712,7 @@ async def handle_post_tool(parsed_data, result):
     if post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
         if isinstance(result, dict) and result.get("response", {}).get("data") is not None:
             result["response"]["data"]["content"] = post_tool_response.get("response")
+    return post_tool_response
 
 async def manage_threads(parsed_data):
     thread_id = parsed_data["thread_id"]
@@ -669,7 +731,7 @@ async def manage_threads(parsed_data):
 
         # Check Redis cache first for conversations
         version_id = parsed_data.get("version_id", "")
-        redis_key = f"conversation_{version_id}_{thread_id}_{sub_thread_id}"
+        redis_key = f"{redis_keys['conversation_']}{version_id}_{thread_id}_{sub_thread_id}"
         cached_conversations = await find_in_cache(redis_key)
 
         if cached_conversations:
@@ -753,9 +815,7 @@ async def prepare_prompt(parsed_data, thread_info, model_config, custom_config):
             )
             memory = parse_memory(raw_memory)
             parsed_data["memory"] = memory
-        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(
-            configuration.get("prompt") or "", variables
-        )
+        configuration["prompt"], missing_vars = Helper.replace_variables_in_prompt(configuration.get("prompt") or "", variables, parsed_data["service"], configuration)
 
         if template:
             system_prompt = template
@@ -831,6 +891,7 @@ def build_service_params(
         "variables_path": parsed_data["variables_path"],
         "message_id": parsed_data["message_id"],
         "bridgeType": parsed_data["bridgeType"],
+        "billing_attribution": parsed_data.get("billing_attribution") or {},
         "tool_id_and_name_mapping": parsed_data["tool_id_and_name_mapping"],
         "reasoning_model": parsed_data["reasoning_model"],
         "memory": memory,
@@ -857,6 +918,8 @@ def build_service_params(
         "api_collection": parsed_data.get("api_collection"),
         "meta": parsed_data.get("meta"),
         "created_at": parsed_data.get("created_at"),
+        "run_testcase": parsed_data.get("testcase_data", {}).get("run_testcase", False),
+        "testcase_tools_response": parsed_data.get("testcase_data", {}).get("tools_response") or {},
     }
 
 
@@ -928,9 +991,12 @@ async def _update_history_redis(dataset, history_params, version_id, thread_info
 
     thread_id = thread_info.get("thread_id")
     sub_thread_id = thread_info.get("sub_thread_id")
-    conversations = thread_info.get("result", [])
+    conversations = thread_info.get("result", []) or []
 
-    if dataset and "error" not in dataset[0] and conversations:
+    # Seed the cache on the first turn too. Previously an empty history skipped this, so a brand
+    # new thread cached nothing and its second turn had to come from Postgres, which is only
+    # written by the Node log-queue worker. Without that worker the thread lost all memory.
+    if dataset and "error" not in dataset[0] and thread_id:
         await save_conversations_to_redis(conversations, version_id, thread_id, sub_thread_id, history_params)
 
     if history_params and history_params.get("bridge_id"):
@@ -1064,6 +1130,8 @@ async def process_background_tasks(
     if parsed_data.get("skip_history"):
         return
 
+    compute_billing_events(parsed_data, result.get("historyParams") or {})
+
     # Plan mode: parse the LLM JSON, save to Redis, and thread the parsed plan
     # into historyParams so the conversation log persists `plans`.
     if parsed_data.get("mode") == "plan" and not parsed_data.get("action"):
@@ -1181,6 +1249,9 @@ async def process_background_tasks(
     await sub_queue_obj.publish_message(data)
 
     await metrics_queue_obj.publish_message(make_json_serializable({"save_metrics": metrics_entries}))
+
+    if data.get("billing"):
+        await apply_billing_events(data["billing"])
 
 async def process_background_tasks_for_error(parsed_data, error):
     # Primary-agent sub-tasks inside plan mode skip per-call history.
@@ -1304,6 +1375,8 @@ def build_service_params_for_batch(parsed_data, custom_config, model_output_conf
         "files": parsed_data.get("files", []),
         "version_id": parsed_data.get("version_id", ""),
         "meta": parsed_data.get("meta"),
+        "built_in_tools": parsed_data.get("built_in_tools") or [],
+        "web_search_filters": parsed_data.get("web_search_filters")
     }
 
 
@@ -1407,6 +1480,99 @@ def restructure_json_schema(response_type, service):
             }
         case _:
             return response_type
+
+
+
+def model_supports_json_schema_or_text(model_config):
+    """
+    Return True if the model config advertises a json_schema response_type option.
+
+    The model config document stores supported response types under
+    configuration.response_type.options (e.g. [{"key": "type", "type": "json_schema"}]).
+    Two checks, in order:
+      1. Does the model config expose a response_type field at all? If not, the model
+         has no configurable response format, so json_schema isn't supported.
+      2. If it does, but the options list can't be determined, assume support (so
+         configured json_schema requests are not silently downgraded). Otherwise check
+         whether json_schema is among the advertised options.
+    """
+    if not isinstance(model_config, dict):
+        return True
+
+    response_type = (model_config.get("configuration") or {}).get("response_type")
+    if not isinstance(response_type, dict):
+        return False
+
+    options = response_type.get("options")
+    if not isinstance(options, list):
+        return (False, False)
+    return ((any(isinstance(opt, dict) and opt.get("type") == "json_schema" for opt in options)),(
+        any(isinstance(opt, dict) and opt.get("type") == "text" for opt in options)))
+
+
+def normalize_response_type(custom_config, service, model_config=None):
+    """
+    Normalize custom_config["response_type"] in place before service formatting.
+
+    - type == "text" with a "text" value: fold the text into the prompt and pass
+      response_type through as a plain {"type": "text"}.
+    - type == "text" without a "text" value: leave as-is.
+    - type == "json_object" carrying a "json_schema": promote it to json_schema (then
+      the json_schema handling below applies).
+    - type == "json_object" without a schema: leave untouched.
+    - type == "json_schema":
+        * if the model supports json_schema -> restructure (unchanged behavior).
+        * if the model does NOT support json_schema -> inline the schema into the prompt
+          and downgrade response_type to plain {"type": "json_object"}.
+    """
+    response_type = custom_config.get("response_type")
+    if not isinstance(response_type, dict):
+        return
+
+    rtype = response_type.get("type")
+
+    if rtype == "text":
+        text_value = response_type.get("text")
+        if text_value:
+            # Store the text instruction in a separate key to be added to system message
+            custom_config["_text_instruction"] = text_value
+        _, is_text_support = model_supports_json_schema_or_text(model_config)
+        if not is_text_support:
+            custom_config.pop("response_type", None)
+        return
+
+    if rtype == "json_object":
+        return
+
+    if rtype == "json_schema":
+        is_json_schema_support, _ = model_supports_json_schema_or_text(model_config)
+        if is_json_schema_support:
+            custom_config["response_type"] = restructure_json_schema(response_type, service)
+        else:
+            # Model can't enforce a json_schema: inline the schema into the prompt and
+            # downgrade to plain json_object so the model still enforces valid JSON output.
+            schema = response_type.get("json_schema") or {}
+            # The json_schema value is often a wrapper ({"name":..., "schema": {...}, "strict":...}),
+            # not the bare schema. Unwrap it so we inline the actual schema, not its metadata.
+            schema_body = schema.get("schema", schema) if isinstance(schema, dict) else schema
+            schema_text = (
+                json.dumps(schema_body, ensure_ascii=False)
+                if isinstance(schema_body, (dict, list))
+                else str(schema_body)
+            )
+            # Store the schema instruction in a separate key to be added to system message
+            custom_config["_json_schema_instruction"] = (
+                "Below is a JSON Schema describing the required response shape, not the response "
+                "itself. Reply with ONLY a JSON object that is a valid instance of this schema:\n"
+                f"{schema_text}"
+            )
+            # Only downgrade to json_object if the model exposes a response_type field at
+            # all (models with no response_type field don't accept the parameter at all).
+            response_type_field = isinstance(model_config, dict) and (model_config.get("configuration") or {}).get("response_type")
+            if isinstance(response_type_field, dict):
+                custom_config["response_type"] = {"type": "json_object"}
+            else:
+                custom_config.pop("response_type", None)
 
 
 def validate_json_schema_configuration(configuration):
@@ -1668,6 +1834,11 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
     try:
         from src.services.commonServices.response_caching_service import handle_response_caching
 
+        # If post_tool is configured, route LLM delta content to reasoning during streaming
+        # so only the post_tool response is visible as delta content in the UI.
+        if parsed_data.get("post_tool_data") and class_obj.streamer:
+            class_obj.streamer.redirect_delta_to_reasoning = True
+
         try:
             result = await handle_response_caching(parsed_data=parsed_data, class_obj=class_obj)
                     # Validate JSON content when model was configured for JSON output.
@@ -1699,15 +1870,21 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
             logger.error(f"SSE first attempt failed ({original_service}/{original_model}): {original_error}, {tb.format_exc()}")
             fall_back = parsed_data.get("fall_back")
 
-            if fall_back and fall_back.get("is_enable", False):
+            # Streaming is the common chat path and this fallback used to skip
+            # every billing check the non-streaming one at common.py does: no plan
+            # check, no platform-key swap, no wallet flag flip and no capture of
+            # the failed primary's cost. So a wallet run could fall back onto any
+            # configured model, billed to the wallet, on the ORIGINAL service's
+            # credential. Kept in lockstep with common.py from here.
+            if fall_back and fall_back.get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
                 try:
                     fallback_model = fall_back.get("model", parsed_data["model"])
                     fallback_service = fall_back.get("service", parsed_data["service"])
                     parsed_data["model"] = fallback_model
                     parsed_data["service"] = fallback_service
                     parsed_data["configuration"]["model"] = fallback_model
-                    if fall_back.get("apikey"):
-                        parsed_data["apikey"] = fall_back["apikey"]
+                    # Same helper as common.py — the two paths cannot drift.
+                    apply_wallet_fallback(parsed_data, fall_back, fallback_service, fallback_model)
 
                     fb_model_config, fb_custom_config, fb_model_output_config = await load_model_configuration(
                         parsed_data["model"], parsed_data["configuration"], parsed_data["service"]
@@ -1760,25 +1937,27 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         f"Original attempt failed with {original_service}/{original_model}: {original_error}. "
                         f"Retried with {parsed_data['service']}/{parsed_data['model']}"
                     )
-                    if class_obj.streamer:
+                    # A nested agent shares its caller's stream, where an `error` event ends the whole
+                    # response on the client; the caller gets this failure as the agent's tool result.
+                    if class_obj.streamer and not is_nested_stream_call:
                         await class_obj.streamer.emit_error(original_error, fallback_error=str(retry_err))
-                        if not is_nested_stream_call:
-                            await class_obj.streamer.close()
+                        await class_obj.streamer.close()
                     await sendResponse(
                         parsed_data.get("response_format"), str(retry_err), variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
-                    ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+                    ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") and not is_nested_stream_call else None
                     if is_nested_stream_call:
                         await save_error_history(parsed_data, retry_err, params, timer, class_obj, thread_info)
                         return {"success": False, "message": str(retry_err), "response": {}}
                     raise
             else:
-                if class_obj.streamer:
+                # A nested agent shares its caller's stream, where an `error` event ends the whole
+                # response on the client; the caller gets this failure as the agent's tool result.
+                if class_obj.streamer and not is_nested_stream_call:
                     await class_obj.streamer.emit_error(original_error)
-                    if not is_nested_stream_call:
-                        await class_obj.streamer.close()
+                    await class_obj.streamer.close()
                 await sendResponse(
                     parsed_data.get("response_format"), original_error, variables=parsed_data.get("variables", {}), meta=parsed_data.get("meta")
-                ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
+                ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") and not is_nested_stream_call else None
                 if is_nested_stream_call:
                     await save_error_history(parsed_data, first_err, params, timer, class_obj, thread_info)
                     return {"success": False, "message": str(original_error), "response": {}}
@@ -1841,18 +2020,20 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                         return transfer_result
                 else:
                     logger.warning(f"SSE transfer: target agent {target_agent_id} not found, closing stream")
-                    if class_obj.streamer:
+                    # A nested agent shares its caller's stream, where an `error` event ends the whole
+                    # response on the client; the caller gets this failure as the agent's tool result.
+                    if class_obj.streamer and not is_nested_stream_call:
                         await class_obj.streamer.emit_error(
                             f"Transfer target agent {target_agent_id} not found in bridge_configurations"
                         )
-                        if not is_nested_stream_call:
-                            await class_obj.streamer.close()
+                        await class_obj.streamer.close()
             except Exception as transfer_err:
                 logger.error(f"SSE transfer handling error: {transfer_err}, {tb.format_exc()}")
-                if class_obj.streamer:
+                # A nested agent shares its caller's stream, where an `error` event ends the whole
+                # response on the client; the caller gets this failure as the agent's tool result.
+                if class_obj.streamer and not is_nested_stream_call:
                     await class_obj.streamer.emit_error(str(transfer_err))
-                    if not is_nested_stream_call:
-                        await class_obj.streamer.close()
+                    await class_obj.streamer.close()
                 if is_nested_stream_call:
                     await save_error_history(parsed_data, transfer_err, params, timer, class_obj, thread_info)
                     return {"success": False, "message": str(transfer_err), "response": {}}
@@ -1882,7 +2063,7 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         result.setdefault("response", {}).setdefault("usage", {})
         result["response"]["usage"]["cost"] = parsed_data["usage"].get("expectedCost", 0)
 
-        if parsed_data.get("_reviewer_bridge_id"):
+        if parsed_data.get("_reviewer_bridge_id") or parsed_data.get("_reviewer_prompt") or parsed_data.get("_reviewer_tools"):
             from src.services.commonServices.reviewer_service import run_review_loop
 
             result, _reviewer_summary = await run_review_loop(
@@ -1901,7 +2082,10 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         model_response = result.get("modelResponse", {}) if isinstance(result, dict) else {}
         formatted_response = result.get("response", {}) if isinstance(result, dict) else {}
 
-        await handle_post_tool(parsed_data, result)
+        # Only call handle_post_tool for non-streaming case here.
+        # For streaming, it's handled later so the post_tool response can be emitted as delta.
+        if not class_obj.streamer:
+            await handle_post_tool(parsed_data, result)
 
         await sendResponse(
             parsed_data.get("response_format"),
@@ -1913,9 +2097,16 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
         if parsed_data.get('pre_tool_response_to_save') and result['historyParams'] is not None:
             result['historyParams']['tools_call_data'].append(parsed_data['pre_tool_response_to_save'])
 
+        # Handle post_tool before process_background_tasks so it's included in history
+        if class_obj.streamer:
+            post_tool_response = await handle_post_tool(parsed_data, result)
+        else:
+            post_tool_response = None
+
         await process_background_tasks(
             parsed_data, result, params, thread_info, transfer_request_id, bridge_configurations
         )
+        asyncio.create_task(update_cost_and_last_used(parsed_data))
 
         if class_obj.streamer:
             if isinstance(result, dict) and result.get("error"):
@@ -1931,12 +2122,17 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
                 or (formatted_response.get("data") or {}).get("finish_reason")
                 or ""
             )
-            post_tool_response = await handle_post_tool(parsed_data, result)
+            # Emit post_tool response as delta if available
             if post_tool_response and post_tool_response.get("status") == 1 and post_tool_response.get("response") is not None:
+                post_tool_content = post_tool_response.get("response")
+                # Disable redirect so post_tool response emits as delta (main UI content)
+                class_obj.streamer.redirect_delta_to_reasoning = False
+                await class_obj.streamer.emit_delta(str(post_tool_content))
+                # Update the response data for the final done event
                 if formatted_response.get("data") is not None:
-                    formatted_response["data"]["content"] = post_tool_response.get("response")
+                    formatted_response["data"]["content"] = post_tool_content
                 if result.get("response", {}).get("data") is not None:
-                    result["response"]["data"]["content"] = post_tool_response.get("response")
+                    result["response"]["data"]["content"] = post_tool_content
 
             if not is_nested_stream_call:
                 accumulated_payload = None if template_data else formatted_response
@@ -1953,8 +2149,9 @@ async def sse_stream_and_finalize(class_obj, parsed_data, params, timer, thread_
     except Exception as err:
         logger.error(f"SSE error ({original_service}/{original_model}): {str(err)}, {tb.format_exc()}")
         if class_obj.streamer:
-            await class_obj.streamer.emit_error(str(err))
+            # Nested agent: no `error` event on the caller's stream (see above).
             if not is_nested_stream_call:
+                await class_obj.streamer.emit_error(str(err))
                 await class_obj.streamer.close()
             await save_error_history(parsed_data, err, params, timer, class_obj, thread_info)
         return {"success": False, "message": str(err), "response": {}}

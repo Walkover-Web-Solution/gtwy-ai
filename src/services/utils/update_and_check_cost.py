@@ -4,10 +4,22 @@ import logging
 from datetime import datetime
 
 from src.configs.constant import limit_types, redis_keys
+from src.db_services.apikey_usage_service import add_usage as add_apikey_usage
+from src.db_services.apikey_usage_service import get_usage as get_apikey_usage
 
-from ..cache_service import delete_in_cache, find_in_cache, store_in_cache, verify_ttl
+from ..cache_service import (
+    delete_in_cache,
+    expire_if_unset,
+    find_in_cache,
+    get_float_in_cache,
+    incrbyfloat_in_cache,
+    sadd_in_cache,
+    store_in_cache,
+    verify_ttl,
+)
 from .apiservice import fetch
 from .limit_ttl_utils import calculate_limit_ttl
+from .period_key import period_key, redis_ttl_for
 from .usage_alert_service import evaluate_usage_alerts
 
 _THRESHOLD_WEBHOOK_URL = "https://flow.sokt.io/func/scri87toel4G"
@@ -35,6 +47,35 @@ def _build_limit_error(limit_type, current_usage, limit_value):
         "current_usage": _format_number(current_usage),
         "limit_value": _format_number(limit_value),
     }
+
+
+async def _apikey_usage_for_period(apikey_id, reset_period):
+    """Current spend for an API key, from the period-keyed counter.
+
+    The reset window is part of the key name, so a new window has no key yet and
+    reads as zero -- nothing has to expire or be zeroed for the budget to be
+    fresh, and an absent key can only mean "new window".
+
+    Redis is the authority. Mongo is consulted only when Redis has no key at all,
+    which after a new window has opened means Redis lost the value; the document
+    copy recovers it, and is itself period-scoped so a finished window's number
+    cannot be read back as current.
+    """
+    period = period_key(reset_period)
+    cache_key = f"{redis_keys['apikeyperiodcost_']}{apikey_id}_{period}"
+
+    usage_value = await get_float_in_cache(cache_key)
+    if usage_value is not None:
+        return usage_value
+
+    recovered = await get_apikey_usage(apikey_id, period)
+    if recovered is None:
+        return 0.0
+
+    # Reseed Redis so the next request is served without touching Mongo.
+    await incrbyfloat_in_cache(cache_key, recovered)
+    await expire_if_unset(cache_key, redis_ttl_for(reset_period))
+    return recovered
 
 
 async def _check_limit(limit_type, bridges, version_id):
@@ -75,6 +116,21 @@ async def _check_limit(limit_type, bridges, version_id):
     else:
         identifier = None
 
+    # apikey has moved to period-keyed counters. bridge and folder still use the
+    # legacy JSON blob below, so the two mechanisms sit side by side until those
+    # scopes migrate too.
+    if limit_type == "apikey":
+        # No identifier means no API key is in play for this service, so there is
+        # nothing to enforce. Falling through would compare against the document's
+        # apikey_usage as delivered by the agent config, which is Redis-cached and
+        # carries no period -- not safe to trust.
+        if not identifier:
+            return None
+        usage_value = await _apikey_usage_for_period(identifier, apikey_src.get("apikey_limit_reset_period"))
+        if usage_value >= limit_value:
+            return _build_limit_error(limit_type, usage_value, limit_value)
+        return None
+
     usage_value = 0.0
 
     if identifier:
@@ -82,14 +138,8 @@ async def _check_limit(limit_type, bridges, version_id):
         try:
             cached_data = await find_in_cache(cache_key)
             # Always extract reset_period and setup_date from source data (authoritative)
-            reset_period_field = f"{limit_type}_limit_reset_period"
-            setup_date_field = f"{limit_type}_limit_start_date"
-            if limit_type == "apikey":
-                reset_period_from_data = apikey_src.get(reset_period_field)
-                setup_date_from_data = apikey_src.get(setup_date_field)
-            else:
-                reset_period_from_data = bridges.get(reset_period_field)
-                setup_date_from_data = bridges.get(setup_date_field)
+            reset_period_from_data = bridges.get(f"{limit_type}_limit_reset_period")
+            setup_date_from_data = bridges.get(f"{limit_type}_limit_start_date")
 
             if cached_data:
                 currentusagedata = json.loads(cached_data)
@@ -118,10 +168,7 @@ async def _check_limit(limit_type, bridges, version_id):
             else:
                 # No Redis cache — seed from bridge data
                 try:
-                    if limit_type == "apikey":
-                        usage_value = float(apikey_src.get(usage_field, 0) or 0)
-                    else:
-                        usage_value = float(bridges.get(usage_field, 0) or 0)
+                    usage_value = float(bridges.get(usage_field, 0) or 0)
                 except (ValueError, TypeError):
                     usage_value = 0.0
 
@@ -142,10 +189,7 @@ async def _check_limit(limit_type, bridges, version_id):
 
     else:
         try:
-            if limit_type == "apikey":
-                usage_value = float(apikey_src.get(usage_field, 0) or 0)
-            else:
-                usage_value = float(bridges.get(usage_field, 0) or 0)
+            usage_value = float(bridges.get(usage_field, 0) or 0)
         except (ValueError, TypeError):
             usage_value = 0.0
 
@@ -297,6 +341,54 @@ async def _notify_cost_update(parsed_data, redis_usage=None):
         logger.warning(f"Failed to send cost update notification: {e}")
 
 
+async def _write_apikey_usage(parsed_data, apikey_id, cost):
+    """Record this request's cost against the API key's current period.
+
+    Two stores, both period-scoped:
+
+    * Redis holds the counter enforcement reads. ``INCRBYFLOAT`` is atomic, which
+      is only possible because the counter is a bare number rather than the JSON
+      blob it used to share with the version/bridge ids.
+    * The apikey document holds the durable copy, updated with a pipeline so the
+      reset and the increment are one atomic step.
+
+    Neither needs resetting. The period is in the key name on one side and in a
+    field on the other, so a new window starts from zero on its own.
+
+    Self-guarded: a failure here must never disturb the request that produced it.
+    """
+    try:
+        limit_config = (parsed_data.get("limit") or {}).get("apikey") or {}
+        reset_period = limit_config.get("limit_reset_period") or "monthly"
+        period = period_key(reset_period)
+        ttl = redis_ttl_for(reset_period)
+
+        # Atomic add, then set the expiry only if the key has none. Refreshing it
+        # on every write would stop a busy key ever expiring.
+        counter_key = f"{redis_keys['apikeyperiodcost_']}{apikey_id}_{period}"
+        new_total = await incrbyfloat_in_cache(counter_key, cost)
+        await expire_if_unset(counter_key, ttl)
+
+        # The version/bridge ids the legacy blob used to carry, for purging agent
+        # config caches when the cap is edited. Prefixed because cleanupCache
+        # builds a different cache-key shape for each kind.
+        refs = [f"v:{parsed_data['version_id']}" if parsed_data.get("version_id") else None,
+                f"b:{parsed_data['bridge_id']}" if parsed_data.get("bridge_id") else None]
+        refs = [r for r in refs if r]
+        if refs:
+            refs_key = f"{redis_keys['apikeyperiodrefs_']}{apikey_id}_{period}"
+            await sadd_in_cache(refs_key, *refs)
+            await expire_if_unset(refs_key, ttl)
+
+        await add_apikey_usage(apikey_id, period, cost)
+
+        logger.debug(f"[apikey-usage] apikey={apikey_id} period={period} cost={cost} total={new_total}")
+        return new_total
+    except Exception as e:
+        logger.error(f"Error writing apikey usage for {apikey_id}: {str(e)}")
+    return None
+
+
 async def update_cost(parsed_data):
     try:
         service = parsed_data.get("service")
@@ -320,11 +412,12 @@ async def update_cost(parsed_data):
             if folder_data is not None:
                 redis_usage["folder"] = folder_data
 
-        # Update API key usage
+        # Update API key usage — period-keyed counter plus the document copy.
         if apikey_id and expected_cost:
-            api_data = await update_usage_cost_in_cache(f"{redis_keys['apikeyusedcost_']}{apikey_id}", expected_cost, "apikey",limit)
-            if api_data is not None:
-                redis_usage["apikey"] = api_data
+            apikey_total = await _write_apikey_usage(parsed_data, apikey_id, expected_cost)
+            if apikey_total is not None:
+                # Shape the alert pass expects, so it does not re-read the counter.
+                redis_usage["apikey"] = {"usage_value": apikey_total}
 
         # Evaluate usage alerts (threshold / limit reached / daily spike) for every
         # limited scope. Self-guarded; never breaks this background cost update.

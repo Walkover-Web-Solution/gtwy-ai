@@ -129,9 +129,10 @@ async def download_batch_file(file_id, apikey):
 
         file_response = await openAI.files.content(file_id)
         file_content = await asyncio.to_thread(file_response.read)
+        response_text = file_content.decode("utf-8")
 
         try:
-            results = [json.loads(line) for line in file_content.decode("utf-8").splitlines() if line.strip()]
+            results = [json.loads(line) for line in response_text.strip().split("\n") if line.strip()]
             return results
         except json.JSONDecodeError as e:
             print(f"JSON decoding error for file {file_id}: {e}")

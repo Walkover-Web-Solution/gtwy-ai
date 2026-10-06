@@ -194,10 +194,25 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     }
                 }
             }] if use_env_resolution else []),
+            # Stage 2: Lookup apiCalls directly from connected_tools where type="tools"
             {
                 "$lookup": {
                     "from": "apicalls",
-                    "let": {"fids": {"$ifNull": ["$function_ids", []]}},
+                    "let": {
+                        "fids": {
+                            "$map": {
+                                "input": {
+                                    "$filter": {
+                                        "input": {"$ifNull": ["$connected_tools", []]},
+                                        "as": "ct",
+                                        "cond": {"$eq": ["$$ct.type", "tools"]},
+                                    }
+                                },
+                                "as": "ct",
+                                "in": {"$toString": "$$ct.id"},
+                            }
+                        }
+                    },
                     "pipeline": [
                         {"$match": {"$expr": {"$and": [
                             {"$gt": [{"$size": "$$fids"}, 0]},
@@ -365,14 +380,32 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     },
                 }
             },
-            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in 'pre_tools'
+            # Stage 6: Lookup 'pre_tools' data from 'apicalls' collection using the ObjectIds in the
+            # legacy 'pre_tools' and in connected_tools entries of type "pre_tool" / "post_tool"
             {
                 "$lookup": {
                     "from": "apicalls",
                     "let": {
                         "pre_tools_ids": {
                             "$map": {
-                                "input": "$pre_tools",
+                                "input": {
+                                    "$concatArrays": [
+                                        {"$ifNull": ["$pre_tools", []]},
+                                        {
+                                            "$map": {
+                                                "input": {
+                                                    "$filter": {
+                                                        "input": {"$ifNull": ["$connected_tools", []]},
+                                                        "as": "ct",
+                                                        "cond": {"$in": ["$$ct.type", ["pre_tool", "post_tool"]]},
+                                                    }
+                                                },
+                                                "as": "ct",
+                                                "in": "$$ct.id",
+                                            }
+                                        },
+                                    ]
+                                },
                                 "as": "id",
                                 "in": {
                                     "$convert": {"input": "$$id", "to": "objectId", "onError": None, "onNull": None}
@@ -384,34 +417,23 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "as": "pre_tools_data",
                 }
             },
-            # Stage 7: Extract bridge_ids from connected_agents if it exists
+            # Stage 7: Extract agent IDs from connected_tools where type="agent" (temp field, projected out at end)
             {
                 "$addFields": {
-                    "connected_agents_bridge_ids": {
-                        "$cond": [
-                            {
-                                "$and": [
-                                    {"$ne": ["$connected_agents", None]},
-                                    {"$ne": ["$connected_agents", {}]},
-                                    {"$eq": [{"$type": "$connected_agents"}, "object"]},
-                                ]
-                            },
-                            {
-                                "$map": {
-                                    "input": {"$objectToArray": "$connected_agents"},
-                                    "as": "agent",
-                                    "in": {
-                                        "$convert": {
-                                            "input": "$$agent.v.bridge_id",
-                                            "to": "objectId",
-                                            "onError": None,
-                                            "onNull": None,
-                                        }
-                                    },
+                    "_connected_agent_ids": {
+                        "$map": {
+                            "input": {
+                                "$filter": {
+                                    "input": {"$ifNull": ["$connected_tools", []]},
+                                    "as": "ct",
+                                    "cond": {"$eq": ["$$ct.type", "agent"]}
                                 }
                             },
-                            [],
-                        ]
+                            "as": "agent",
+                            "in": {
+                                "$convert": {"input": "$$agent.id", "to": "objectId", "onError": None, "onNull": None}
+                            }
+                        }
                     }
                 }
             },
@@ -420,13 +442,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                 "$lookup": {
                     "from": "configurations",
                     "let": {
-                        "bridge_ids": {
-                            "$filter": {
-                                "input": "$connected_agents_bridge_ids",
-                                "as": "id",
-                                "cond": {"$ne": ["$$id", None]},
-                            }
-                        }
+                        "bridge_ids": {"$ifNull": ["$_connected_agent_ids", []]}
                     },
                     "pipeline": [
                         {
@@ -471,13 +487,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                 "$lookup": {
                     "from": "configurations",
                     "let": {
-                        "bridge_ids": {
-                            "$filter": {
-                                "input": "$connected_agents_bridge_ids",
-                                "as": "id",
-                                "cond": {"$ne": ["$$id", None]},
-                            }
-                        }
+                        "bridge_ids": {"$ifNull": ["$_connected_agent_ids", []]}
                     },
                     "pipeline": [
                         {"$match": {"$expr": {"$in": ["$_id", "$$bridge_ids"]}}},
@@ -658,7 +668,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                     "apikeys_docs": 0,
                     "apikey_object_id_safe": 0,
                     "has_apikeys": 0,
-                    "connected_agents_bridge_ids": 0,
+                    "_connected_agent_ids": 0,
                     "agent_details_docs": 0,
                     "template_ids_to_fetch": 0,
                     "templates_docs": 0,
@@ -905,53 +915,64 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                         }
                     }
                 },
-                # Stage 8b: Lookup folder post_tool from apicalls collection
+                # Stage 8b: Lookup folder post_tool from apicalls collection — config.post_tool only
+                # stores {id, script_id, args}; url and title live on the apicalls document.
+                # Legacy folders store just config.post_tool_id.
                 {
                     "$lookup": {
                         "from": "apicalls",
                         "let": {
                             "post_tool_id_obj": {
-                                "$cond": [
-                                    {"$ne": ["$config.post_tool_id", None]},
-                                    {
-                                        "$convert": {
-                                            "input": "$config.post_tool_id",
-                                            "to": "objectId",
-                                            "onError": None,
-                                            "onNull": None,
-                                        }
+                                "$convert": {
+                                    "input": {
+                                        "$cond": [
+                                            {"$eq": [{"$type": "$config.post_tool"}, "object"]},
+                                            "$config.post_tool.id",
+                                            "$config.post_tool_id",
+                                        ]
                                     },
-                                    None,
-                                ]
+                                    "to": "objectId",
+                                    "onError": None,
+                                    "onNull": None,
+                                }
                             }
                         },
                         "pipeline": [
                             {"$match": {"$expr": {"$eq": ["$_id", "$$post_tool_id_obj"]}}},
-                            {
-                                "$addFields": {
-                                    "_id": {"$toString": "$_id"},
-                                    "bridge_ids": {
-                                        "$map": {
-                                            "input": "$bridge_ids",
-                                            "as": "bid",
-                                            "in": {"$toString": "$$bid"},
-                                        }
-                                    },
-                                }
-                            },
+                            {"$project": {"_id": {"$toString": "$_id"}, "script_id": 1, "url": 1, "title": 1}},
                         ],
                         "as": "folder_post_tool_docs",
                     }
                 },
-                # Stage 8c: Extract folder_post_tool
+                # Stage 8c: Build folder_post_tool from config.post_tool merged over its apicalls document
                 {
                     "$addFields": {
                         "folder_post_tool": {
-                            "$cond": [
-                                {"$gt": [{"$size": "$folder_post_tool_docs"}, 0]},
-                                {"$arrayElemAt": ["$folder_post_tool_docs", 0]},
-                                None,
-                            ]
+                            "$let": {
+                                "vars": {
+                                    "doc": {"$arrayElemAt": ["$folder_post_tool_docs", 0]},
+                                    "entry": {
+                                        "$cond": [
+                                            {"$eq": [{"$type": "$config.post_tool"}, "object"]},
+                                            "$config.post_tool",
+                                            {},
+                                        ]
+                                    },
+                                },
+                                "in": {
+                                    "$cond": [
+                                        {"$ne": [{"$ifNull": ["$$doc", None]}, None]},
+                                        {
+                                            "$mergeObjects": [
+                                                {"id": "$$doc._id", "script_id": "$$doc.script_id", "title": "$$doc.title"},
+                                                "$$entry",
+                                                {"url": {"$ifNull": ["$$entry.url", "$$doc.url"]}},
+                                            ]
+                                        },
+                                        {"$cond": [{"$ne": [{"$ifNull": ["$$entry.id", None]}, None]}, "$$entry", None]},
+                                    ]
+                                },
+                            }
                         }
                     }
                 },
@@ -1033,24 +1054,21 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                         "type": 'custom_function',
                         "config":{
                             "function_id": folder_pre_tool_id,
-                            "script_id": script_id
+                            "script_id": script_id,
+                            "url": folder_pre_tool.get("url"),
                         },
                         "args": variables_path_pre_tool or folder_pre_tool.get("args", {}),
                     }
                     bridge_data["pre_tools_data"].append(folder_pre_tool)
                     bridge_data["pre_tools"].append(pre_tool_data_entry)
 
-            # Merge folder_post_tool into bridge_data
-            if folder_result and folder_result[0].get("folder_post_tool"):
-                bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
-
-            # Merge folder_post_tool into bridge_data
-            if folder_result and folder_result[0].get("folder_post_tool"):
-                bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
-
-            # Merge folder_post_tool into bridge_data
-            if folder_result and folder_result[0].get("folder_post_tool"):
-                bridge_data["folder_post_tool"] = folder_result[0]["folder_post_tool"]
+            # Merge folder_post_tool into bridge_data — a bridge/version-level post_tool
+            # (a connected_tools entry of type "post_tool") takes precedence over the folder's.
+            has_version_post_tool = any(
+                isinstance(ct, dict) and ct.get("type") == "post_tool" for ct in bridge_data.get("connected_tools", [])
+            )
+            if not has_version_post_tool and folder_result and folder_result[0].get("folder_post_tool"):
+                bridge_data["post_tool"] = folder_result[0]["folder_post_tool"]
 
             # Merge folder variables_path into bridge's variables_path
             if folder_result and folder_result[0].get("variables_path"):
@@ -1075,8 +1093,16 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             # Replace bridge response_type with folder response_type if present
             folder_response_type = folder_result[0].get("folder_response_type") if folder_result else None
             if folder_response_type and isinstance(folder_response_type, dict) and folder_response_type.get("type") == "json_schema":
-                bridge_data["configuration"]["response_type"]["mode"] = "custom"
-                bridge_data["configuration"]["response_type"]["value"] = folder_response_type
+                bridge_response_type = bridge_data.get("configuration", {}).get("response_type")
+                if isinstance(bridge_response_type, dict):
+                    bridge_data["configuration"]["response_type"]["mode"] = "custom"
+                    bridge_data["configuration"]["response_type"]["value"] = folder_response_type
+                else:
+                    # If bridge response_type is a string (e.g., "default"), replace it entirely
+                    bridge_data["configuration"]["response_type"] = {
+                        "mode": "custom",
+                        "value": folder_response_type
+                    }
             
             # Extract folder metadata
             if folder_result and folder_result[0].get("type"):
@@ -1116,7 +1142,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             bridge_data["folder_limit"] = 0
             bridge_data["folder_usage"] = 0
             bridge_data["folder_type"] = None
-            
+
 
         # Structure the final response
         response = {"success": True, "bridges": bridge_data}

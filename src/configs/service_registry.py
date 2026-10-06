@@ -17,10 +17,7 @@ identity predicate:
   can share the generic ``AsyncOpenAI`` runner; groq/grok/mistral share the
   wire format but use their own clients).
 
-Every accessor falls back to ``_FALLBACK_REGISTRY`` (the hardcoded source of
-truth, mirroring today's behavior) when the DB registry is empty or a service
-is missing, so a registry miss never hard-fails a request. ``_FALLBACK_REGISTRY``
-is also the source the seed migration uses to populate the collection.
+The DB is the single source of truth for all service configurations.
 """
 
 import asyncio
@@ -30,6 +27,7 @@ from pymongo.errors import OperationFailure, PyMongoError
 from config import Config
 from globals import logger
 from models.mongo_connection import db
+from src.configs.constant import Client, WireFormat
 from src.services.utils.load_service_configs import get_service_configs
 
 # NOTE: send_message is imported lazily inside _async_change_listener to avoid a
@@ -38,189 +36,19 @@ from src.services.utils.load_service_configs import get_service_configs
 
 service_config_model = db["services"]
 
-# Runtime registry, refreshed from Mongo. Falls back to _FALLBACK_REGISTRY per-field.
+# Runtime registry, refreshed from Mongo. The DB is the source of truth.
 service_registry_document = {}
 
 
 # ---------------------------------------------------------------------------
-# Hardcoded source of truth (runtime fallback + seed migration source)
-# ---------------------------------------------------------------------------
-# wire_format: openai_chat | openai_responses | anthropic | gemini | deepgram
-# client:      openai_sdk | groq_sdk | grok_http | mistral_sdk |
-#              anthropic_sdk | gemini_sdk | deepgram_sdk
-_FALLBACK_REGISTRY = {
-    "openai": {
-        "service_name": "openai",
-        "base_url": None,
-        "wire_format": "openai_responses",
-        "client": "openai_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": True,
-        "supports_reasoning": True,
-        "default_model": "gpt-4o",
-        "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
-    },
-    "openai_completion": {
-        "service_name": "openai_completion",
-        "base_url": None,  # AsyncOpenAI default -> https://api.openai.com/v1
-        "wire_format": "openai_chat",
-        "client": "openai_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": True,
-        "supports_reasoning": False,
-        "default_model": None,
-        "prompt_role": "developer",  # openai_completion sends the system prompt as role "developer"
-        "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
-    },
-    "gemini": {
-        "service_name": "gemini",
-        "base_url": None,
-        "wire_format": "gemini",
-        "client": "gemini_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": False,
-        "supports_reasoning": True,
-        "default_model": "gemini-2.5-flash",
-        "apikey_status_codes": {"invalid": [400], "unauthorized": [403], "limited": [429]},
-    },
-    "anthropic": {
-        "service_name": "anthropic",
-        "base_url": None,
-        "wire_format": "anthropic",
-        "client": "anthropic_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": False,
-        "supports_reasoning": True,
-        "default_model": "claude-3-7-sonnet-latest",
-        "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
-    },
-    "groq": {
-        "service_name": "groq",
-        "base_url": None,
-        "wire_format": "openai_chat",
-        "client": "groq_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": True,
-        "supports_reasoning": False,
-        "default_model": "llama-3.3-70b-versatile",
-        "apikey_status_codes": {"invalid": [400, 401], "unauthorized": [403], "limited": [422, 429, 498]},
-    },
-    "grok": {
-        "service_name": "grok",
-        "base_url": "https://api.x.ai/v1",
-        "wire_format": "openai_chat",
-        "client": "grok_http",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": True,
-        "supports_reasoning": False,
-        "default_model": "grok-4-fast",
-        "apikey_status_codes": {"invalid": [400, 401], "unauthorized": [403], "limited": [429]},
-    },
-    "open_router": {
-        "service_name": "open_router",
-        "base_url": "https://openrouter.ai/api/v1",
-        "wire_format": "openai_chat",
-        "client": "openai_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": False,
-        "supports_reasoning": False,
-        "default_model": "deepseek/deepseek-chat-v3-0324:free",
-        "prompt_role": "developer",  # open_router sends the system prompt as role "developer"
-        "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [402, 429]},
-    },
-    "mistral": {
-        "service_name": "mistral",
-        "base_url": None,
-        "wire_format": "openai_chat",
-        "client": "mistral_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": False,
-        "supports_reasoning": False,
-        "default_model": "mistral-medium-latest",
-        "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
-    },
-    "deepgram": {
-        "service_name": "deepgram",
-        "base_url": None,
-        "wire_format": "deepgram",
-        "client": "deepgram_sdk",
-        "supports_streaming": False,
-        "supports_tool_calls": False,
-        "supports_stream_usage": False,
-        "supports_reasoning": False,
-        "default_model": "nova-3",
-        "apikey_status_codes": {"invalid": [400, 401, 404], "unauthorized": [403], "limited": [402, 413, 422, 429]},
-    },
-    "neev_cloud": {
-        "service_name": "neev_cloud",
-        "base_url": "https://inference.ai.neevcloud.com/v1",
-        "wire_format": "openai_chat",
-        "client": "openai_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": False,
-        "supports_reasoning": False,
-        "default_model": "gpt-oss-120b",
-        "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
-    },
-    "moonshot": {
-        "service_name": "moonshot",
-        "base_url": "https://api.moonshot.ai/v1",
-        "wire_format": "openai_chat",
-        "client": "openai_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": True,
-        "supports_reasoning": True,
-        "default_model": "kimi-k2.6",
-        "apikey_status_codes": {"invalid": [401], "unauthorized": [403], "limited": [429]},
-    },
-    # deepseek is openai_chat + openai_sdk -> routes through the generic runner.
-    # Its old per-service stream emitted content+reasoning in a single combined
-    # yield; the generic runner emits them as separate yields. The final
-    # accumulated response is identical (validated under the golden harness).
-    "deepseek": {
-        "service_name": "deepseek",
-        "base_url": "https://api.deepseek.com",
-        "wire_format": "openai_chat",
-        "client": "openai_sdk",
-        "supports_streaming": True,
-        "supports_tool_calls": True,
-        "supports_stream_usage": True,
-        "supports_reasoning": True,
-        "default_model": "deepseek-v4-flash",
-        "apikey_status_codes": {"invalid": [400, 401], "unauthorized": [403], "limited": [429]},
-    },
-}
-
-
-# ---------------------------------------------------------------------------
-# Lookup helpers (registry first, hardcoded fallback second)
+# Lookup helpers (registry only)
 # ---------------------------------------------------------------------------
 def get_service(name):
     """Return the registry doc for ``name``, or None if unknown.
 
-    Prefers the live DB document, then merges over the hardcoded fallback so a
-    partially-specified DB row still resolves every field.
+    The DB is the source of truth; no fallback to hardcoded values.
     """
-    fallback = _FALLBACK_REGISTRY.get(name)
-    live = service_registry_document.get(name)
-    if live is None and fallback is None:
-        return None
-    if live is None:
-        return fallback
-    if fallback is None:
-        return live
-    merged = {**fallback, **{k: v for k, v in live.items() if v is not None}}
-    return merged
+    return service_registry_document.get(name)
 
 
 def _field(name, key, default=None):
@@ -258,12 +86,24 @@ def prompt_role(name):
 # ---------------------------------------------------------------------------
 def uses_openai_sdk(name):
     """Set C — services callable via a generic AsyncOpenAI(base_url=...) runner."""
-    return client(name) == "openai_sdk" and wire_format(name) == "openai_chat"
+    return client(name) == Client.OPENAI_SDK and wire_format(name) == WireFormat.OPENAI_CHAT
 
 
 def has_openai_choices_shape(name):
     """Set A — response uses the OpenAI ``choices[0].message`` shape."""
-    return wire_format(name) == "openai_chat"
+    return wire_format(name) == WireFormat.OPENAI_CHAT
+
+
+def has_gemini_shape(name):
+    return wire_format(name) == WireFormat.GEMINI
+
+
+def has_anthropic_shape(name):
+    return wire_format(name) == WireFormat.ANTHROPIC
+
+
+def has_openai_responses_shape(name):
+    return wire_format(name) == WireFormat.OPENAI_RESPONSES
 
 
 def uses_string_tool_choice(name):
@@ -273,7 +113,7 @@ def uses_string_tool_choice(name):
     a string tool_choice ("none"/"auto"/function name), unlike anthropic/gemini
     which use structured objects.
     """
-    return wire_format(name) in ("openai_chat", "openai_responses")
+    return wire_format(name) in (WireFormat.OPENAI_CHAT, WireFormat.OPENAI_RESPONSES)
 
 
 def supports_streaming(name):
@@ -293,9 +133,33 @@ def supports_reasoning(name):
     return bool(_field(name, "supports_reasoning", False))
 
 
+def reasoning_param_style(name):
+    """Which reasoning/thinking param shape this service expects, or None if unsupported."""
+    return _field(name, "reasoning_param_style", None)
+
+
+def extra_body(name):
+    """Static extra_body params always merged into this service's request, regardless of reasoning."""
+    return _field(name, "extra_body", {})
+
+
+def reasoning_extra_body(name):
+    """extra_body params merged in only when reasoning is enabled for this service."""
+    return _field(name, "reasoning_extra_body", {})
+
+
 def apikey_status_codes(name):
     """Return the per-status HTTP code map for ``name`` (with safe default)."""
     return _field(name, "apikey_status_codes", {})
+
+
+def web_search_tool_config(name):
+    if wire_format(name) in (WireFormat.OPENAI_CHAT, WireFormat.OPENAI_RESPONSES):
+        return {
+            "unfiltered": {"type": "web_search_preview"},
+            "filtered": {"type": "web_search"},
+        }
+    return None
 
 
 # ---------------------------------------------------------------------------

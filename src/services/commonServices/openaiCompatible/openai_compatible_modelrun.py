@@ -46,7 +46,8 @@ async def openai_compatible_stream(configuration, apiKey, service):
                 if reasoning_delta:
                     yield {"content": None, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": reasoning_delta}
             if delta.content:
-                yield {"content": delta.content, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
+                content = delta.content
+                yield {"content": content, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     idx = tc.index

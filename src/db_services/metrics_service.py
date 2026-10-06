@@ -1,69 +1,66 @@
 import json
 import traceback
-import uuid
-from datetime import datetime
 
 from globals import logger
 from models.index import combined_models
 
 # from src.services.utils.send_error_webhook import send_error_to_webhook
 from src.configs.constant import redis_keys
+from src.controllers.conversationController import add_tool_call_data_in_history
 
 from ..services.cache_service import store_in_cache
 
 postgres = combined_models["pg"]
 timescale = combined_models["timescale"]
 
+CONVERSATION_CACHE_TTL = 2 * 60 * 60  # 2 hours
 
 async def save_conversations_to_redis(conversations, version_id, thread_id, sub_thread_id, history_params):
     """
     Save conversations to Redis with conversation management logic.
+    Only role, content and user_urls are stored; tool messages and empty entries are dropped.
     If conversation array has more than 9 items, remove first 2 and add current conversation.
     """
     try:
         # Create Redis key
         redis_key = f"{redis_keys['conversation_']}{version_id}_{thread_id}_{sub_thread_id}"
-        # Start with existing conversations from database
-        conversation_list = conversations or []
 
-        # Create current conversation entries (user + assistant)
-        current_time = datetime.now().isoformat() + "+00:00"
+        user_urls = history_params.get("user_urls") or []
+        current_user = {"role": "user", "content": history_params.get("user") or ""}
+        if user_urls:
+            current_user["user_urls"] = user_urls
+        current_assistant = {"role": "assistant", "content": history_params.get("message", "") or ""}
+        current_turn = [current_user, current_assistant]
 
-        # User message
-        user_conversation = {
-            "content": history_params["user"],
-            "role": "user",
-            "createdAt": current_time,
-            "id": int(str(uuid.uuid4().int)[:8]),  # Generate 8-digit ID
-            "function": None,
-            "is_reset": False,
-            "tools_call_data": history_params.get("tools_call_data"),
-            "error": "",
-            "urls": history_params.get("urls", []),
-        }
+        # Same tool-call note getThread adds to assistant messages loaded from PG
+        tools_call_data = history_params.get("tools_call_data") or []
+        if tools_call_data:
+            current_turn = await add_tool_call_data_in_history(
+                [current_user, {"role": "tools_call", "tools_call_data": tools_call_data}, current_assistant]
+            )
 
-        # Assistant message
-        assistant_conversation = {
-            "content": history_params.get("message", ""),
-            "role": "assistant",
-            "createdAt": current_time,
-            "id": int(str(uuid.uuid4().int)[:8]),  # Generate 8-digit ID
-            "function": {},
-            "is_reset": False,
-            "tools_call_data": None,
-            "error": None,
-            "urls": [],
-        }
-
-        # Add new conversations first
-        conversation_list.extend([user_conversation, assistant_conversation])
+        conversation_list = []
+        for message in [*(conversations or []), *current_turn]:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if not role or role in ("tools_call", "tool"):
+                continue
+            content = message.get("content") or ""
+            urls = message.get("user_urls") or []
+            if not str(content).strip() and not urls:
+                continue
+            entry = {"role": role, "content": content}
+            if urls:
+                entry["user_urls"] = urls
+            conversation_list.append(entry)
 
         # Manage conversation array size - if more than 9, remove first 2
         if len(conversation_list) > 9:
             # Remove first 2 conversations
             conversation_list = conversation_list[2:]
 
-        await store_in_cache(redis_key, conversation_list)
+        await store_in_cache(redis_key, conversation_list, ttl=CONVERSATION_CACHE_TTL)
 
         logger.info(f"Saved conversations to Redis with key: {redis_key}")
 
@@ -165,6 +162,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
         "error": str(data_object.get("error", "")) if not data_object.get("success", False) else (history_params.get("error") or None),
         "user_feedback": 0,
         "tools_call_data": history_params.get("tools_call_data", []),
+        "annotations": history_params.get("annotations", []),
         "message_id": str(history_params.get("message_id")),
         "sub_thread_id": history_params.get("sub_thread_id"),
         "thread_id": history_params.get("thread_id"),
@@ -188,6 +186,7 @@ def build_history_and_metrics_payload(dataset, history_params, version_id):
             }),
             "expected_cost": data_object.get("expectedCost", 0),
             "cost": data_object.get("cost_breakdown") or {},
+            "credits": data_object.get("credits", 0),
         },
         "variables": data_object.get("variables") or {},
         "latency": latency_data,
@@ -476,6 +475,7 @@ async def publish_plan_history_update(
             "chatbot_message": "",
             "error": metrics.get("last_error"),
             "tools_call_data": metrics.get("tools_call_data", []),
+            "annotations": metrics.get("annotations", []),
             "message_id": message_id,
             "sub_thread_id": sub_thread_id,
             "thread_id": thread_id,

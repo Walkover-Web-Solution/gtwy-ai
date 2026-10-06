@@ -18,6 +18,7 @@ class StreamingService:
         self.rtlayer_cred = rtlayer_cred or {}
         self.queue = asyncio.Queue() if mode == "sse" else None
         self._started = False
+        self.redirect_delta_to_reasoning = False
 
     async def _emit(self, payload: dict):
         if self.mode == "sse":
@@ -41,6 +42,9 @@ class StreamingService:
         })
 
     async def emit_delta(self, content: str):
+        if self.redirect_delta_to_reasoning:
+            await self._emit({"event": "reasoning", "content": content})
+            return
         await self._emit({"event": "delta", "content": content})
 
     async def emit_reasoning(self, content: str):
@@ -56,6 +60,15 @@ class StreamingService:
         payload = {"event": "tool_result", "name": name, "content": content, "call_id": call_id}
         if type:
             payload["type"] = type
+        await self._emit(payload)
+
+    async def emit_browser_handoff(self, live_url: str, message: str, call_id: str = None, session_id: str = None):
+        """Gtwy_Browser asked the user to act in the live browser view (e.g. log in)."""
+        payload = {"event": "browser_handoff", "live_url": live_url, "message": message}
+        if call_id:
+            payload["call_id"] = call_id
+        if session_id:
+            payload["session_id"] = session_id
         await self._emit(payload)
 
     async def emit_template_response(self, message_id: str, content: dict, metadata: dict | None = None):

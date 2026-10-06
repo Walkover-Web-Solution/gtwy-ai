@@ -1,6 +1,7 @@
 """Response formatter for the Anthropic service (chat + batch)."""
 
 from src.services.utils.formatters.finish_reason import finish_reason_mapping
+from src.services.utils.formatters.web_search_extractor import extract_web_search_annotations
 
 
 def format_anthropic(response, tools_data, images, isBatch=False):
@@ -21,7 +22,7 @@ def _format_batch(response, tools_data, images):
             "role": response.get("role", "assistant"),
             "tools_data": tools_data or {},
             "images": images,
-            "annotations": None,
+            "annotations": extract_web_search_annotations(response, "anthropic") or None,
             "fallback": response.get("fallback") or False,
             "firstAttemptError": response.get("firstAttemptError") or "",
             "finish_reason": finish_reason_mapping(response.get("stop_reason", "")),
@@ -50,6 +51,7 @@ def _format_chat(response, tools_data, images):
             "model" : response.get("model", None),
             "role" : response.get("role", None),
             "tools_data": tools_data or {},
+            "annotations": extract_web_search_annotations(response, "anthropic") or None,
             "fallback": response.get("fallback") or False,
             "firstAttemptError": response.get("firstAttemptError") or "",
             "finish_reason": finish_reason_mapping(response.get("stop_reason", "")),

@@ -24,6 +24,7 @@ from ..commonServices.anthropic.anthropic_batch import AnthropicBatch
 from ..commonServices.anthropic.anthropicCall import Anthropic
 from ..commonServices.baseService.utils import sendResponse
 from ..commonServices.deepgram.deepgramCall import Deepgram
+from ..commonServices.typesafe.typesafeCall import TypeSafe
 from ..commonServices.Google.geminiCall import GeminiHandler
 from ..commonServices.Google.gemini_batch import GeminiBatch
 from ..commonServices.grok.grokCall import Grok
@@ -132,7 +133,14 @@ class Helper:
         return prev_configuration
 
     @staticmethod
-    def replace_variables_in_prompt(prompt, Aviliable_variables):
+    def replace_variables_in_prompt(prompt, Aviliable_variables, service=None, configuration=None):
+        # Split prompt for Anthropic if service and configuration are provided
+        if service == service_name["anthropic"] and configuration is not None:
+            from ..commonServices.anthropic.anthropic_utils import split_prompt_for_anthropic
+            missing_vars = split_prompt_for_anthropic(configuration.get("prompt"), Aviliable_variables, configuration, service)
+            # Return early after splitting - no variable replacement needed
+            return configuration.get("prompt"), missing_vars
+
         missing_variables = {}
         placeholders = re.findall(r"\{\{(.*?)\}\}", prompt)
         flattened_json = Helper.custom_flatten(Aviliable_variables)
@@ -273,6 +281,9 @@ class Helper:
             # deepseek shares the generic runner but keeps its own handler
             # (different conversation builder); must precede the uses_openai_sdk branch.
             class_obj = Deepseek(params)
+        elif service == service_name["typesafe"]:
+            # TypeSafe/Jev: non-chat "System One" API (state + typed questions -> answers)
+            class_obj = TypeSafe(params)
         elif uses_openai_sdk(service):
             # open_router / neev_cloud / moonshot / openai_completion
             # (+ future openai_sdk services)
@@ -487,6 +498,10 @@ class Helper:
 def build_rerun_queue_message(log, data_to_send):
     """Build an independent queue message for a single rerun from the conversation log."""
     body = copy.deepcopy(data_to_send.get("body", {}))
+    # The middleware's hold belongs to the /rerun request itself, not to the N
+    # queued copies — carrying it here made every consumer release the same
+    # hold (free credits). The route releases it once after queueing.
+    body.pop("credit_hold_token", None)
     original_thread_id = log.get("thread_id")
     original_sub_thread_id = log.get("sub_thread_id")
     rerun_suffix = uuid.uuid4().hex[:8]
@@ -513,7 +528,13 @@ def build_rerun_queue_message(log, data_to_send):
     if bridge_id and bridge_id in bridge_confs:
         bridge_confs[bridge_id]["variables"] = merged_variables
 
-    body.setdefault("settings", {}).update({"response_format": {"type": "default"}, "stream": False})
+    stored_response_format = log.get("response_format") or {}
+    if stored_response_format.get("type") == "webhook" and (stored_response_format.get("cred") or {}).get("url"):
+        rerun_response_format = stored_response_format
+    else:
+        rerun_response_format = {"type": "default"}
+
+    body.setdefault("settings", {}).update({"response_format": rerun_response_format, "stream": False})
     return {"body": body, "state": data_to_send.get("state", {}), "path_params": data_to_send.get("path_params", {})}
 
 

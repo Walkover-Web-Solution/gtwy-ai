@@ -5,10 +5,12 @@ from fastapi import HTTPException, Request
 
 from config import Config
 from globals import logger
+from src.configs.blocked_orgs import is_org_blocked
 from src.services.proxy.Proxyservice import (
     get_proxy_details_by_token,
     validate_proxy_pauthkey,
 )
+from src.services.proxy.embed_service import resolve_gtwy_embed_token
 from src.services.utils.time import Timer
 from src.services.token_service import is_token_blacklisted
 from globals import *
@@ -80,7 +82,14 @@ async def jwt_middleware(request: Request):
                 raise HTTPException(status_code=498, detail="invalid token")
             if await is_token_blacklisted(token):
                 raise HTTPException(status_code=401, detail="token revoked")
-            check_token = jwt.decode(token, Config.SecretKey, algorithms=["HS256"])
+            # A gtwy embed token carries folder_id at the top level; a normal token
+            # nests it under extraDetails. So a top-level folder_id means this is an
+            # embed token, signed with the org's own secret, not Config.SecretKey.
+            decoded_token = jwt.decode(token, options={"verify_signature": False})
+            if decoded_token.get("folder_id"):
+                check_token = await resolve_gtwy_embed_token(token, decoded_token)
+            else:
+                check_token = jwt.decode(token, Config.SecretKey, algorithms=["HS256"])
         elif request.headers.get("proxy_auth_token") or request.headers.get("pauthkey"):
             check_token = await make_data_if_proxy_token_given(request)
 
@@ -88,6 +97,8 @@ async def jwt_middleware(request: Request):
             check_token['org']['id'] = str(check_token['org']['id'])
             request.state.profile = check_token
             request.state.org_id = str(check_token.get('org', {}).get('id'))
+            if await is_org_blocked(request.state.org_id):
+                raise HTTPException(status_code=403, detail="Organization is disabled")
             meta = check_token['user'].get('meta', {})
             if isinstance(meta, dict):
                 request.state.embed = meta.get('type', False) == 'embed' or False
@@ -98,6 +109,8 @@ async def jwt_middleware(request: Request):
             return 
         
         raise HTTPException(status_code=404, detail="unauthorized user")        
+    except HTTPException:
+            raise
     except Exception as err:
             traceback.print_exc()
             logger.error(f"middleware error => {str(err)}")
