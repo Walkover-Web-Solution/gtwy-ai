@@ -94,3 +94,11 @@ class Config:
     # never rewrites past charges. MUST match Node's GTWY_COMMISSION_PCT, or
     # background AI jobs are billed at a different rate from main calls.
     GTWY_COMMISSION_PCT = os.getenv("GTWY_COMMISSION_PCT")
+    # File bridge: turns attachments a model cannot read (CSV, Word, audio, images
+    # on text-only models, ...) into text before the call. Helper models run on the
+    # org's own key when it has one, otherwise on the platform key (wallet-billed).
+    FILE_BRIDGE_ENABLED = (os.getenv("FILE_BRIDGE_ENABLED") or "true").lower() not in ("false", "0", "no")
+    FILE_BRIDGE_GEMINI_MODEL = os.getenv("FILE_BRIDGE_GEMINI_MODEL") or "gemini-2.5-flash"
+    FILE_BRIDGE_DEEPGRAM_MODEL = os.getenv("FILE_BRIDGE_DEEPGRAM_MODEL") or "nova-3"
+    FILE_BRIDGE_MAX_BYTES = int(os.getenv("FILE_BRIDGE_MAX_BYTES") or 25 * 1024 * 1024)
+    FILE_BRIDGE_MAX_CHARS_PER_FILE = int(os.getenv("FILE_BRIDGE_MAX_CHARS_PER_FILE") or 30_000)

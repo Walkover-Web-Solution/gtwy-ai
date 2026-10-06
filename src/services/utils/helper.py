@@ -38,6 +38,7 @@ from ..commonServices.openAI.openai_response import OpenaiResponse
 from ..commonServices.openaiCompatible.openai_compatible_call import OpenAICompatibleHandler
 from ..cache_service import make_json_serializable
 from src.configs.service_registry import uses_openai_sdk
+from src.services import file_bridge
 
 
 class Helper:
@@ -265,6 +266,9 @@ class Helper:
         return variables
 
     async def create_service_handler(params, service):
+        # Turn attachments this service/model cannot read into text. Runs here so the
+        # primary call, fallbacks and the reviewer all get it.
+        params = await file_bridge.prepare(params, service)
         class_obj = None
         if service == service_name["openai"]:
             class_obj = OpenaiResponse(params)

@@ -133,14 +133,16 @@ class add_configuration_data_to_body:
                 for url in body.get("user_urls", [])
                 if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
             ]
-            audios = [
+            # Any attachment counts as a message: the file bridge reads PDFs, CSVs,
+            # documents and video for models that cannot.
+            attachments = [
                 url.get("url")
                 for url in body.get("user_urls", [])
-                if isinstance(url, dict) and url.get("type") == "audio" and url.get("url")
-            ]
+                if isinstance(url, dict) and url.get("url")
+            ] + (body.get("files") or [])
             batch = body.get("batch") or []
             is_rerun = bool(body.get("message_ids")) or bool(body.get("thread_id") and body.get("sub_thread_id"))
-            if not is_rerun and user is None and len(images) == 0 and len(audios) == 0 and len(batch) == 0:
+            if not is_rerun and user is None and len(images) == 0 and len(attachments) == 0 and len(batch) == 0:
                 raise HTTPException(status_code=400, detail={"success": False, "error": "User message is compulsory"})
             if not (service in model_config_document and model in model_config_document[service]):
                 raise HTTPException(status_code=400, detail={"success": False, "error": "model or service does not exist!"})
