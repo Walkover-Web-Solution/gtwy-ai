@@ -520,7 +520,18 @@ async def chat(request_body):
             result = {"success": False, "error": original_error, "response": {"usage": {}}, "modelResponse": {}}
 
         # Retry mechanism with fallback configuration
-        if execution_failed and parsed_data.get("settings", {}).get("fall_back") and parsed_data["settings"]["fall_back"].get("is_enable", False) and fallback_allowed_on_plan(parsed_data):
+        fallback_enabled = (parsed_data.get("settings", {}).get("fall_back") or {}).get("is_enable", False) and fallback_allowed_on_plan(parsed_data)
+        # A response cut off by a token limit gets the same fallback retry as an error.
+        truncated = not execution_failed and (result.get("response") or {}).get("data", {}).get("finish_reason") == "truncated"
+        if truncated and fallback_enabled:
+            original_error = f"Response truncated by token limit on {original_service}/{parsed_data['model']}"
+            # Primary tokens were really spent; bill them even though usage is rebuilt for the fallback.
+            parsed_data["tokens"] = params["token_calculator"].calculate_total_cost(parsed_data["model"], parsed_data["service"])
+            if parsed_data.get("wallet"):
+                parsed_data["_wallet_primary_cost"] = parsed_data["tokens"].get("total_cost") or 0
+            primary = (result, params, class_obj, parsed_data.get("apikey"), parsed_data.get("wallet"))
+
+        if (execution_failed or truncated) and fallback_enabled:
             try:
                 # Store original configuration
                 fallback_config = parsed_data["settings"]["fall_back"]
@@ -578,15 +589,23 @@ async def chat(request_body):
                 logger.error(
                     f"Fallback attempt failed with {parsed_data['service']}/{parsed_data['model']}: {retry_error}"
                 )
-                fallback_service = parsed_data["service"]
-                fallback_error_code = getattr(retry_error, "status_code", None)
-                # Restore original configuration before raising
-                parsed_data["model"] = original_model
-                parsed_data["service"] = original_service
-                parsed_data["firstAttemptError"] = (
-                        f"Original attempt failed with {original_service}/{original_model}: {original_error}. Retried with {fallback_config['service']}/{fallback_config['model']}"
-                    )
-                raise retry_error from original_exception
+                if truncated:
+                    # The primary answer was usable, just cut off: return it rather than an error.
+                    result, params, class_obj, parsed_data["apikey"], parsed_data["wallet"] = primary
+                    parsed_data["model"], parsed_data["service"] = original_model, original_service
+                    parsed_data["configuration"]["model"] = original_model
+                    if parsed_data["wallet"]:
+                        parsed_data.pop("_wallet_primary_cost", None)  # primary is billed via usage again
+                else:
+                    fallback_service = parsed_data["service"]
+                    fallback_error_code = getattr(retry_error, "status_code", None)
+                    # Restore original configuration before raising
+                    parsed_data["model"] = original_model
+                    parsed_data["service"] = original_service
+                    parsed_data["firstAttemptError"] = (
+                            f"Original attempt failed with {original_service}/{original_model}: {original_error}. Retried with {fallback_config['service']}/{fallback_config['model']}"
+                        )
+                    raise retry_error from original_exception
 
         if not result["success"]:
             raise ValueError(result)
