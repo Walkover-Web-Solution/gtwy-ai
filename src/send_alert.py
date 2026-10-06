@@ -31,6 +31,7 @@ async def send_alert(
     api_collection=None,
     is_external_error=False,
     error_location=None,
+    webhook_url=None,
 ):
     try:
         api_collection = api_collection or {}
@@ -39,7 +40,7 @@ async def send_alert(
         # Internal errors: Send directly to default webhook
         if not is_external_error:
             payload = build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api_name, error_log, service)
-            await send_internal_alert(payload, error_location)
+            await send_internal_alert(payload, error_location, webhook_url=webhook_url)
             return
 
         # External errors: Process through webhook configurations
@@ -48,7 +49,7 @@ async def send_alert(
             raise BadRequestException("Webhook data is missing in the response.")
 
         webhook_data = result["webhook_data"]
-        
+
         # Add default alert configuration
         webhook_data.append({
             "org_id": org_id,

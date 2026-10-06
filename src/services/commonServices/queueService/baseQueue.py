@@ -1,11 +1,14 @@
 import asyncio
 import json
+import traceback
 
 from aio_pika import DeliveryMode, Message, RobustConnection, connect_robust
 from aio_pika.abc import AbstractIncomingMessage
 
 import globals as _globals
 from config import Config
+from src.configs.constant import alert_webhook
+from src.send_alert import send_alert
 from src.services.utils.logger import logger
 
 
@@ -129,6 +132,22 @@ class BaseQueue:
             except Exception as e:
                 last_error = e
                 logger.error(f"Publish attempt {attempt + 1} failed to {target_queue}: {e}")
+
+                try:
+                    tb_str = traceback.format_exc()
+                    await send_alert(
+                        error_type=f"rabbitmq_publish_failure_{target_queue}",
+                        error_log={
+                            "type": f"rabbitmq_publish_failure_{target_queue}",
+                            "token": None,
+                            "reason": tb_str if tb_str.strip() else str(e),
+                            "environment": Config.ENVIRONMENT,
+                        },
+                        is_external_error=False,
+                        webhook_url=alert_webhook["rabbit_mq_failure_url"],
+                    )
+                except Exception as webhook_err:
+                    logger.error(f"Failed to send webhook alert for publish failure: {webhook_err}")
 
                 if attempt < max_retries - 1:
                     # Exponential backoff

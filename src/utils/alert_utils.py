@@ -1,17 +1,17 @@
 from config import Config
-from src.configs.constant import alert_types
+from src.configs.constant import alert_types, alert_webhook
 from src.services.commonServices.baseService.baseService import sendResponse
 from src.services.utils.apiservice import fetch
 from src.utils.alert_template import (
-    create_missing_vars,
-    metrix_limit_reached,
-    create_error_payload,
-    create_retry_mechanism_payload,
     create_broadcast_response_payload,
+    create_error_payload,
+    create_missing_vars,
     create_response_format,
+    create_retry_mechanism_payload,
+    metrix_limit_reached,
 )
 
-DEFAULT_WEBHOOK_URL = "https://flow.sokt.io/func/scriYP8m551q"
+DEFAULT_WEBHOOK_URL = alert_webhook["default_webhook_url"]
 DEFAULT_ALERT_TYPES = [alert_types["error"], alert_types["variable"], alert_types["retry_mechanism"]]
 
 
@@ -52,23 +52,23 @@ def build_webhook_payload(details_payload, error_type, bridge_id, org_id, org_na
         "service": service,
         "source": "api",
     }
-    
+
     if api_name is not None:
         payload["api_name"] = api_name
     if bridge_name is not None:
         payload["bridge_name"] = bridge_name
     if is_embed is not None:
         payload["is_embed"] = is_embed
-    
+
     return payload
 
-async def send_internal_alert(payload, error_location):
+async def send_internal_alert(payload, error_location, webhook_url=None):
     if error_location:
         payload["error_location"] = error_location
     if Config.ENVIRONMENT:
         payload["ENVIRONMENT"] = Config.ENVIRONMENT
-    
-    await fetch(DEFAULT_WEBHOOK_URL, method="POST", json_body=payload)
+
+    await fetch(webhook_url or DEFAULT_WEBHOOK_URL, method="POST", json_body=payload)
 
 
 async def send_external_alert(webhook_url, headers, error_type, payload, response, user_question, variables):
