@@ -8,7 +8,6 @@ from aio_pika.abc import AbstractIncomingMessage
 import globals as _globals
 from config import Config
 from src.configs.constant import alert_webhook
-from src.send_alert import send_alert
 from src.services.utils.logger import logger
 
 
@@ -134,6 +133,9 @@ class BaseQueue:
                 logger.error(f"Publish attempt {attempt + 1} failed to {target_queue}: {e}")
 
                 try:
+                    # Lazy import: send_alert -> alert_utils -> baseService -> queueLogService -> here (circular)
+                    from src.send_alert import send_alert
+
                     tb_str = traceback.format_exc()
                     await send_alert(
                         error_type=f"rabbitmq_publish_failure_{target_queue}",
