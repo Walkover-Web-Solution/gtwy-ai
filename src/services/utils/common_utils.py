@@ -1480,18 +1480,14 @@ def restructure_json_schema(response_type, service):
 
 
 
-def model_supports_json_schema_or_text(model_config):
+def model_supports_response_type(model_config, rtype):
     """
-    Return True if the model config advertises a json_schema response_type option.
+    Return True if the model config advertises `rtype` among its response_type options.
 
     The model config document stores supported response types under
     configuration.response_type.options (e.g. [{"key": "type", "type": "json_schema"}]).
-    Two checks, in order:
-      1. Does the model config expose a response_type field at all? If not, the model
-         has no configurable response format, so json_schema isn't supported.
-      2. If it does, but the options list can't be determined, assume support (so
-         configured json_schema requests are not silently downgraded). Otherwise check
-         whether json_schema is among the advertised options.
+      1. No response_type field at all -> the model has no configurable response format.
+      2. Options list can't be determined -> assume support (don't silently downgrade).
     """
     if not isinstance(model_config, dict):
         return True
@@ -1502,9 +1498,22 @@ def model_supports_json_schema_or_text(model_config):
 
     options = response_type.get("options")
     if not isinstance(options, list):
-        return (False, False)
-    return ((any(isinstance(opt, dict) and opt.get("type") == "json_schema" for opt in options)),(
-        any(isinstance(opt, dict) and opt.get("type") == "text" for opt in options)))
+        return False
+    return any(isinstance(opt, dict) and opt.get("type") == rtype for opt in options)
+
+def _schema_prompt_instruction(schema):
+    """Build the prompt instruction that asks the model to follow `schema`."""
+    # The json_schema value is often a wrapper ({"name":..., "schema": {...}, "strict":...}),
+    # not the bare schema. Unwrap it so we inline the actual schema, not its metadata.
+    schema_body = schema.get("schema", schema) if isinstance(schema, dict) else schema
+    schema_text = (
+        json.dumps(schema_body, ensure_ascii=False) if isinstance(schema_body, (dict, list)) else str(schema_body)
+    )
+    return (
+        "Below is a JSON Schema describing the required response shape, not the response "
+        "itself. Reply with ONLY a JSON object that is a valid instance of this schema:\n"
+        f"{schema_text}"
+    )
 
 
 def normalize_response_type(custom_config, service, model_config=None):
@@ -1514,13 +1523,14 @@ def normalize_response_type(custom_config, service, model_config=None):
     - type == "text" with a "text" value: fold the text into the prompt and pass
       response_type through as a plain {"type": "text"}.
     - type == "text" without a "text" value: leave as-is.
-    - type == "json_object" carrying a "json_schema": promote it to json_schema (then
-      the json_schema handling below applies).
-    - type == "json_object" without a schema: leave untouched.
+    - type == "json_object":
+        * if the model supports json_object -> pass through as plain {"type": "json_object"}.
+        * otherwise -> instruct the model via the prompt to reply with JSON and drop
+          response_type (the provider would reject an unsupported value).
     - type == "json_schema":
         * if the model supports json_schema -> restructure (unchanged behavior).
         * if the model does NOT support json_schema -> inline the schema into the prompt
-          and downgrade response_type to plain {"type": "json_object"}.
+          and downgrade response_type to plain {"type": "json_object"} when supported.
     """
     response_type = custom_config.get("response_type")
     if not isinstance(response_type, dict):
@@ -1533,40 +1543,36 @@ def normalize_response_type(custom_config, service, model_config=None):
         if text_value:
             # Store the text instruction in a separate key to be added to system message
             custom_config["_text_instruction"] = text_value
-        _, is_text_support = model_supports_json_schema_or_text(model_config)
-        if not is_text_support:
+        if not model_supports_response_type(model_config, "text"):
             custom_config.pop("response_type", None)
         return
 
     if rtype == "json_object":
+        # Providers only accept the bare {"type": "json_object"}; a schema stored alongside
+        # it (e.g. from the integration config tab) is passed to the model via the prompt.
+        schema = response_type.get("json_schema")
+        if schema:
+            custom_config["_json_schema_instruction"] = _schema_prompt_instruction(schema)
+        if model_supports_response_type(model_config, "json_object"):
+            custom_config["response_type"] = {"type": "json_object"}
+        else:
+            custom_config.setdefault("_json_schema_instruction", "Reply with ONLY a valid JSON object. Do not include any text outside the JSON.")
+            custom_config.pop("response_type", None)
         return
 
     if rtype == "json_schema":
-        is_json_schema_support, _ = model_supports_json_schema_or_text(model_config)
-        if is_json_schema_support:
+        if model_supports_response_type(model_config, "json_schema"):
             custom_config["response_type"] = restructure_json_schema(response_type, service)
         else:
             # Model can't enforce a json_schema: inline the schema into the prompt and
             # downgrade to plain json_object so the model still enforces valid JSON output.
-            schema = response_type.get("json_schema") or {}
-            # The json_schema value is often a wrapper ({"name":..., "schema": {...}, "strict":...}),
-            # not the bare schema. Unwrap it so we inline the actual schema, not its metadata.
-            schema_body = schema.get("schema", schema) if isinstance(schema, dict) else schema
-            schema_text = (
-                json.dumps(schema_body, ensure_ascii=False)
-                if isinstance(schema_body, (dict, list))
-                else str(schema_body)
-            )
             # Store the schema instruction in a separate key to be added to system message
-            custom_config["_json_schema_instruction"] = (
-                "Below is a JSON Schema describing the required response shape, not the response "
-                "itself. Reply with ONLY a JSON object that is a valid instance of this schema:\n"
-                f"{schema_text}"
+            custom_config["_json_schema_instruction"] = _schema_prompt_instruction(
+                response_type.get("json_schema") or {}
             )
-            # Only downgrade to json_object if the model exposes a response_type field at
-            # all (models with no response_type field don't accept the parameter at all).
-            response_type_field = isinstance(model_config, dict) and (model_config.get("configuration") or {}).get("response_type")
-            if isinstance(response_type_field, dict):
+            # Only downgrade to json_object if the model actually accepts it; otherwise
+            # drop response_type and rely on the prompt instruction alone.
+            if model_supports_response_type(model_config, "json_object"):
                 custom_config["response_type"] = {"type": "json_object"}
             else:
                 custom_config.pop("response_type", None)
