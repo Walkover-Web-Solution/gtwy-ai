@@ -74,6 +74,7 @@ async def openai_response_stream(configuration, apiKey):
     finish_reason = None
     service_tier = None
     incomplete_details = None
+    stream_error = None
     try:
         async for line in fetch_stream(url=OPENAI_RESPONSES_URL, headers=headers, json_body=payload):
             if line.startswith("event:"):
@@ -89,6 +90,19 @@ async def openai_response_stream(configuration, apiKey):
                 continue
 
             event_type = event.get("type", "")
+
+            # OpenAI reports mid-stream failures inside a 200 SSE stream: a top-level
+            # `error` event, or `response.failed` whose usage is usually null (so the
+            # usage-keyed block below would skip it). Capture the real message instead of
+            # letting the stream look empty.
+            if event_type == "error":
+                err = event.get("error") if isinstance(event.get("error"), dict) else event
+                stream_error = err.get("message") or err.get("code") or "openai stream error"
+                break
+            if event_type == "response.failed" and isinstance(event.get("response"), dict):
+                error_obj = event["response"].get("error") or {}
+                stream_error = error_obj.get("message") or error_obj.get("code") or "openai response failed"
+                break
 
             # Opportunistically capture usage/status from any event carrying a response
             # snapshot with a populated usage object. The terminal event
@@ -235,6 +249,11 @@ async def openai_response_stream(configuration, apiKey):
                             }
                     else:
                         accumulated_output.append(item)
+
+        if stream_error:
+            logger.error(f"openai stream error event: {stream_error}")
+            yield {"content": None, "tool_calls": None, "usage": usage, "finish_reason": "error", "reasoning": None, "error": stream_error}
+            return
 
         tool_calls_list = [
             {"id": k, "call_id": v["call_id"], "type": "function", "function": {"name": v["name"], "arguments": v["arguments"]}}
