@@ -428,6 +428,10 @@ def enrich_annotations(annotations, response, service):
             "query": query,
         })
 
+    if any(annotation["url"] for annotation in enriched):
+        # Real sources came back: drop link-less query records (the queries stay on every entry);
+        # failed searches are kept so their error_code is still recorded.
+        enriched = [a for a in enriched if a["url"] or a.get("type") == "web_search_error"]
     if not enriched:
         enriched = [{"type": "url_citation", "title": "Web Search", "url": "", "query": q} for q in queries]
     if not enriched:

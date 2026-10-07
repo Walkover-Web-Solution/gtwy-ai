@@ -33,7 +33,11 @@ class TokenCalculator:
 
     def calculate_usage(self, model_response):
         usage = {}
-        match self.service:
+        from src.configs.service_registry import has_openai_responses_shape  # lazy: avoid import cycle
+
+        # Every service on the Responses API (OpenAI, Grok, MiniMax, ...) reports the same usage shape
+        usage_service = "openai" if has_openai_responses_shape(self.service) else self.service
+        match usage_service:
             case "open_router" | "mistral" | "openai_completion" | "neev_cloud" | "moonshot" | "minimax":
                 usage["inputTokens"] = (model_response.get("usage") or {}).get("prompt_tokens", 0)
                 usage["outputTokens"] = (model_response.get("usage") or {}).get("completion_tokens", 0)
@@ -109,6 +113,12 @@ class TokenCalculator:
                 usage["reasoningTokens"] = (_usage.get("output_tokens_details") or {}).get(
                     "reasoning_tokens", 0
                 )
+                # Server-side web searches run in this call, billed per search from the model's web_search_cost
+                web_search_calls = sum(
+                    1 for item in model_response.get("output") or [] if isinstance(item, dict) and item.get("type") == "web_search_call"
+                )
+                if web_search_calls:
+                    self.add_web_search_calls(web_search_calls)
                 if model_response.get("service_tier"):
                     self.service_tier = model_response["service_tier"]
 

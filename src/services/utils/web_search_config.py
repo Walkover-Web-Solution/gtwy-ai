@@ -12,22 +12,21 @@ from the database instead of per-handler code:
   - ``{...}``: a single tool entry used as-is (e.g. Gemini ``{"google_search": {}}``).
   - ``{"extra_body": {...}}``: merged into extra_body instead of adding a tool (OpenRouter's plugin).
 
-  Any shape can also carry ``"endpoint": "/responses"``: the path under the service's ``base_url`` that
-  web search requests must be sent to, for providers that only offer it there (Grok, MiniMax).
-
-Handlers keep only provider mechanics (e.g. Gemini's tool-combination rules, routing Grok/MiniMax to a
-Responses endpoint); the tool payload and the per-model switch are read here.
+Providers that only offer web search on the Responses API (Grok, MiniMax) run on it natively:
+their services document has ``wire_format: openai_responses``, so they use the OpenAI Responses handler.
+Handlers keep only provider mechanics (e.g. Gemini's tool-combination rules); the tool payload and the
+per-model switch are read here.
 """
 
 import copy
 
 from src.configs.model_configuration import model_config_document
-from src.configs.service_registry import base_url, web_search_tool_config
+from src.configs.service_registry import web_search_tool_config
 
 WEB_SEARCH = "web_search"
 
 # Settings stored next to the tool entry; never part of the tool itself
-_META_KEYS = ("max_domains", "endpoint")
+_META_KEYS = ("max_domains",)
 
 
 def web_search_requested(built_in_tools):
@@ -72,34 +71,6 @@ def build_web_search_tool(service, domain_filters=None):
             return _fill_domain_placeholders(copy.deepcopy(config["filtered"]), domains[:max_domains] if max_domains else domains)
         return copy.deepcopy(config.get("unfiltered")) if config.get("unfiltered") else None
     return copy.deepcopy({key: value for key, value in config.items() if key not in _META_KEYS})
-
-
-def _tool_types(service):
-    config = web_search_tool_config(service)
-    if "unfiltered" in config or "filtered" in config:
-        entries = [config.get("unfiltered"), config.get("filtered")]
-    else:
-        entries = [config]
-    return {entry.get("type") for entry in entries if isinstance(entry, dict) and entry.get("type")}
-
-
-def has_web_search_tool(service, configuration):
-    """The request carries this service's web search tool (matched by the tool types stored in the DB)."""
-    types = _tool_types(service)
-    return bool(types) and any(
-        isinstance(tool, dict) and tool.get("type") in types for tool in configuration.get("tools") or []
-    )
-
-
-def web_search_endpoint(service):
-    """Full URL web search requests must go to (service base_url + web_search_tool.endpoint), or None."""
-    endpoint = web_search_tool_config(service).get("endpoint")
-    if not endpoint:
-        return None
-    if endpoint.startswith("http"):
-        return endpoint
-    root = base_url(service)
-    return f"{root.rstrip('/')}/{endpoint.lstrip('/')}" if root else None
 
 
 def web_search_extra_body(service):

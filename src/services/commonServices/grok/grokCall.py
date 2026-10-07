@@ -1,6 +1,5 @@
 from src.configs.constant import service_name
 from src.services.utils.ai_middleware_format import Response_formatter
-from src.services.utils.web_search_config import build_web_search_tool, use_web_search
 
 from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService
@@ -32,12 +31,6 @@ class Grok(BaseService):
 
         self.customConfig["messages"] = messages
         self.customConfig = self.service_formatter(self.customConfig, service_name["grok"])
-
-        # xAI web search is a server-side tool on the Responses API; grokModelRun routes these requests there.
-        if use_web_search(self.service, self.model, self.built_in_tools):
-            web_search_tool = build_web_search_tool(self.service, self.web_search_filters)
-            if web_search_tool:
-                self.customConfig.setdefault("tools", []).append(web_search_tool)
 
         if self.stream_mode:
             grok_response = await self.stream(self.customConfig, self.apikey, service_name["grok"])

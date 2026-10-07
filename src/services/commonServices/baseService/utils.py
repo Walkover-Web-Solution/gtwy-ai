@@ -1024,6 +1024,33 @@ def serialize_config(config) -> dict:
     return remove_nulls(serialized)
 
 
+def drop_unknown_responses_function_calls(model_response, configuration):
+    """Remove Responses API function_call items that name none of the request's own function tools.
+
+    Some providers leak their internal server plugins as plain function calls instead of running them
+    (MiniMax M2.x given the web_search tool returns ``plugin_web_search``). Executing those would return
+    nothing and the model would keep calling them until the iteration limit. Returns how many were dropped.
+    """
+    output = model_response.get("output") if isinstance(model_response, dict) else None
+    if not isinstance(output, list):
+        return 0
+    known = {
+        tool.get("name")
+        for tool in (configuration or {}).get("tools") or []
+        if isinstance(tool, dict) and tool.get("type") == "function"
+    }
+    kept = [
+        item for item in output
+        if not (isinstance(item, dict) and item.get("type") == "function_call" and item.get("name") not in known)
+    ]
+    dropped = len(output) - len(kept)
+    if dropped:
+        names = [item.get("name") for item in output if item not in kept]
+        logger.warning(f"Dropped {dropped} function call(s) to unknown tools {names}; not part of this request's tools")
+        model_response["output"] = kept
+    return dropped
+
+
 def build_accumulated_response(service, configuration, message_id, accumulated_content,
                                 final_tool_calls, final_usage, final_finish_reason, last_delta,
                                 service_tier=None, accumulated_reasoning=None):
