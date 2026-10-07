@@ -17,6 +17,7 @@ from src.services.utils.formatters.gemini_formatter import format_gemini
 from src.services.utils.formatters.grok_formatter import format_grok
 from src.services.utils.formatters.groq_formatter import format_groq
 from src.services.utils.formatters.openai_compatible_formatter import format_openai_compatible
+from src.services.utils.formatters.web_search_extractor import enrich_annotations
 from src.services.utils.formatters.openai_formatter import format_openai
 from src.services.utils.formatters.typesafe_formatter import format_typesafe
 
@@ -120,6 +121,12 @@ async def Response_formatter(response=None, service=None, tools=None, type="chat
         formatted = format_deepgram(response, tools_data, images)
     elif service == service_name["typesafe"]:
         formatted = format_typesafe(response, tools_data, images)
+
+    # One shape for stored annotations across services: url, title, query + the search data
+    if type == "chat" and isinstance(formatted, dict) and isinstance(formatted.get("data"), dict):
+        annotations = enrich_annotations(formatted["data"].get("annotations"), response, service)
+        if annotations:
+            formatted["data"]["annotations"] = annotations
 
     return _stamp_request_model(formatted, model)
 

@@ -1,6 +1,7 @@
 """Response formatter for the Groq service (OpenAI-chat shape, surfaces reasoning)."""
 
 from src.services.utils.formatters.finish_reason import finish_reason_mapping
+from src.services.utils.formatters.web_search_extractor import extract_web_search_annotations
 
 
 def format_groq(response, tools_data, images=None):
@@ -14,6 +15,7 @@ def format_groq(response, tools_data, images=None):
             "model": response.get("model", None),
             "role": message.get("role", None),
             "tools_data": tools_data or {},
+            "annotations": extract_web_search_annotations(response, "groq") or None,
             "fallback": response.get("fallback") or False,
             "finish_reason": finish_reason_mapping(response.get("choices", [{}])[0].get("finish_reason", "")),
         },

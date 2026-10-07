@@ -3,6 +3,7 @@ import json
 import traceback
 
 from globals import logger
+from src.configs.service_registry import base_url
 from src.exceptions import ApiCallError
 
 from ...utils.apiservice import fetch, fetch_stream
@@ -10,6 +11,13 @@ from ..api_executor import execute_api_call
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+
+
+def _responses_url(service):
+    """Responses API endpoint for any service with wire_format openai_responses (OpenAI, xAI Grok,
+    MiniMax, ...): the service's DB base_url + /responses."""
+    root = base_url(service) if service else None
+    return f"{root.rstrip('/')}/responses" if root else OPENAI_RESPONSES_URL
 
 
 def _openai_headers(api_key):
@@ -59,7 +67,7 @@ def remove_duplicate_ids_from_input(configuration):
     return config_copy
 
 
-async def openai_response_stream(configuration, apiKey):
+async def openai_response_stream(configuration, apiKey, service="openai"):
     """Async generator yielding normalised delta dicts for openai responses API."""
     headers = _openai_headers(apiKey)
     
@@ -76,7 +84,7 @@ async def openai_response_stream(configuration, apiKey):
     incomplete_details = None
     stream_error = None
     try:
-        async for line in fetch_stream(url=OPENAI_RESPONSES_URL, headers=headers, json_body=payload):
+        async for line in fetch_stream(url=_responses_url(service), headers=headers, json_body=payload):
             if line.startswith("event:"):
                 continue
             if not line.startswith("data:"):
@@ -299,7 +307,7 @@ async def openai_response_model(
 
             for attempt in range(max_retries + 1):
                 try:
-                    response_data, _ = await fetch(url=OPENAI_RESPONSES_URL, method="POST", headers=headers, json_body=current_config)
+                    response_data, _ = await fetch(url=_responses_url(service), method="POST", headers=headers, json_body=current_config)
                     return {"success": True, "response": response_data}
                 except Exception as error:
                     error_str = str(error)

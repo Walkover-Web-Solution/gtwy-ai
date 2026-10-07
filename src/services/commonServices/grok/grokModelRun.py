@@ -1,7 +1,5 @@
 import json
-import traceback
 
-from globals import logger
 from src.exceptions import ApiCallError
 
 from ...utils.apiservice import fetch, fetch_stream

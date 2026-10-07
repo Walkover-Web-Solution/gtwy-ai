@@ -154,12 +154,12 @@ def apikey_status_codes(name):
 
 
 def web_search_tool_config(name):
-    if wire_format(name) in (WireFormat.OPENAI_CHAT, WireFormat.OPENAI_RESPONSES):
-        return {
-            "unfiltered": {"type": "web_search_preview"},
-            "filtered": {"type": "web_search"},
-        }
-    return None
+    """The service's ``web_search_tool`` document as stored in the DB ({} when absent).
+
+    See src/services/utils/web_search_config.py for the shapes it can take.
+    """
+    raw = _field(name, "web_search_tool")
+    return raw if isinstance(raw, dict) else {}
 
 
 # ---------------------------------------------------------------------------
