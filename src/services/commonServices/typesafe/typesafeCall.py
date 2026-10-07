@@ -18,51 +18,13 @@ from src.services.utils.ai_middleware_format import Response_formatter
 
 from ..baseService.baseService import BaseService
 
+# TypeSafe answers an unknown question type with a bare 400 "Invalid request.", so check it here.
+QUESTION_TYPES = ("choice", "score", "noul")
+
 QUESTIONS_REQUIRED_ERROR = (
     "configuration.questions is required for the typesafe service. Send a map of typed questions, e.g. "
     '{"is_urgent": {"type": "noul", "instructions": "The message conveys urgency"}}.'
 )
-
-
-def _parse_questions(raw):
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError as error:
-            raise ValueError(f"configuration.questions must be a JSON object: {error}") from error
-    if not isinstance(raw, dict) or not raw:
-        raise ValueError(QUESTIONS_REQUIRED_ERROR)
-    for key, question in raw.items():
-        if not isinstance(question, dict) or not question.get("type"):
-            raise ValueError(f"configuration.questions['{key}'] must be an object with a 'type' (choice, score or noul)")
-    return raw
-
-
-def _substitute_variables(value, variables):
-    """Apply ``{{var}}`` replacement to every string leaf without touching JSON structure."""
-    if isinstance(value, str):
-        # Lazy import: helper.py imports this module to build the handler, so a
-        # top-level import here would form a cycle.
-        from src.services.utils.helper import Helper
-
-        replaced, _missing = Helper.replace_variables_in_prompt(value, variables)
-        return replaced
-    if isinstance(value, dict):
-        return {key: _substitute_variables(item, variables) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_substitute_variables(item, variables) for item in value]
-    return value
-
-
-def _build_state(user):
-    if isinstance(user, str):
-        stripped = user.strip()
-        if stripped[:1] in ("{", "["):
-            try:
-                return json.loads(stripped)
-            except json.JSONDecodeError:
-                return user
-    return user
 
 
 class TypeSafe(BaseService):
@@ -99,3 +61,46 @@ class TypeSafe(BaseService):
             "historyParams": historyParams,
             "response": response,
         }
+
+
+def _parse_questions(raw):
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"configuration.questions must be a JSON object: {error}") from error
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(QUESTIONS_REQUIRED_ERROR)
+    for key, question in raw.items():
+        if not isinstance(question, dict) or question.get("type") not in QUESTION_TYPES:
+            raise ValueError(
+                f"configuration.questions['{key}'] must be an object whose 'type' is one of: choice, score, noul"
+            )
+    return raw
+
+
+def _substitute_variables(value, variables):
+    """Apply ``{{var}}`` replacement to every string leaf without touching JSON structure."""
+    if isinstance(value, str):
+        # Lazy import: helper.py imports this module to build the handler, so a
+        # top-level import here would form a cycle.
+        from src.services.utils.helper import Helper
+
+        replaced, _missing = Helper.replace_variables_in_prompt(value, variables)
+        return replaced
+    if isinstance(value, dict):
+        return {key: _substitute_variables(item, variables) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_substitute_variables(item, variables) for item in value]
+    return value
+
+
+def _build_state(user):
+    if isinstance(user, str):
+        stripped = user.strip()
+        if stripped[:1] in ("{", "["):
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                return user
+    return user
