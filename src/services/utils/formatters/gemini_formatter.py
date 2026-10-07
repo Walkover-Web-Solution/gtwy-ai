@@ -48,15 +48,21 @@ def _format_batch(response, tools_data, images):
     }
 
 
+def _join_text(parts, thought):
+    # Parts can include server-side tool_call / tool_response parts (text=None) before the answer
+    texts = [p.get("text") for p in parts if p.get("text") and bool(p.get("thought")) == thought]
+    return "".join(texts) if texts else None
+
+
 def _format_chat(response, tools_data, images):
     candidates = response.get('candidates', [{}])
-    content = candidates[0].get('content', {}) if candidates else {}
-    parts = content.get('parts', [])
+    content = (candidates[0].get('content') or {}) if candidates else {}
+    parts = content.get('parts') or []
     return {
         "data" : {
             "id" : response.get("response_id", None),
-            "content" : next((p.get("text") for p in parts if not p.get("thought")), None),
-            "reasoning": next((p.get("text") for p in parts if p.get("thought")), None),
+            "content" : _join_text(parts, thought=False),
+            "reasoning": _join_text(parts, thought=True),
             "model" : response.get("model_version", None),
             "role" : "assistant",
             "tools_data": tools_data or {},

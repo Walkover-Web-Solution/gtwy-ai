@@ -265,6 +265,11 @@ class BaseService:
                         name=function_response['name'],
                         response=function_response_content
                     )
+                    # Echo Gemini's own function_call id back (required when built-in tools are combined
+                    # with function calling); synthetic stream ids were stripped from the call above.
+                    tool_call_id = function_response.get('tool_call_id')
+                    if isinstance(tool_call_id, str) and tool_call_id and not tool_call_id.startswith('gemini_fc_'):
+                        function_response_part.function_response.id = tool_call_id
                     configuration['contents'].append(types.Content(role='user', parts=[function_response_part]))
                 case  _:
                     pass

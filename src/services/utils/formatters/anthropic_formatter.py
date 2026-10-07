@@ -4,6 +4,20 @@ from src.services.utils.formatters.finish_reason import finish_reason_mapping
 from src.services.utils.formatters.web_search_extractor import extract_web_search_annotations
 
 
+def _join_text(content_blocks):
+    # With web search the answer is split into several text blocks (one per cited span). Adjacent
+    # blocks join directly; text separated by a search/tool block starts a new paragraph.
+    text, separated = "", False
+    for block in content_blocks or []:
+        if block.get("type") != "text":
+            separated = bool(text)
+            continue
+        if block.get("text"):
+            text += ("\n\n" if separated else "") + block["text"]
+            separated = False
+    return text or None
+
+
 def format_anthropic(response, tools_data, images, isBatch=False):
     if isBatch:
         return _format_batch(response, tools_data, images)
@@ -13,7 +27,7 @@ def format_anthropic(response, tools_data, images, isBatch=False):
 def _format_batch(response, tools_data, images):
     # Anthropic batch responses follow standard Anthropic message format
     content_blocks = response.get("content", [])
-    text_content = next((block.get("text") for block in content_blocks if block.get("type") == "text"), None)
+    text_content = _join_text(content_blocks)
     return {
         "data": {
             "id": response.get("id", None),
@@ -41,7 +55,7 @@ def _format_batch(response, tools_data, images):
 
 def _format_chat(response, tools_data, images):
     content_blocks = response.get("content", [])
-    text_content = next((b.get("text") for b in content_blocks if b.get("type") == "text"), None)
+    text_content = _join_text(content_blocks)
     thinking_content = next((b.get("thinking") for b in content_blocks if b.get("type") == "thinking"), None)
     return {
         "data" : {

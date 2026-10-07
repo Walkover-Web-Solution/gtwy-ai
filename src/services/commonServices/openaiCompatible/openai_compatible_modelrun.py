@@ -17,13 +17,45 @@ from openai import AsyncOpenAI
 
 from src.configs.service_registry import base_url, supports_reasoning, supports_stream_usage
 from src.exceptions import ApiCallError
+from src.services.utils.responses_api_adapter import function_tool_names, to_chat_completion, to_responses_request
+from src.services.utils.web_search_config import has_web_search_tool, web_search_endpoint
 
 from ..api_executor import execute_api_call
+
+
+def _routes_web_search_to_responses(service, configuration):
+    """The request carries the service's web search tool and the DB says that provider only serves it on its
+    Responses API (services.web_search_tool.endpoint, e.g. MiniMax)."""
+    return bool(web_search_endpoint(service)) and has_web_search_tool(service, configuration)
+
+
+async def _web_search_via_responses(client, configuration):
+    """Server-side web_search is only offered on the provider's Responses endpoint (e.g. MiniMax);
+    run the request there and return it in chat-completions shape."""
+    response = await client.responses.create(**to_responses_request(configuration))
+    return to_chat_completion(response.to_dict(), function_names=function_tool_names(configuration))
 
 
 async def openai_compatible_stream(configuration, apiKey, service):
     """Async generator yielding normalised delta dicts for any openai_sdk service."""
     client = AsyncOpenAI(base_url=base_url(service), api_key=apiKey)
+    if _routes_web_search_to_responses(service, configuration):
+        # Web search runs on the Responses API; deliver its result as a single chunk
+        try:
+            result = await _web_search_via_responses(client, configuration)
+            message = result["choices"][0]["message"]
+            if message.get("content"):
+                yield {"content": message["content"], "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
+            yield {
+                "content": None,
+                "tool_calls": message.get("tool_calls"),
+                "usage": result["usage"],
+                "finish_reason": result["choices"][0]["finish_reason"],
+                "reasoning": None,
+            }
+        except Exception as error:
+            yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
+        return
     config = {**configuration}
     if supports_stream_usage(service):
         config["stream_options"] = {"include_usage": True}
@@ -87,6 +119,11 @@ async def openai_compatible_modelrun(
 
         async def api_call(config):
             try:
+                if _routes_web_search_to_responses(service, config):
+                    response = await _web_search_via_responses(client, config)
+                    if token_calculator and response.get("web_search_count"):
+                        token_calculator.add_web_search_calls(response["web_search_count"])
+                    return {"success": True, "response": response}
                 chat_completion = await client.chat.completions.create(**config)
                 return {"success": True, "response": chat_completion.to_dict()}
             except Exception as error:

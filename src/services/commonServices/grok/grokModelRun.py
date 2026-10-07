@@ -1,17 +1,56 @@
 import json
-import traceback
 
-from globals import logger
 from src.exceptions import ApiCallError
+from src.services.utils.responses_api_adapter import function_tool_names, to_chat_completion, to_responses_request
+from src.services.utils.web_search_config import has_web_search_tool, web_search_endpoint
 
 from ...utils.apiservice import fetch, fetch_stream
 from ..api_executor import execute_api_call
+
+
+def _web_search_url(configuration):
+    """xAI only serves web_search on its Responses API. The path comes from the grok service's
+    web_search_tool.endpoint in the DB, joined to its base_url; None when this is not a web search call."""
+    if not has_web_search_tool("grok", configuration):
+        return None
+    url = web_search_endpoint("grok")
+    if not url:
+        raise ValueError("grok web_search_tool.endpoint is not configured in the services collection")
+    return url
+
+
+async def _grok_web_search_call(url, configuration, headers):
+    """Call xAI's Responses API and return a chat-completions shaped result."""
+    response_data, _ = await fetch(url=url, method="POST", headers=headers, json_body=to_responses_request(configuration))
+    return to_chat_completion(response_data, function_names=function_tool_names(configuration))
 
 
 async def grok_stream(configuration, api_key):
     """Async generator yielding normalised delta dicts for xAI Grok."""
     url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        web_search_url = _web_search_url(configuration)
+    except ValueError as error:
+        yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
+        return
+    if web_search_url:
+        # Web search runs through the Responses API; deliver its result as a single chunk
+        try:
+            result = await _grok_web_search_call(web_search_url, configuration, headers)
+            message = result["choices"][0]["message"]
+            if message.get("content"):
+                yield {"content": message["content"], "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": None}
+            yield {
+                "content": None,
+                "tool_calls": message.get("tool_calls"),
+                "usage": result["usage"],
+                "finish_reason": result["choices"][0]["finish_reason"],
+                "reasoning": None,
+            }
+        except Exception as error:
+            yield {"content": None, "tool_calls": None, "usage": {}, "finish_reason": "error", "reasoning": None, "error": str(error)}
+        return
     payload = {
         **configuration,
         "stream_options": {
@@ -78,6 +117,13 @@ async def grok_runmodel(
             # Prepare the request payload for xAI API
             url = "https://api.x.ai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+            web_search_url = _web_search_url(config)
+            if web_search_url:
+                response_data = await _grok_web_search_call(web_search_url, config, headers)
+                if token_calculator and response_data.get("web_search_count"):
+                    token_calculator.add_web_search_calls(response_data["web_search_count"])
+                return {"success": True, "response": response_data}
 
             # Use the custom fetch function to make the API call
             response_data, response_headers = await fetch(url=url, method="POST", headers=headers, json_body=config)

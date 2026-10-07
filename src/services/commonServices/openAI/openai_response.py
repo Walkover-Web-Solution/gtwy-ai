@@ -2,6 +2,7 @@ import base64
 
 from src.configs.constant import service_name
 from src.configs.model_configuration import model_config_document
+from src.services.utils.web_search_config import build_web_search_tool, use_web_search
 from src.services.utils.ai_middleware_format import Response_formatter
 from src.services.utils.gcp_upload_service import uploadDoc
 
@@ -65,27 +66,22 @@ class OpenaiResponse(BaseService):
                 del self.customConfig["parallel_tool_calls"]
 
             if len(self.built_in_tools) > 0:
-                if "tools" in model_config_document[self.service][self.model]["configuration"]:
-                    if "tools" not in self.customConfig:
-                        self.customConfig["tools"] = []
+                tools_to_append = []
 
-                    tools_to_append = []
-
-                    if "web_search" in self.built_in_tools:
-                        if self.web_search_filters and isinstance(self.web_search_filters, list):
-                            web_search_tool = {
-                                "type": "web_search",
-                                "filters": {"allowed_domains": self.web_search_filters},
-                            }
-                        else:
-                            web_search_tool = {"type": "web_search_preview"}
+                # Web search tool and per-model support come from the DB (services.web_search_tool,
+                # validationConfig.inbuilt_tools.web_search)
+                if use_web_search(self.service, self.model, self.built_in_tools):
+                    web_search_tool = build_web_search_tool(self.service, self.web_search_filters)
+                    if web_search_tool:
                         tools_to_append.append(web_search_tool)
 
+                if "tools" in model_config_document[self.service][self.model]["configuration"]:
                     if "image_generation" in self.built_in_tools:
                         image_generation_tool = {"type": "image_generation"}
                         tools_to_append.append(image_generation_tool)
 
-                    self.customConfig["tools"].extend(tools_to_append)
+                if tools_to_append:
+                    self.customConfig.setdefault("tools", []).extend(tools_to_append)
 
             if self.stream_mode:
                 openAIResponse = await self.stream(self.customConfig, self.apikey, service_name["openai"])
