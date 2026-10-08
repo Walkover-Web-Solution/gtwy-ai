@@ -48,6 +48,8 @@ class add_configuration_data_to_body:
             if chatbotData:
                 del request.state.chatbot
             version_id = body.get("version_id") or request.path_params.get("version_id")
+            # No saved agent to load: the whole agent is described by the body.
+            direct_run = not bridge_id and not version_id
             db_config = await getConfiguration(
                 body.get("configuration"),
                 body.get("service"),
@@ -66,6 +68,7 @@ class add_configuration_data_to_body:
                 chatbot=body.get("chatbot", False),
                 override_fields=body,
                 environment=body.get("environment"),
+                direct_run=direct_run,
             )
 
             # Check if getConfiguration returned an error response

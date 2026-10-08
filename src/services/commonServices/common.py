@@ -782,7 +782,7 @@ async def chat(request_body):
             logger.error(f"Error in chat service: %s, {str(error)}, {traceback.format_exc()}")
         await sendResponse(
             parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
-        ) if parsed_data["response_format"]["type"] != "default" else None
+        ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
         # save_error_history builds latency + usage metrics + historyParams and
         # publishes a single error history row. parsed_data["firstAttemptError"]
         # set during fallback retry (above) flows into the row via
@@ -1074,7 +1074,7 @@ async def image(request_body):
 
         await sendResponse(
             parsed_data["response_format"], result.get("error", str(error)), variables=parsed_data["variables"], meta=parsed_data.get("meta")
-        ) if parsed_data["response_format"]["type"] != "default" else None
+        ) if (parsed_data.get("response_format") or {}).get("type") not in (None, "default") else None
         # save_error_history builds latency + usage metrics + historyParams and
         # publishes a single error history row (with firstAttemptError populated
         # from parsed_data when fallback was attempted).
