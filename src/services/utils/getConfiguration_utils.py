@@ -1,3 +1,5 @@
+import hashlib
+
 import src.db_services.ConfigurationServices as ConfigurationService
 from config import Config
 from globals import logger
@@ -43,6 +45,46 @@ async def validate_bridge(agent_data):
         raise Exception("Agent is Currently Paused")
 
     return None
+
+
+def direct_run_agent_id(org_id):
+    """Stand-in agent id for a run with no saved agent behind it.
+
+    History, metrics and the thread caches are all keyed by bridge_id/version_id, so a
+    direct run still needs one. It is derived from the org so a thread_id keeps its
+    history across calls without one org ever reading another's, and it is shaped like
+    an ObjectId so consumers that parse ids do not choke on it.
+    """
+    return hashlib.md5(f"direct_run_{org_id}".encode()).hexdigest()[:24]
+
+
+def build_direct_agent_data(org_id, body):
+    """Build the agent document get_bridge_data would return, from the request body alone.
+
+    Only what can be described inline is supported: the model configuration, settings and
+    memory flags. Tools that live in the DB (apiCalls, docs, connected agents) need a saved
+    agent; inline HTTP tools still work through extra_tools and built_in_tools.
+    """
+    agent_id = direct_run_agent_id(org_id)
+    settings = dict(body.get("settings") or {})
+    # A saved agent always stores a response_format; the chat path reads its type unguarded.
+    if not settings.get("response_format"):
+        settings["response_format"] = {"type": "default"}
+    bridges = {
+        "_id": agent_id,
+        "published_version_id": agent_id,
+        "name": body.get("name") or "Direct run",
+        "service": body.get("service") or "",
+        # The body's configuration is merged over this in setup_configuration.
+        "configuration": {"type": "chat", "prompt": "", "tool_choice": "default"},
+        "settings": settings,
+        "gpt_memory": body.get("gpt_memory"),
+        "gpt_memory_context": body.get("gpt_memory_context"),
+        "user_reference": body.get("user_reference", ""),
+        "actions": body.get("actions") or [],
+        "connected_tools": [],
+    }
+    return {"success": True, "bridges": bridges}, agent_id
 
 
 async def get_bridge_data(bridge_id, org_id, version_id, environment=None):

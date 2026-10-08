@@ -12,6 +12,7 @@ from .getConfiguration_utils import (
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
+    build_direct_agent_data,
     get_bridge_data,
     setup_api_key,
     setup_configuration,
@@ -63,34 +64,45 @@ async def _prepare_configuration_response(
     orchestrator_flag=None,
     chatbot=False,
     override_fields={},
-    environment=None
+    environment=None,
+    direct_run=False,
 ):
-    """Internal helper to build configuration response for a single bridge."""
+    """Internal helper to build configuration response for a single bridge.
+
+    With direct_run the agent is described entirely by the request body (override_fields)
+    instead of being loaded from the DB, so the existence, status and limit checks — which
+    are all about a saved agent — do not apply.
+    """
 
     variables = variables or {}
     extra_tools = extra_tools or []
     built_in_tools = built_in_tools or []
     web_search_filters = web_search_filters or {}
 
-    # Fetch bridge data (environment resolution happens inside the DB pipeline)
-    agent_data, resolved_bridge_id = await get_bridge_data(bridge_id, org_id, version_id, environment)
-    bridges = agent_data.get("bridges", {})
+    if direct_run:
+        agent_data, resolved_bridge_id = build_direct_agent_data(org_id, override_fields)
+        bridges = agent_data["bridges"]
+        chatbot = False
+    else:
+        # Fetch bridge data (environment resolution happens inside the DB pipeline)
+        agent_data, resolved_bridge_id = await get_bridge_data(bridge_id, org_id, version_id, environment)
+        bridges = agent_data.get("bridges", {})
 
-    # If environment resolved a version via pipeline, update version_id
-    if not version_id and environment and bridges.get("parent_id"):
-        version_id = bridges.get("_id")
+        # If environment resolved a version via pipeline, update version_id
+        if not version_id and environment and bridges.get("parent_id"):
+            version_id = bridges.get("_id")
 
-    chatbot = bridges.get("bridgeType") == "chatbot"
+        chatbot = bridges.get("bridgeType") == "chatbot"
 
-    # Validate bridge existence and status before any limit checks
-    validation_result = await validate_bridge(agent_data)
-    if validation_result:
-        return validation_result, None, None, resolved_bridge_id
+        # Validate bridge existence and status before any limit checks
+        validation_result = await validate_bridge(agent_data)
+        if validation_result:
+            return validation_result, None, None, resolved_bridge_id
 
-    # Limit checks
-    limit_error = await check_bridge_api_folder_limits(agent_data, version_id)
-    if limit_error:
-        return limit_error, None, None, resolved_bridge_id
+        # Limit checks
+        limit_error = await check_bridge_api_folder_limits(agent_data, version_id)
+        if limit_error:
+            return limit_error, None, None, resolved_bridge_id
 
     # Setup configuration and service
     configuration, service = setup_configuration(configuration, bridges, service)
@@ -537,10 +549,14 @@ async def getConfiguration(
     orchestrator_flag=None,
     chatbot=False,
     override_fields={},
-    environment=None
+    environment=None,
+    direct_run=False,
 ):
     """
     Get configuration for a bridge with all necessary tools and settings.
+
+    direct_run builds the agent from the request body instead of the DB (no agent_id or
+    version_id needed); see build_direct_agent_data for what it supports.
     """
 
     error, base_config, agent_data, resolved_bridge_id = await _prepare_configuration_response(
@@ -560,7 +576,8 @@ async def getConfiguration(
         orchestrator_flag,
         chatbot,
         override_fields,
-        environment
+        environment,
+        direct_run=direct_run,
     )
 
     if error:
