@@ -98,6 +98,7 @@ redis_keys = {
     "timezone_and_org_": "cd_timezone_and_org_",
     "conversation_": "cd_conversation_",
     "last_transffered_agent_": "cd_last_transffered_agent_",
+    "direct_agent_": "cd_direct_agent_",
     # Protected — source of truth or cost/metrics accumulators
     "bridgeusedcost_": "nd_bridgeusedcost_",
     "folderusedcost_": "nd_folderusedcost_",
