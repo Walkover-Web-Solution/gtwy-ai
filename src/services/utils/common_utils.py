@@ -719,7 +719,9 @@ async def manage_threads(parsed_data):
             parsed_data["sub_thread_id"] = sub_thread_id
 
         # Check Redis cache first for conversations
-        version_id = parsed_data.get("version_id", "")
+        # Fall back to bridge_id for version-less agents (e.g. the direct agent), so the
+        # key stays scoped to one agent instead of "None_<thread>" shared across orgs.
+        version_id = parsed_data.get("version_id") or parsed_data.get("bridge_id") or ""
         redis_key = f"{redis_keys['conversation_']}{version_id}_{thread_id}_{sub_thread_id}"
         cached_conversations = await find_in_cache(redis_key)
 
@@ -986,7 +988,9 @@ async def _update_history_redis(dataset, history_params, version_id, thread_info
     # new thread cached nothing and its second turn had to come from Postgres, which is only
     # written by the Node log-queue worker. Without that worker the thread lost all memory.
     if dataset and "error" not in dataset[0] and thread_id:
-        await save_conversations_to_redis(conversations, version_id, thread_id, sub_thread_id, history_params)
+        # Same key fallback as manage_threads: version-less agents are keyed by bridge_id.
+        cache_version_id = version_id or (history_params or {}).get("bridge_id")
+        await save_conversations_to_redis(conversations, cache_version_id, thread_id, sub_thread_id, history_params)
 
     if history_params and history_params.get("bridge_id"):
         cache_key = f"{redis_keys['metrix_bridges_']}{history_params['bridge_id']}"

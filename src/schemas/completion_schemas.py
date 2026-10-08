@@ -172,3 +172,18 @@ class CompletionRequest(BaseModel):
         if self.service is not None and self.service not in service_name:
             raise ValueError(f"Unsupported service: {self.service}")
         return self
+
+
+class DirectCompletionRequest(CompletionRequest):
+    """Body for POST /ai/completion: the whole configuration comes in the request."""
+
+    # Same name as the parent validator, so it replaces the agent-id requirement.
+    @model_validator(mode="after")
+    def require_bridge_identifier(self) -> "DirectCompletionRequest":
+        if self.agent_id or self.version_id:
+            raise ValueError("agent_id, bridge_id and version_id are not allowed here; use /chat/completion")
+        if not self.service:
+            raise ValueError("service is required")
+        if not self.configuration or not self.configuration.model:
+            raise ValueError("configuration.model is required")
+        return self

@@ -3,6 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from config import Config
 from globals import logger
@@ -17,7 +19,8 @@ from ...middlewares.getDataUsingBridgeId import add_configuration_data_to_body
 from ...middlewares.middleware import jwt_middleware
 from src.middlewares.openai_sdk_middleware import openai_sdk_middleware
 from src.schemas.batch_schemas import BatchChatCompletionRequest
-from src.schemas.completion_schemas import CompletionRequest
+from src.schemas.completion_schemas import CompletionRequest, DirectCompletionRequest
+from src.services.direct_agent_service import fill_model_defaults, get_or_create_direct_agent
 from src.services.utils.openai_sdk_utils import run_openai_chat_and_format
 
 router = APIRouter()
@@ -87,6 +90,31 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
             return result
         result = await chat_multiple_agents(data_to_send)
         return result
+
+async def direct_auth_and_rate_limit(request: Request):
+    await jwt_middleware(request)
+    await rate_limit(request, key_path="profile.org.id", points=100)
+    body = await request.json()
+    try:
+        DirectCompletionRequest.model_validate(body)
+    except ValidationError as exc:
+        raise RequestValidationError(errors=exc.errors()) from exc
+    fill_model_defaults(body["service"], body["configuration"])
+    profile = request.state.profile
+    # request.json() is cached on the request, so the injected bridge_id is what
+    # add_configuration_data_to_body and make_request_data see downstream.
+    body["bridge_id"] = await get_or_create_direct_agent(
+        profile["org"]["id"], (profile.get("user") or {}).get("id")
+    )
+    request.state.is_direct_call = True
+    await rate_limit(request, key_path="body.thread_id", points=20)
+
+
+@router.post("/ai/completion", dependencies=[Depends(direct_auth_and_rate_limit)])
+async def ai_completion(request: Request, db_config: dict = Depends(add_configuration_data_to_body(CompletionRequest))):
+    """Run a completion with the configuration in the body, no user-created agent needed."""
+    return await chat_completion(request=request, db_config=db_config)
+
 
 @router.post('/openai/responses', dependencies=[Depends(openai_sdk_middleware)])
 async def openai_sdk_responses(request: Request, db_config: dict = Depends(add_configuration_data_to_body(CompletionRequest))):
