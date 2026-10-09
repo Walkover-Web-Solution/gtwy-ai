@@ -108,6 +108,16 @@ class add_configuration_data_to_body:
 
             body_wrapper_id = body.get("wrapper_id")
             incoming_response_format = body.get("settings", {}).get("response_format")
+            # Direct calls have an empty agent, so request settings (fall_back,
+            # guardrails, maximum_iterations, ...) are the only settings. Merge them
+            # into the agent config, which is what chat() reads settings from.
+            # Agents created through Node always carry settings.response_format; the
+            # direct agent may not, and chat()/history index into it unguarded.
+            if getattr(request.state, "is_direct_call", False):
+                incoming_settings = body.get("settings") if isinstance(body.get("settings"), dict) else {}
+                primary_config["settings"] = {**(primary_config.get("settings") or {}), **incoming_settings}
+                if not primary_config["settings"].get("response_format"):
+                    primary_config["settings"]["response_format"] = {"type": "default"}
             body.update(primary_config)
             if body_wrapper_id is not None:
                 body["wrapper_id"] = body_wrapper_id
