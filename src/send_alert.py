@@ -35,14 +35,20 @@ async def send_alert(
     error_location=None,
     webhook_url=None,
 ):
+    """Queue an alert for the notification hub, which sends it everywhere it belongs: the org's
+    in-app notifications, the webhooks set up in the Alerts section and GTWY team alerting.
+    Only if the queue is unavailable is the alert sent directly, as before.
+    """
     try:
         api_collection = api_collection or {}
         api_name = api_collection.get(service, {}).get("name", None)
 
-        # Internal errors: Send directly to default webhook
+        # Internal errors: for the GTWY team (and, when tied to an org, shown to the org too)
         if not is_external_error:
             payload = build_base_payload(bridge_id, org_id, bridge_name, org_name, error_type, api_name, error_log, service)
-            await send_internal_alert(payload, error_location, webhook_url=webhook_url)
+            # An explicit webhook_url is the RabbitMQ-failure alert: never route it through the queue.
+            if webhook_url or not await _queue_internal_error(payload, error_location, org_id, bridge_id, bridge_name, error_type, service):
+                await send_internal_alert(payload, error_location, webhook_url=webhook_url)
             return
 
         # External errors: Process through webhook configurations
@@ -65,13 +71,10 @@ async def send_alert(
             if embed_user_id:
                 payload["embeduserId"] = embed_user_id
 
-        # Notification hub: shadow = also emit (legacy path still sends), on = hub sends instead.
-        hub_mode = Config.NOTIFICATION_HUB_MODE
-        if hub_mode in ("shadow", "on"):
-            await _emit_alert_event(error_type, org_id, bridge_id, bridge_name, details_payload, payload, user_id, thread_id)
-        if hub_mode == "on":
+        if await _queue_alert(error_type, org_id, bridge_id, bridge_name, details_payload, payload, user_id, thread_id, service):
             return
 
+        # Queue unavailable: send to the Alerts section webhooks directly, as before.
         result = await get_webhook_data(org_id)
         if not result or "webhook_data" not in result:
             raise BadRequestException("Webhook data is missing in the response.")
@@ -117,8 +120,8 @@ _ALERT_TITLES = {
     "agent.error": "Agent run failed",
     "agent.variables_missing": "Variables missing",
     "agent.retry_started": "Retry started",
-    "agent.response_broadcast": "Agent response broadcast",
     "agent.metrics_limit_reached": "Metrics limit reached",
+    "agent.response_broadcast": "Agent response broadcast",
 }
 
 
@@ -127,20 +130,29 @@ def _alert_message(event_type, details_payload, bridge_name):
         variables = details_payload.get("variables")
         names = ", ".join(variables) if isinstance(variables, list | dict) else str(variables or "")
         text = f"Missing variables: {names}" if names else "Required variables were missing"
+    elif event_type == "agent.metrics_limit_reached":
+        text = f"Metrics limit reached: {details_payload.get('limit_size')}"
+    elif event_type == "agent.response_broadcast":
+        text = "An agent response was forwarded to webhooks"
     else:
         text = str(details_payload.get("error_message") or details_payload.get("alert") or "")
     text = text[:500]
     return f"{bridge_name}: {text}" if bridge_name else text
 
 
-async def _emit_alert_event(error_type, org_id, bridge_id, bridge_name, details_payload, payload, user_id, thread_id):
+async def _emit(event_type, org_id, **kwargs):
     # Lazy import: emit -> queue -> baseQueue imports send_alert lazily too (circular).
     from src.services.notifications.emit import emit_event
 
+    return await emit_event(event_type, org_id, **kwargs)
+
+
+async def _queue_alert(error_type, org_id, bridge_id, bridge_name, details_payload, payload, user_id, thread_id, service):
+    """Queue a customer-facing alert. Returns False when it could not be queued."""
     event_type = LEGACY_ALERT_TYPE_TO_EVENT.get(error_type)
     if not event_type:
-        return
-    await emit_event(
+        return False
+    return await _emit(
         event_type,
         org_id,
         agent_id=bridge_id,
@@ -149,7 +161,36 @@ async def _emit_alert_event(error_type, org_id, bridge_id, bridge_name, details_
         data={
             "thread_id": thread_id,
             "user_id": user_id,
-            # Exactly what the legacy path posts (sendResponse with success=False).
+            "service": service,
+            # The hub sends this exact body (what sendResponse posted) to the Alerts section
+            # webhooks subscribed to legacy_alert_type, and to the GTWY team for error types.
+            "legacy_alert_type": error_type,
             "webhook_body": {"error": payload, "success": False, "variables": {}},
         },
+        dedupe_key=f"{event_type}:{bridge_id}:{service}",
+    )
+
+
+async def _queue_internal_error(payload, error_location, org_id, bridge_id, bridge_name, error_type, service):
+    """Queue an internal error for the GTWY team; the org also sees a short system-error notice.
+    Returns False when it could not be queued."""
+    team_body = dict(payload)
+    if error_location:
+        team_body["error_location"] = error_location
+    if Config.ENVIRONMENT:
+        team_body["ENVIRONMENT"] = Config.ENVIRONMENT
+    data = {"team_route": "alerts", "team_body": team_body, "error_type": error_type, "service": service}
+
+    if not org_id:
+        return await _emit("ops.internal_error", None, title=str(error_type or "Internal error"), message=str(error_type or "Internal error"), data=data)
+
+    target = f'"{bridge_name}"' if bridge_name else "an agent"
+    return await _emit(
+        "agent.system_error",
+        org_id,
+        agent_id=bridge_id,
+        title="System error",
+        message=f"An internal error interrupted {target}. The GTWY team has been notified.",
+        data=data,
+        dedupe_key=f"agent.system_error:{bridge_id}:{error_type}",
     )

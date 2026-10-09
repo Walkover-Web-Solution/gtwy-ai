@@ -993,7 +993,23 @@ def makeFunctionName(name):
 
 
 async def unknown_error_handler_alert(data):
+    """GTWY team (ops) alert. Queued for the notification hub; posted directly if the queue is down."""
     import aiohttp
+    try:
+        # Lazy import: emit -> queue -> baseQueue -> send_alert -> alert_utils -> here (circular).
+        from src.services.notifications.emit import emit_event
+
+        reason = str(data.get("reason") or data.get("type") or "Internal error")
+        if await emit_event(
+            "ops.internal_error",
+            None,
+            title=str(data.get("type") or "Internal error"),
+            message=reason[:500],
+            data={"team_route": "ops", "team_body": {**data, "env": Config.ENVIRONMENT}},
+        ):
+            return None
+    except Exception as e:
+        logger.error(f"unknown_error_handler_alert could not queue: {e}")
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post("https://flow.sokt.io/func/scrimCFAKPWg", json={**data, "env": Config.ENVIRONMENT}) as response:
