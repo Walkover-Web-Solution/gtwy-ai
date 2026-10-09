@@ -8,6 +8,7 @@ import httpx
 from fastapi import Request
 from google.genai import types
 
+from config import Config
 from globals import *
 from globals import logger, traceback
 from src.configs.constant import GPT_MEMORY_TURNS_PER_CYCLE, inbuild_tools, redis_keys, tool_types
@@ -32,6 +33,7 @@ from src.services.utils.apiservice import fetch
 from src.services.utils.time import SERVICE_TIMEOUTS
 from src.services.utils.built_in_tools.firecrawl import call_firecrawl_scrape
 from src.services.utils.built_in_tools.browser.tool import call_gtwy_browser
+from src.services.utils.built_in_tools.file_reader import call_file_reader
 
 
 def clean_json(data):
@@ -640,6 +642,8 @@ async def process_data_and_run_tools(codes_mapping, self):
                     task = call_firecrawl_scrape(tool_data.get("args"))
                 elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_Browser"]:
                     task = call_gtwy_browser(tool_data.get("args"), _browser_ctx(self, tool_call_key))
+                elif self.tool_id_and_name_mapping[name].get("type") == inbuild_tools["Gtwy_File_Reader"]:
+                    task = call_file_reader(tool_data.get("args"), getattr(self, "file_bridge_ctx", None))
                 elif self.tool_id_and_name_mapping[name].get("type") == "MCP":
                     task = call_mcp_tool(tool_data.get("args"), self.tool_id_and_name_mapping[name])
                 else:
@@ -805,6 +809,31 @@ async def make_request_data(request: Request):
     return result
 
 
+def _file_bridge_platform_cost(parsed_data):
+    """Cost of file-bridge helper calls (Gemini/Deepgram) that ran on the platform key.
+
+    Those calls are charged on top of the main call, whether or not the main call
+    used the wallet. Calls on the org's own key are only shown, never charged.
+    The breakdown is added to the logged cost so the run's history shows it.
+    """
+    calls = parsed_data.get("file_bridge_usage") or []
+    if not calls:
+        return 0
+    platform_cost = sum(call.get("cost") or 0 for call in calls if call.get("key_source") == "platform")
+    cost_breakdown = (parsed_data.get("usage") or {}).get("cost_breakdown")
+    if isinstance(cost_breakdown, dict):
+        cost_breakdown["file_bridge"] = {
+            "cost": sum(call.get("cost") or 0 for call in calls),
+            "platform_cost": platform_cost,
+            "calls": [
+                {key: call.get(key) for key in ("service", "model", "key_source", "cost", "usage")} for call in calls
+            ],
+        }
+    if parsed_data.get("org_id") and parsed_data.get("org_id") == Config.GTWY_PLATFORM_ORG_ID:
+        return 0
+    return platform_cost
+
+
 def compute_billing_events(parsed_data, history_params):
     cached = parsed_data.get("_billing")
     if cached is not None:
@@ -824,6 +853,9 @@ def compute_billing_events(parsed_data, history_params):
         billable_usages.append(parsed_data.get("usage"))
     if parsed_data.get("_wallet_primary_cost"):
         billable_usages.append({"expectedCost": parsed_data["_wallet_primary_cost"]})
+    file_bridge_cost = _file_bridge_platform_cost(parsed_data)
+    if file_bridge_cost:
+        billable_usages.append({"expectedCost": file_bridge_cost})
     billing_events = [
         event
         for usage in billable_usages

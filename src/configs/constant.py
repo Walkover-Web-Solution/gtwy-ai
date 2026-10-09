@@ -98,6 +98,8 @@ redis_keys = {
     "timezone_and_org_": "cd_timezone_and_org_",
     "conversation_": "cd_conversation_",
     "last_transffered_agent_": "cd_last_transffered_agent_",
+    # File bridge: an attachment's text, keyed by sha256 of its URL (regenerable)
+    "file_text_": "cd_file_text_",
     # Protected — source of truth or cost/metrics accumulators
     "bridgeusedcost_": "nd_bridgeusedcost_",
     "folderusedcost_": "nd_folderusedcost_",
@@ -145,7 +147,11 @@ tag_keys = {
 
 limit_types = {"bridge": "bridge", "folder": "folder", "apikey": "apikey"}
 
-inbuild_tools = {"Gtwy_Web_Search": "Gtwy_Web_Search", "Gtwy_Browser": "Gtwy_Browser"}
+inbuild_tools = {
+    "Gtwy_Web_Search": "Gtwy_Web_Search",
+    "Gtwy_Browser": "Gtwy_Browser",
+    "Gtwy_File_Reader": "Gtwy_File_Reader",
+}
 
 tool_types = {"AGENT": "AGENT"}
 

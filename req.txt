@@ -58,6 +58,12 @@ scikit-learn>=1.6.1
 Pillow>=10.0.0
 playwright>=1.49.0,<2.0.0  # Gtwy_Browser: CDP client only, no 'playwright install' needed
 
+# File bridge: read attachments as text for models that cannot take them
+pypdf>=5.0.0,<7.0.0
+openpyxl>=3.1.0,<4.0.0
+python-docx>=1.1.0,<2.0.0
+python-pptx>=1.0.0,<2.0.0
+
 # Utilities
 pydash>=8.0.1,<9.0.0
 pytz

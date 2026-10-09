@@ -117,6 +117,10 @@ class BaseService:
         self.built_in_tools = params.get("built_in_tools")
         self.function_time_logs = params.get("function_time_logs")
         self.files = params.get("files") or []
+        # Set by the file bridge: the attachments as sent (with types) and what the
+        # Gtwy_File_Reader tool needs to open them.
+        self.original_attachments = params.get("original_attachments")
+        self.file_bridge_ctx = params.get("file_bridge_ctx")
         self.file_data = params.get("file_data")
         self.youtube_url = params.get("youtube_url")
         self.web_search_filters = params.get("web_search_filters")
@@ -462,7 +466,11 @@ class BaseService:
                 ]
             ),
             "revised_prompt": model_response.get("data", [{}])[0].get("revised_prompt", None),
-            "user_urls": [
+            # The file bridge may have taken converted files out of image_data/files/
+            # audio_data; original_attachments still lists every file with its type.
+            "user_urls": self.original_attachments
+            if self.original_attachments is not None
+            else [
                 *({"url": u, "type": "image"} for u in (self.image_data or [])),
                 *({"url": u, "type": "pdf"} for u in (self.files or [])),
                 *({"url": u, "type": "audio"} for u in (self.audio_data or [])),

@@ -253,6 +253,9 @@ def parse_request_body(request_body):
             for url in body.get("user_urls", [])
             if isinstance(url, dict) and url.get("type") == "image" and url.get("url")
         ],
+        # Attachments with the type the user gave each one; images/files/audios
+        # below are flat URL lists that lose it. Used by the file bridge.
+        "user_urls": [url for url in body.get("user_urls", []) if isinstance(url, dict) and url.get("url")],
         "maximum_iterations": _resolve_maximum_iterations(body),
         "tokens": {},
         "memory": "",
@@ -895,6 +898,11 @@ def build_service_params(
         "org_name": parsed_data["org_name"],
         "built_in_tools": parsed_data["built_in_tools"],
         "files": parsed_data["files"],
+        "user_urls": parsed_data.get("user_urls") or [],
+        "service_apikeys": parsed_data.get("service_apikeys") or {},
+        # One list per request, shared by every attempt (fallbacks rebuild params),
+        # so all file-bridge helper calls are billed. See compute_billing_events.
+        "file_bridge_usage": parsed_data.setdefault("file_bridge_usage", []),
         "file_data": parsed_data["file_data"],
         "youtube_url": parsed_data["youtube_url"],
         "web_search_filters": parsed_data["web_search_filters"],
