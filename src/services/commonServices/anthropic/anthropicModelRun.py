@@ -57,7 +57,7 @@ async def anthropic_stream(configuration, apikey):
                             "is_error": getattr(content_block, "is_error", False),
                         }
                     elif content_block.type == "thinking":
-                        content_blocks[index] = {"type": "thinking", "thinking": ""}
+                        content_blocks[index] = {"type": "thinking", "thinking": "", "signature": getattr(content_block, "signature", "") or ""}
 
                 elif event.type == "content_block_delta":
                     index = event.index
@@ -73,6 +73,8 @@ async def anthropic_stream(configuration, apikey):
                         block.setdefault("thinking", "")
                         block["thinking"] += delta.thinking
                         yield {"content": None, "tool_calls": None, "usage": None, "finish_reason": None, "reasoning": delta.thinking}
+                    elif delta.type == "signature_delta":
+                        block["signature"] = delta.signature
                     elif delta.type == "input_json_delta" and block.get("type") in {"tool_use", "mcp_tool_use"}:
                         block.setdefault("partial_json", "")
                         block["partial_json"] += delta.partial_json
@@ -217,8 +219,7 @@ async def anthropic_runmodel(
                                     "is_error": getattr(content_block, "is_error", False),
                                 }
                             elif content_block.type == "thinking":
-                                content_blocks[index] = {"type": "thinking", "thinking": ""}
-
+                                content_blocks[index] = {"type": "thinking", "thinking": "", "signature": getattr(content_block, "signature", "") or ""}
                         elif event.type == "content_block_delta":
                             # Accumulate content
                             index = event.index
@@ -241,6 +242,8 @@ async def anthropic_runmodel(
                             elif delta.type == "thinking_delta":
                                 block.setdefault("thinking", "")
                                 block["thinking"] += delta.thinking
+                            elif delta.type == "signature_delta":
+                                block["signature"] = delta.signature
 
                         elif event.type == "content_block_stop":
                             # Finalize content block
