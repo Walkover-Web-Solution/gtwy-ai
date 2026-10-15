@@ -26,7 +26,9 @@ from . import steel_client
 # already know gets one attempt: when it hangs, a second attempt only burns the budget, and the
 # caller reports "try again" rather than restarting Chrome (a restart kills every conversation's
 # tab). A Chrome that Steel just launched is still starting, so its attempts are shorter and retried.
-CONNECT_TIMEOUT_MS = 7_000
+# A cold connect attaches to every tab already open in that Chrome, which on a loaded host takes
+# well over 7s, so the single attempt gets 12s (lock wait 5s + 12s + tab open 6s still fits in 25s).
+CONNECT_TIMEOUT_MS = 12_000
 FRESH_CONNECT_TIMEOUT_MS = 5_000
 FRESH_CONNECT_ATTEMPTS = 2
 CONNECT_RETRY_SECONDS = 1.0
@@ -222,6 +224,19 @@ async def close_tab(host: str, browser, target_id: str | None, browser_context_i
             await cdp.send("Target.disposeBrowserContext", {"browserContextId": browser_context_id})
         except Exception as exc:
             logger.warning(f"Gtwy_Browser: disposing cookie jar failed: {exc.__class__.__name__}")
+
+
+async def count_gtwy_tabs(host: str, browser) -> int:
+    """Conversation tabs open in this Chrome right now, from every gtwy environment.
+
+    Every conversation tab lives in a browser context created for it, so pages in created
+    contexts are counted. Steel's own tab sits in Chrome's default context and is left out.
+    Environments sharing a host keep separate registries, so only Chrome sees them all.
+    """
+    cdp = await _browser_cdp(host, browser)
+    created = set((await cdp.send("Target.getBrowserContexts")).get("browserContextIds") or [])
+    targets = (await cdp.send("Target.getTargets")).get("targetInfos") or []
+    return sum(1 for t in targets if t.get("type") == "page" and t.get("browserContextId") in created)
 
 
 async def export_jar_cookies(host: str, browser, browser_context_id: str) -> list[dict]:

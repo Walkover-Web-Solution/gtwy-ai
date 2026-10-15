@@ -105,8 +105,9 @@ async def _run(args: dict, ctx: dict) -> dict:
         logger.error(f"Gtwy_Browser: steel error while opening a tab: {exc}")
         return _err("browser backend is unavailable right now; try again later")
     except BrowserConnectionError as exc:
+        # No reset here: get_browser already dropped the failed host's driver, and resetting every
+        # host would kill the in-flight actions of other conversations on this worker.
         logger.warning(f"Gtwy_Browser: connection error while opening a tab: {exc}")
-        await reset_connection()
         return _err("the browser did not answer; it may still be starting. Try the same action again in a few seconds")
 
     # Prefer the link that survives this tab being replaced; fall back to the direct one.
