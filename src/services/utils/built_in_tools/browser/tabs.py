@@ -7,7 +7,6 @@ one heavy Chrome cannot starve the others (three real shopping pages already sat
 with the current 1.5 GB limit). When every host is full the caller gets BrowserBusy.
 """
 
-import time
 import zlib
 
 from globals import logger
@@ -49,12 +48,12 @@ FOREIGN_TABS_RETRY_SECONDS = 60
 
 
 class HostFull(Exception):
-    """A host has no room for another tab. ``own_tabs`` are the ones this environment can wait on."""
+    """A host has no room for another tab. ``retry_in`` is how long until one is likely to free."""
 
-    def __init__(self, open_tabs: int, own_tabs: int):
+    def __init__(self, open_tabs: int, retry_in: int):
         super().__init__(f"{open_tabs} tabs open")
         self.open_tabs = open_tabs
-        self.own_tabs = own_tabs
+        self.retry_in = retry_in
 
 
 async def reconcile_registry(host: str, registry: dict, current: dict | None) -> dict:
@@ -160,7 +159,13 @@ async def _create_tab_on(host: str, registry: dict, browser, tkey: str, org_id, 
             logger.info(
                 f"Gtwy_Browser: {steel_client.short_host(host)} is full ({open_tabs} tabs, {own} from this environment)"
             )
-            raise HostFull(open_tabs, own_tabs=own)
+            # Worked out from this registry, after the evictions above: the caller's copy was read
+            # before them and still lists the closed tabs, whose overdue times gave "retry in 1s".
+            if own:
+                retry_in = seconds_until_a_tab_frees(registry, exclude=tkey)
+            else:
+                retry_in = FOREIGN_TABS_RETRY_SECONDS
+            raise HostFull(open_tabs, retry_in)
 
     target_id, browser_context_id = await create_isolated_tab(host, browser)
     # Put this conversation's saved logins back so a returning user does not sign in again.
@@ -175,7 +180,6 @@ async def _create_tab_on(host: str, registry: dict, browser, tkey: str, org_id, 
         handoff_active=False,
         org_id=org_id,
         bridge_id=bridge_id,
-        created_at=time.time(),
     )
     await save_registry(host, registry)
     page = await find_page(host, browser, target_id)
@@ -253,11 +257,7 @@ async def open_or_reuse_tab(tkey: str, org_id, bridge_id) -> tuple[object, objec
             result = await _try_host(host, tkey, org_id, bridge_id, reuse_only=False)
         except HostFull as full:
             full_tabs += full.open_tabs
-            if full.own_tabs:
-                wait = seconds_until_a_tab_frees(registries.get(host) or {}, exclude=tkey)
-            else:
-                wait = FOREIGN_TABS_RETRY_SECONDS
-            full_retry_in = min(full_retry_in or wait, wait)
+            full_retry_in = min(full_retry_in or full.retry_in, full.retry_in)
             continue
         except BrowserStarting:
             logger.info(f"Gtwy_Browser: {steel_client.short_host(host)} busy opening another tab; thread {tkey} moves on")
