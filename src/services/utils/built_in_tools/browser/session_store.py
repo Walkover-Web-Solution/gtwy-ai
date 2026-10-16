@@ -51,6 +51,20 @@ class BrowserBusy(Exception):
         self.retry_in = retry_in
 
 
+class BrowserStarting(BrowserBusy):
+    """A host's registry lock stayed taken: another conversation is setting up its tab there.
+
+    Not the same as every tab being in use, and reported differently so the logs and the model
+    are not told the pool is full when no host has a single tab open.
+    """
+
+    def __init__(self, retry_in: int):
+        Exception.__init__(
+            self, f"the browser is opening a tab for another conversation; retry in {retry_in} seconds"
+        )
+        self.retry_in = retry_in
+
+
 # Close a tab after this much silence. A conversation mid-login gets longer, because the user
 # typing into the live view never reaches gtwy, so the tab looks idle while they work.
 IDLE_TIMEOUT_SECONDS = 300
