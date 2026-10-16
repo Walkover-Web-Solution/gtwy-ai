@@ -6,10 +6,7 @@ exported, encrypted and stored; when the conversation opens a new tab they go ba
 and the sites see the user as still signed in. The store is keyed by conversation, not
 by Steel host, so a returning conversation can land on any Chrome in the pool.
 
-MongoDB is the only place a login lives. A cache in front of it was tried and removed:
-the blob is read once per tab creation, roughly once per conversation, so a cache saved
-almost nothing while giving a login a second home and a way to go stale. The scope is
-the conversation, matching one tab per thread and sub-thread.
+MongoDB is the only place a login lives.
 
 Cookies are full account access. Only the encrypted blob is ever stored, it is scoped
 to one conversation, and it expires on its own.

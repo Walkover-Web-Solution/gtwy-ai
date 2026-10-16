@@ -7,7 +7,6 @@ Chrome, so two conversations can be signed in to the same site as different peop
 """
 
 import asyncio
-import time
 
 from globals import logger
 
@@ -22,6 +21,7 @@ from .actions import (
     do_scroll,
     do_snapshot,
     do_type,
+    looks_like_bot_check,
     looks_like_login_page,
 )
 from .connection import BrowserConnectionError, is_connection_lost_error, is_timeout_error, reset_connection
@@ -36,7 +36,7 @@ TOOL_TIMEOUT_SECONDS = 60
 # separately, so a slow start can never eat the time the page itself needs. Setup plus a 30s
 # navigate fits inside the ceiling above. A connect that fails inside this window is reported as
 # an error to retry; it never restarts Chrome, because that would kill every other conversation's tab.
-SETUP_TIMEOUT_SECONDS = 25
+SETUP_TIMEOUT_SECONDS = 60
 HANDOFF_INSTRUCTIONS = (
     "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
     "complete the action there (log in, solve the CAPTCHA, enter the OTP), and reply 'done' "
@@ -103,27 +103,29 @@ async def _run(args: dict, ctx: dict) -> dict:
         return _err(str(busy), retry_in_seconds=busy.retry_in)
     except SteelError as exc:
         logger.error(f"Gtwy_Browser: steel error while opening a tab: {exc}")
-        return _err("browser backend is unavailable right now; try again later")
+        return _err("browser backend is unavailable right now; try again later", detail=str(exc)[:300])
     except BrowserConnectionError as exc:
         # No reset here: get_browser already dropped the failed host's driver, and resetting every
         # host would kill the in-flight actions of other conversations on this worker.
         logger.warning(f"Gtwy_Browser: connection error while opening a tab: {exc}")
-        return _err("the browser did not answer; it may still be starting. Try the same action again in a few seconds")
+        # detail carries the per-host causes (already one line each), so a failure explains itself.
+        return _err(
+            "the browser did not answer; it may still be starting. Try the same action again in a few seconds",
+            detail=str(exc)[:300],
+        )
 
     # Prefer the link that survives this tab being replaced; fall back to the direct one.
     live_url = steel_client.permanent_live_url(
         ctx.get("org_id"), ctx.get("thread_id"), ctx.get("sub_thread_id")
     ) or steel_client.live_view_url(registry.get("debug_url"), tab.get("target_id"))
     state = await get_thread_state(tkey)
-    state["target_id"] = tab.get("target_id")
-    state["host"] = tab.get("host")
 
     # While the user is acting in the live view we take no snapshots, so nothing they type can
     # land in the transcript. A new user message (new message_id) or a navigate ends the handoff.
     if state.get("handoff_active"):
         user_replied = ctx.get("message_id") and ctx.get("message_id") != state.get("handoff_message_id")
         if action == "navigate" or user_replied:
-            state.update(handoff_active=False, handoff_message=None, handoff_message_id=None, handoff_started_at=None)
+            state.update(handoff_active=False, handoff_message=None, handoff_message_id=None)
             await save_thread_state(tkey, state)
             await mark_handoff(tkey, False)
         elif action != "request_user_action":
@@ -159,15 +161,19 @@ async def _run(args: dict, ctx: dict) -> dict:
 
     if new_ref_map is not None:
         state["ref_map"] = new_ref_map
-        state["snapshot_seq"] = int(state.get("snapshot_seq") or 0) + 1
-    state["last_url"] = page.url
 
-    # A page asking the user to sign in starts the handoff on its own, so the model never has to
-    # remember to call request_user_action and never tries to type credentials.
-    if new_ref_map is not None and await looks_like_login_page(page):
-        await _begin_handoff(ctx, tkey, state, "This page requires you to log in.")
-        await _emit_handoff(ctx, live_url, state["handoff_message"])
-        response.update(login_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
+    # A page asking the user to sign in or to solve a CAPTCHA starts the handoff on its own, so
+    # the model never has to remember to call request_user_action and never tries to type
+    # credentials or give up on a page it cannot see.
+    if new_ref_map is not None:
+        if await looks_like_login_page(page):
+            await _begin_handoff(ctx, tkey, state, "This page requires you to log in.")
+            await _emit_handoff(ctx, live_url, state["handoff_message"])
+            response.update(login_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
+        elif looks_like_bot_check(page.url, response.get("snapshot"), len(new_ref_map)):
+            await _begin_handoff(ctx, tkey, state, "This site wants to check you are human. Please solve the CAPTCHA.")
+            await _emit_handoff(ctx, live_url, state["handoff_message"])
+            response.update(captcha_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
 
     # The chat UI needs a way to show this conversation's tab at any moment, not only when a login
     # blocks the agent, so every result carries the live view pinned to that tab.
@@ -209,12 +215,7 @@ async def _dispatch(action: str, args: dict, page, state: dict):
 
 
 async def _begin_handoff(ctx: dict, tkey: str, state: dict, message: str) -> None:
-    state.update(
-        handoff_active=True,
-        handoff_message=message,
-        handoff_message_id=ctx.get("message_id"),
-        handoff_started_at=time.time(),
-    )
+    state.update(handoff_active=True, handoff_message=message, handoff_message_id=ctx.get("message_id"))
     await save_thread_state(tkey, state)
     await mark_handoff(tkey, True)
 

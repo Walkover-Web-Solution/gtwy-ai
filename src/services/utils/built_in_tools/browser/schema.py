@@ -20,13 +20,18 @@ BROWSER_ACTIONS = [
 ]
 
 DESCRIPTION = (
-    "Control a real web browser to complete tasks on websites. Work in a loop: "
+    "Control a real web browser to complete tasks on websites. Use it whenever the user asks you to "
+    "search, look up or check something on the web; do not tell them you cannot browse. "
+    "For a search, navigate to a plain URL such as https://www.google.com/search?q=<words> and "
+    "never add tracking parameters (sxsrf, ved, ei...) you did not see on a page: they get the "
+    "browser flagged as a robot. Work in a loop: "
     "`navigate` to a URL (it returns a page snapshot), read the snapshot, act with "
     "`click`/`type`/`press`/`scroll`, and read the new snapshot that every action returns. "
     "Snapshots are an accessibility tree; interactive elements carry refs like [e5]. "
     "Use `ref` values only from the most recent snapshot: refs become stale after any "
     "navigation or action, and a stale ref returns an error telling you to snapshot again. "
     "Use `snapshot` to re-read the page without acting and `back` to go to the previous page. "
+    "To open a result, `click` its ref instead of guessing its URL. "
     "LOGINS: you never type credentials, but you DO help the user log in. When a task needs the "
     "user's account (orders, cart, profile, inbox, dashboard), first navigate to the relevant page. "
     "If the page shows a sign-in form, a CAPTCHA, an OTP prompt, or asks for payment or personal "
