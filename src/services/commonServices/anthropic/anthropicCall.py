@@ -1,5 +1,5 @@
 from src.configs.constant import service_name
-from src.configs.model_configuration import model_config_document
+from src.services.utils.web_search_config import build_web_search_tool, use_web_search
 from src.services.utils.ai_middleware_format import Response_formatter
 
 from src.services.utils.image_compression import fetch_images_b64
@@ -53,23 +53,13 @@ class Anthropic(BaseService):
             )
         # self.customConfig["tools"] = self.tool_call if self.tool_call and len(self.tool_call) != 0 else []
 
-        # Add web search support for Anthropic
         self.customConfig = self.service_formatter(self.customConfig, service_name["anthropic"])
-        if len(self.built_in_tools) > 0:
-            if (
-                "web_search" in self.built_in_tools
-                and "tools" in model_config_document[self.service][self.model]["configuration"]
-            ):
-                if "tools" not in self.customConfig or self.customConfig["tools"] is None:
+        # Web search tool (version, domain filters) and per-model support come from the DB
+        if use_web_search(self.service, self.model, self.built_in_tools):
+            web_search_tool = build_web_search_tool(self.service, self.web_search_filters)
+            if web_search_tool:
+                if self.customConfig.get("tools") is None:
                     self.customConfig["tools"] = []
-
-                # Use Anthropic's official web search format
-                web_search_tool = {"type": "web_search_20250305", "name": "web_search"}
-
-                # Add allowed domains filtering if provided
-                if self.web_search_filters and isinstance(self.web_search_filters, list):
-                    web_search_tool["allowed_domains"] = self.web_search_filters
-
                 self.customConfig["tools"].append(web_search_tool)
 
         if self.stream_mode:

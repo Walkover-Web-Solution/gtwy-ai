@@ -18,6 +18,7 @@ class TokenCalculator:
             "reasoning_tokens": 0,
             "audio_duration_seconds": 0,
             "audio_duration_minutes": 0,
+            "web_search_count": 0,
         }
         # Image-specific token tracking
         self.image_usage = {
@@ -32,7 +33,11 @@ class TokenCalculator:
 
     def calculate_usage(self, model_response):
         usage = {}
-        match self.service:
+        from src.configs.service_registry import has_openai_responses_shape  # lazy: avoid import cycle
+
+        # Every service on the Responses API (OpenAI, Grok, MiniMax, ...) reports the same usage shape
+        usage_service = "openai" if has_openai_responses_shape(self.service) else self.service
+        match usage_service:
             case "open_router" | "mistral" | "openai_completion" | "neev_cloud" | "moonshot" | "minimax":
                 usage["inputTokens"] = (model_response.get("usage") or {}).get("prompt_tokens", 0)
                 usage["outputTokens"] = (model_response.get("usage") or {}).get("completion_tokens", 0)
@@ -108,6 +113,12 @@ class TokenCalculator:
                 usage["reasoningTokens"] = (_usage.get("output_tokens_details") or {}).get(
                     "reasoning_tokens", 0
                 )
+                # Server-side web searches run in this call, billed per search from the model's web_search_cost
+                web_search_calls = sum(
+                    1 for item in model_response.get("output") or [] if isinstance(item, dict) and item.get("type") == "web_search_call"
+                )
+                if web_search_calls:
+                    self.add_web_search_calls(web_search_calls)
                 if model_response.get("service_tier"):
                     self.service_tier = model_response["service_tier"]
 
@@ -118,6 +129,10 @@ class TokenCalculator:
                 usage["totalTokens"] = usage["inputTokens"] + usage["outputTokens"]
                 usage["cachingReadTokens"] = _usage.get("cache_read_input_tokens", 0)
                 usage["cachingCreationInputTokens"] = _usage.get("cache_creation_input_tokens", 0)
+                # Server-side web searches are billed per request on top of tokens
+                web_search_requests = (_usage.get("server_tool_use") or {}).get("web_search_requests") or 0
+                if web_search_requests:
+                    self.add_web_search_calls(web_search_requests)
 
             case "deepgram":
                 metadata = model_response.get("metadata", {}) or {}
@@ -235,6 +250,7 @@ class TokenCalculator:
             "cache_read_cost": 0,
             "cache_creation_cost": 0,
             "audio_cost": 0,
+            "web_search_cost": 0,
             "total_cost": 0,
         }
 
@@ -306,6 +322,9 @@ class TokenCalculator:
         if self.total_usage["audio_duration_minutes"] and pricing.get("audio_cost_per_minute"):
             cost["audio_cost"] = self.total_usage["audio_duration_minutes"] * pricing["audio_cost_per_minute"]
 
+        if self.total_usage["web_search_count"] and pricing.get("web_search_cost"):
+            cost["web_search_cost"] = self.total_usage["web_search_count"] * pricing["web_search_cost"]
+
         # Gemini long-context premium: models like gemini-2.5-pro / gemini-3-pro charge a
         # higher (typically 2x) per-token rate once the prompt exceeds ~200K tokens. The
         # config carries this as `cost_multiplier`. Apply it to the token-based costs only
@@ -330,7 +349,7 @@ class TokenCalculator:
         )
 
         # Calculate total cost
-        cost["total_cost"] = (token_cost * context_multiplier + cost["audio_cost"]) * priority_multiplier
+        cost["total_cost"] = (token_cost * context_multiplier + cost["audio_cost"] + cost["web_search_cost"]) * priority_multiplier
 
         return cost
     
@@ -393,8 +412,17 @@ class TokenCalculator:
         self.image_usage["cached_image_input_tokens"] += usage.get("cached_image_input_tokens") or 0
         self.image_usage["total_images_generated"] += usage.get("total_images_generated") or 0
 
+    def add_web_search_calls(self, count: int):
+        """Increment the web search counter by ``count``.
+
+        Should be called by service handlers (e.g. Moonshot) after each batch
+        of ``$web_search`` tool calls so the cost can be priced from the model
+        config's ``web_search_cost`` field.
+        """
+        self.total_usage["web_search_count"] += count
+
     def get_total_usage(self):
         return self.total_usage
-    
+
     def get_image_usage(self):
         return self.image_usage

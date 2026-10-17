@@ -38,6 +38,7 @@ from ..openaiCompatible.openai_compatible_modelrun import openai_compatible_mode
 from ..streaming_service import StreamingService
 from .utils import (
     build_accumulated_response,
+    drop_unknown_responses_function_calls,
     make_code_mapping_by_service,
     merge_nested_agent_usage,
     process_data_and_run_tools,
@@ -265,6 +266,11 @@ class BaseService:
                         name=function_response['name'],
                         response=function_response_content
                     )
+                    # Echo Gemini's own function_call id back (required when built-in tools are combined
+                    # with function calling); synthetic stream ids were stripped from the call above.
+                    tool_call_id = function_response.get('tool_call_id')
+                    if isinstance(tool_call_id, str) and tool_call_id and not tool_call_id.startswith('gemini_fc_'):
+                        function_response_part.function_response.id = tool_call_id
                     configuration['contents'].append(types.Content(role='user', parts=[function_response_part]))
                 case  _:
                     pass
@@ -279,6 +285,9 @@ class BaseService:
             return {"success": False, "error": response.get("error")}
 
         model_response = response.get("modelResponse", {})
+        if has_openai_responses_shape(service):
+            # Never execute leaked provider plugins (e.g. MiniMax plugin_web_search) as client tools
+            drop_unknown_responses_function_calls(model_response, configuration)
         if configuration.get("tool_choice") is not None and configuration["tool_choice"] not in ["auto", "none"]:
             if service == "anthropic":
                 configuration["tool_choice"] = {"type": "auto"}
@@ -519,7 +528,7 @@ class BaseService:
             if configuration.get("tools", ""):
                 if has_anthropic_shape(service):
                     new_config["tool_choice"] = configuration.get("tool_choice", {"type": "auto"})
-                elif (
+                elif not has_openai_responses_shape(service) and (
                     service == service_name["openai_completion"]
                     or service == service_name["groq"]
                     or service == service_name["grok"]
@@ -604,7 +613,8 @@ class BaseService:
         try:
             response = {}
             loop = asyncio.get_event_loop()
-            if service == service_name["openai"]:
+            # Any service on the Responses API (wire_format openai_responses in the DB): OpenAI, Grok, MiniMax...
+            if has_openai_responses_shape(service):
                 response = await openai_response_model(
                     configuration,
                     apikey,
@@ -783,8 +793,8 @@ class BaseService:
             # re-emits the SSE start event.
             for stream_attempt in range(STREAM_SAME_MODEL_MAX_RETRIES + 1):
                 # Fresh generator each attempt => fresh provider request.
-                if service == service_name["openai"]:
-                    generator = openai_response_stream(configuration, apikey)
+                if has_openai_responses_shape(service):
+                    generator = openai_response_stream(configuration, apikey, service)
                 elif service == service_name["anthropic"]:
                     generator = anthropic_stream(configuration, apikey)
                 elif service == service_name["groq"]:

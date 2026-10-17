@@ -38,7 +38,7 @@ from ..commonServices.openAI.openai_embedding_call import OpenaiEmbedding
 from ..commonServices.openAI.openai_response import OpenaiResponse
 from ..commonServices.openaiCompatible.openai_compatible_call import OpenAICompatibleHandler
 from ..cache_service import make_json_serializable
-from src.configs.service_registry import uses_openai_sdk
+from src.configs.service_registry import has_openai_responses_shape, uses_openai_sdk
 
 
 class Helper:
@@ -267,7 +267,8 @@ class Helper:
 
     async def create_service_handler(params, service):
         class_obj = None
-        if service == service_name["openai"]:
+        if has_openai_responses_shape(service):
+            # OpenAI and any other service on the Responses API (wire_format openai_responses in the DB)
             class_obj = OpenaiResponse(params)
         elif service == service_name["gemini"]:
             class_obj = GeminiHandler(params)

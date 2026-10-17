@@ -16,6 +16,27 @@ def format_openai(response, tools_data, images, type="chat"):
     return _format_chat(response, tools_data, images)
 
 
+def _message_text(response):
+    """Text of every assistant message in the output, in order.
+
+    A turn can hold several message items: with server-side web search, providers such as MiniMax
+    write a lead-in ("I'll search for ...") before the web_search_call items and the answer after
+    them, so taking only the first message would drop the answer.
+    """
+    messages = []
+    for item in response.get("output") or []:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        text = "".join(
+            part.get("text") or ""
+            for part in item.get("content") or []
+            if isinstance(part, dict) and part.get("type") in ("output_text", "text", None)
+        )
+        if text:
+            messages.append(text)
+    return "\n\n".join(messages) or None
+
+
 def _format_chat(response, tools_data, images):
     generated_image_urls = [
         {
@@ -45,15 +66,7 @@ def _format_chat(response, tools_data, images):
                 if any(item.get("type") == "function_call" for item in response.get("output", []))
                 # Try to get content from multiple types with fallback
                 else (
-                    next(
-                        (
-                            (item.get("content") or [{}])[0].get("text", None)
-                            for item in response.get("output", [])
-                            if item.get("type") == "message"
-                            and (item.get("content") or [{}])[0].get("text", None) is not None
-                        ),
-                        None,
-                    )
+                    _message_text(response)
                     or next(
                         (
                             (item.get("content") or [{}])[0].get("text", None)

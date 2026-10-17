@@ -1,5 +1,6 @@
 from src.configs.constant import service_name
 from src.services.utils.ai_middleware_format import Response_formatter
+from src.services.utils.web_search_config import build_web_search_tool, use_web_search
 
 from ..baseService.baseService import BaseService
 from ..createConversations import ConversationService
@@ -19,6 +20,12 @@ class Groq(BaseService):
             + ([{"role": "user", "content": self.user}] if self.user else [])
         )
         self.customConfig = self.service_formatter(self.customConfig, service_name["groq"])
+
+        # Groq runs browser search server-side; the tool and which models support it come from the DB
+        if use_web_search(self.service, self.model, self.built_in_tools):
+            web_search_tool = build_web_search_tool(self.service)
+            if web_search_tool:
+                self.customConfig.setdefault("tools", []).append(web_search_tool)
 
         if self.stream_mode:
             groq_response = await self.stream(self.customConfig, self.apikey, service_name["groq"])
