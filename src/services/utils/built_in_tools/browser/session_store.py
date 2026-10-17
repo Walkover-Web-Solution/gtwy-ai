@@ -21,7 +21,7 @@ the Steel session it is running and one record per open tab, keyed by conversati
 
 Each conversation gets its own tab and its own logins on one host, and coming back to
 an older conversation reuses that tab. ``nd_gtwy_browser_thread_<key>`` keeps the
-volatile per-conversation state: the ref map, last URL, handoff flags and the host.
+volatile per-conversation state: the ref map and the handoff flags.
 """
 
 import asyncio
@@ -117,7 +117,7 @@ async def _load(key: str) -> dict | None:
 
 
 def empty_registry(host: str) -> dict:
-    return {"host": host, "steel_session_id": None, "debug_url": None, "created_at": time.time(), "tabs": {}}
+    return {"host": host, "steel_session_id": None, "debug_url": None, "tabs": {}}
 
 
 async def get_registry(host: str) -> dict | None:
@@ -147,10 +147,6 @@ def open_tab_count(registry: dict | None) -> int:
 async def save_registry(host: str, registry: dict) -> None:
     registry["host"] = host
     await store_in_cache(_registry_key(host), registry, ttl=REGISTRY_TTL_SECONDS)
-
-
-async def clear_registry(host: str) -> None:
-    await delete_in_cache(_registry_key(host))
 
 
 async def acquire_registry_lock(host: str) -> bool:
@@ -209,15 +205,10 @@ def drop_tab(registry: dict, tkey: str) -> dict | None:
 
 def default_thread_state() -> dict:
     return {
-        "host": None,
-        "target_id": None,
-        "last_url": None,
-        "snapshot_seq": 0,
         "ref_map": {},
         "handoff_active": False,
         "handoff_message": None,
         "handoff_message_id": None,
-        "handoff_started_at": None,
     }
 
 
