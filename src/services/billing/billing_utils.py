@@ -593,14 +593,28 @@ async def _alert_credit_exhausted(org_id: str) -> None:
     Fires on every blocked request — deliberately not deduplicated.
     """
     try:
-        # Lazy import, as in apiservice: baseService.utils sits on a long import chain.
-        from src.services.commonServices.baseService.utils import unknown_error_handler_alert
+        # The notification hub shows it to the org (repeats merge into one row with a count) and
+        # alerts the GTWY team; the direct team alert is only the fallback when the queue is down.
+        from src.services.notifications.emit import emit_event
 
-        await unknown_error_handler_alert({
+        team_body = {
             "type": "orgCreditExhausted",
             "token": None,
             "reason": f"org_id={org_id} blocked: credit balance exhausted (CREDIT_BALANCE_EXHAUSTED)",
-        })
+        }
+        queued = await emit_event(
+            "billing.credits_exhausted",
+            org_id,
+            title="Credits exhausted",
+            message="Requests are being blocked because your credit balance is used up. Top up your wallet to continue.",
+            data={"team_route": "ops", "team_body": {**team_body, "env": Config.ENVIRONMENT}},
+            dedupe_key=f"billing.credits_exhausted:{org_id}",
+        )
+        if not queued:
+            # Lazy import, as in apiservice: baseService.utils sits on a long import chain.
+            from src.services.commonServices.baseService.utils import unknown_error_handler_alert
+
+            await unknown_error_handler_alert(team_body)
     except Exception as e:
         logger.error(f"[billing] credit-exhausted alert failed for org {org_id}: {e}")
 
