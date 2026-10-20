@@ -1,9 +1,41 @@
 import asyncio
 import copy
+import random
 import traceback
 from src.configs.service_registry import has_anthropic_shape, has_gemini_shape, has_openai_choices_shape, has_openai_responses_shape
 from src.services.commonServices.baseService.utils import serialize_config
 from src.exceptions import ApiCallError
+
+RATE_LIMIT_STATUS_CODE = 429
+
+
+def is_rate_limited(result):
+    """True when a call result is a provider rate-limit (429) failure."""
+    return isinstance(result, dict) and not result.get("success") and result.get("status_code") == RATE_LIMIT_STATUS_CODE
+
+
+def _backoff_delay(attempt, base_delay, max_delay, retry_after=None):
+    """Full-jitter exponential backoff; a provider supplied retry delay wins but is still capped."""
+    if retry_after is not None:
+        return min(float(retry_after), max_delay)
+    return random.uniform(0, min(base_delay * (2 ** attempt), max_delay))
+
+
+async def retry_on_rate_limit(call, *, max_attempts=3, base_delay=0.5, max_delay=8.0):
+    """Run `call()` and retry it while it reports a 429, sleeping with exponential backoff.
+
+    `call` is an argument-less coroutine function returning the usual {"success": bool, ...}
+    dict. Only a 429 is retried — anything else is returned straight away — and the last
+    result is returned once the attempts run out, so the caller keeps deciding what to do
+    with it (alert, model fallback, ...).
+    """
+    result = None
+    for attempt in range(max(1, max_attempts)):
+        result = await call()
+        if not is_rate_limited(result) or attempt == max_attempts - 1:
+            return result
+        await asyncio.sleep(_backoff_delay(attempt, base_delay, max_delay, result.get("retry_after")))
+    return result
 
 
 async def execute_api_call(
@@ -25,22 +57,29 @@ async def execute_api_call(
     thread_id=None,
     api_collection=None,
     is_playground=False,
+    retry_policy=None,
 ):
     try:
-        # Start timer
-        timer.start()
+        attempt = 0
 
-        # Execute the API call (no retry/fallback)
-        config = copy.deepcopy(configuration)
-        result = await api_call(config)
+        async def run_once():
+            # Each attempt is timed and logged on its own; only retried attempts carry an index
+            # so the log line of a one-shot call stays exactly as it was.
+            nonlocal attempt
+            timer.start()
+            step = f"{service} Processing time for call :- {count + 1}"
+            if attempt:
+                step = f"{step} (attempt {attempt + 1})"
+            attempt += 1
+            call_result = await api_call(copy.deepcopy(configuration))
+            execution_time_logs.append({"step": step, "time_taken": timer.stop("API chat completion")})
+            return call_result
 
-        # Log execution time
-        execution_time_logs.append(
-            {
-                "step": f"{service} Processing time for call :- {count + 1}",
-                "time_taken": timer.stop("API chat completion"),
-            }
-        )
+        # Only providers that opt in get retries; everyone else keeps the single-shot behaviour.
+        if retry_policy:
+            result = await retry_on_rate_limit(run_once, **retry_policy)
+        else:
+            result = await run_once()
 
         if result["success"]:
             result["response"] = await check_space_issue(result["response"], service)

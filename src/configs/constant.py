@@ -1,3 +1,4 @@
+import os
 from enum import StrEnum
 
 
@@ -198,4 +199,13 @@ auto_model_tradeoff = {
     "quality": None,
     "cost": "cost",
     "speed": "latency"
+}
+
+# Retry policy applied to Gemini calls that come back 429 / RESOURCE_EXHAUSTED.
+# max_attempts counts the first call, so 3 == the original call + 2 retries.
+# Delays are seconds and are used as `base_delay * 2 ** attempt` with full jitter, capped at max_delay.
+GEMINI_RETRY = {
+    "max_attempts": int(os.getenv("GEMINI_RETRY_MAX_ATTEMPTS", "3")),
+    "base_delay": float(os.getenv("GEMINI_RETRY_BASE_DELAY", "0.5")),
+    "max_delay": float(os.getenv("GEMINI_RETRY_MAX_DELAY", "8")),
 }
