@@ -7,6 +7,7 @@ from src.services.commonServices.Google.gemini_image_utils import (
     handle_gemini_generation,
     handle_imagen_generation,
 )
+from src.services.commonServices.Google.gemini_modelrun import call_with_rate_limit_retry
 
 
 async def gemini_image_model(configuration, apikey, execution_time_logs, timer):
@@ -21,7 +22,10 @@ async def gemini_image_model(configuration, apikey, execution_time_logs, timer):
 
         # IMAGEN MODELS
         if model in IMAGEN_MODELS:
-            result = await handle_imagen_generation(client, model, prompt, configuration)
+            # dict() per attempt: the handlers pop keys off the configuration they are given.
+            result = await call_with_rate_limit_retry(
+                lambda: handle_imagen_generation(client, model, prompt, dict(configuration))
+            )
 
             execution_time_logs.append(
                 {
@@ -34,7 +38,9 @@ async def gemini_image_model(configuration, apikey, execution_time_logs, timer):
 
         # GEMINI MODELS
         else:
-            result = await handle_gemini_generation(client, model, prompt, configuration)
+            result = await call_with_rate_limit_retry(
+                lambda: handle_gemini_generation(client, model, prompt, dict(configuration))
+            )
 
             execution_time_logs.append(
                 {"step": "Gemini image Processing time", "time_taken": timer.stop("Gemini image Processing time")}

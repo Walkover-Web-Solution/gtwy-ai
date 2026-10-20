@@ -3,6 +3,8 @@ import traceback
 from google import genai
 from google.genai import types
 
+from src.services.commonServices.Google.gemini_modelrun import call_with_rate_limit_retry
+
 
 async def gemini_video_model(
     configuration, apikey, execution_time_logs, timer, file_data=None, prompt=None, youtube_url=None
@@ -36,7 +38,10 @@ async def gemini_video_model(
         contents = types.Content(parts=[p for p in [video_part, prompt_part] if p])
 
         # Generate response
-        response = client.models.generate_content(model=model, contents=[contents], config=None)
+        async def generate():
+            return client.models.generate_content(model=model, contents=[contents], config=None)
+
+        response = await call_with_rate_limit_retry(generate)
 
         execution_time_logs.append(
             {"step": "Gemini video content generation", "time_taken": timer.stop("Gemini video content generation")}
