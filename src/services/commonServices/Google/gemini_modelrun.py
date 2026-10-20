@@ -1,12 +1,12 @@
 # from src.services.utils.unified_token_validator import validate_gemini_token_limit
-from globals import logger
+import uuid
+
+from google import genai
+
 from src.configs.constant import GEMINI_RETRY
 from src.exceptions import ApiCallError
 
 from ..api_executor import RATE_LIMIT_STATUS_CODE, execute_api_call, retry_on_rate_limit
-from google import genai
-import traceback
-import uuid
 
 
 def is_gemini_rate_limit_error(error):
@@ -180,8 +180,8 @@ async def gemini_modelrun(
         # Validate token count before making API call
         # model_name = configuration.get('model')
         # validate_gemini_token_limit(configuration, model_name, service, apiKey)
-        
-        client = genai.Client(api_key=apiKey) 
+
+        client = genai.Client(api_key=apiKey)
 
         # Define the API call function
         async def api_call(config):

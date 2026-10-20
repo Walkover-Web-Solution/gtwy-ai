@@ -2,8 +2,13 @@ import asyncio
 import copy
 import random
 import traceback
-from src.configs.service_registry import has_anthropic_shape, has_gemini_shape, has_openai_choices_shape, has_openai_responses_shape
-from src.services.commonServices.baseService.utils import serialize_config
+
+from src.configs.service_registry import (
+    has_anthropic_shape,
+    has_gemini_shape,
+    has_openai_choices_shape,
+    has_openai_responses_shape,
+)
 from src.exceptions import ApiCallError
 
 RATE_LIMIT_STATUS_CODE = 429
@@ -91,8 +96,8 @@ async def execute_api_call(
 
             # Send alert if required (even on failure)
             if alert_on_retry and not is_playground:
-                from src.send_alert import send_alert
                 from src.configs.constant import alert_types
+                from src.send_alert import send_alert
                 asyncio.create_task(send_alert(
                     bridge_id=bridge_id,
                     org_id=org_id,
