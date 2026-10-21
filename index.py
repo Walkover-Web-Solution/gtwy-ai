@@ -11,8 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import Config
-from src.db_services.browserCookieService import ensure_indexes as ensure_browser_cookie_indexes
-from src.services.utils.built_in_tools.browser import steel_client
+from src.db_services.browserProfileService import ensure_indexes as ensure_browser_profile_indexes
+from src.services.utils.built_in_tools.browser import browser_use_client
 from src.services.utils.built_in_tools.browser.reaper import run_browser_reaper_loop
 import globals as _globals
 from globals import logger
@@ -74,9 +74,9 @@ async def lifespan(app: FastAPI):
     plan_registry_task = asyncio.create_task(background_listen_for_plan_changes())
     supported_services_refresh_task = asyncio.create_task(run_supported_services_refresh_loop())
     # Gtwy_Browser reaper runs on every pod (browser sessions start on any pod), not only the consumer.
-    browser_reaper_task = asyncio.create_task(run_browser_reaper_loop()) if steel_client.is_configured() else None
-    if steel_client.is_configured():
-        asyncio.create_task(ensure_browser_cookie_indexes())
+    browser_reaper_task = asyncio.create_task(run_browser_reaper_loop()) if browser_use_client.is_configured() else None
+    if browser_use_client.is_configured():
+        asyncio.create_task(ensure_browser_profile_indexes())
 
     yield  # Startup logic is complete
 
