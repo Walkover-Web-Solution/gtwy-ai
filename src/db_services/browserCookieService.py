@@ -1,31 +1,26 @@
-"""Durable store for a conversation's browser logins.
+"""Read-only access to the logins saved by the old Steel browser backend.
 
-One document per conversation holds nothing but an encrypted cookie blob, so a user
-who signed in yesterday is still signed in when the conversation opens a new tab.
-Redis sits in front of this as a cache; Mongo is the source of truth.
+Steel kept one document per conversation in ``gtwy_browser_cookies`` holding an encrypted
+cookie blob. Browser Use keeps logins in its own profiles now, so these documents are only
+read once, to carry a conversation's login into its first Browser Use browser
+(``browser/legacy_cookies.py``), and then deleted. The collection's TTL index removes the
+rest on its own within 30 days of the switch.
 
-Every function swallows its errors: losing a stored login means the user signs in
-again, which must never break a browsing turn.
+TODO: 30 days after the Browser Use switch reaches prod, delete this module,
+``browser/legacy_cookies.py`` and the ``gtwy_browser_cookies`` collection; every document has
+expired by then.
+
+Every function swallows its errors: losing a stored login means the user signs in again,
+which must never break a browsing turn.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from globals import logger
 from models.mongo_connection import db
 from src.services.utils.time import with_timeout
 
 browserCookieModel = db["gtwy_browser_cookies"]
-
-
-async def ensure_indexes() -> None:
-    """Create the two indexes this collection needs. Idempotent, safe on every boot."""
-    try:
-        await with_timeout(browserCookieModel.create_index("scope_key", unique=True))
-        # The deadline lives in the document, so changing the TTL setting needs no index rebuild.
-        await with_timeout(browserCookieModel.create_index("expires_at", expireAfterSeconds=0))
-        logger.info("Gtwy_Browser: cookie store indexes are in place")
-    except Exception as error:
-        logger.error(f"Error creating gtwy_browser_cookies indexes: {error!s}")
 
 
 async def get_browser_cookies(scope_key: str) -> dict | None:
@@ -47,23 +42,11 @@ async def get_browser_cookies(scope_key: str) -> dict | None:
         return None
 
 
-async def upsert_browser_cookies(scope_key: str, encrypted: str, cookie_count: int, ttl_seconds: int, meta: dict | None = None) -> bool:
-    """Write this conversation's encrypted cookies, replacing whatever was there."""
+async def delete_browser_cookies(scope_key: str) -> bool:
+    """Forget this conversation's old cookies once they live in its Browser Use profile."""
     try:
-        now = datetime.now(UTC)
-        fields = {
-            "scope_key": scope_key,
-            "cookies": encrypted,
-            "cookie_count": cookie_count,
-            "version": 1,
-            "updated_at": now,
-            "expires_at": now + timedelta(seconds=ttl_seconds),
-            **{key: value for key, value in (meta or {}).items() if value is not None},
-        }
-        await with_timeout(
-            browserCookieModel.find_one_and_update({"scope_key": scope_key}, {"$set": fields}, upsert=True)
-        )
+        await with_timeout(browserCookieModel.delete_one({"scope_key": scope_key}))
         return True
     except Exception as error:
-        logger.error(f"Error in upsert_browser_cookies for {scope_key}: {error!s}")
+        logger.error(f"Error in delete_browser_cookies for {scope_key}: {error!s}")
         return False

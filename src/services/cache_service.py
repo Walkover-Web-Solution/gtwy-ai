@@ -140,6 +140,22 @@ async def smembers_in_cache(identifier: str) -> list[str]:
         return []
 
 
+async def srem_in_cache(identifier: str, *members: str) -> int:
+    """Remove members from a Redis set, returning how many were removed."""
+    clean = [str(m) for m in members if m]
+    if not clean:
+        return 0
+    try:
+        key = f"{REDIS_PREFIX}{identifier}"
+        _t = _time.time()
+        removed = await client.srem(key, *clean)
+        log_slow_call(f"Redis SREM {identifier}", _time.time() - _t, SLOW_CALL_THRESHOLDS["redis"])
+        return int(removed)
+    except Exception as e:
+        logger.error(f"Error removing from set {identifier}: {str(e)}")
+        return 0
+
+
 async def delete_in_cache(identifiers: str | list[str]) -> bool:
     if not await client.ping():
         return False

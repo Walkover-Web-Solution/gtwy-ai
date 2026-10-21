@@ -139,6 +139,7 @@ class CompletionRequest(BaseModel):
     built_in_tools: list[Any] | None = None
     guardrails: dict[str, Any] | None = None
     web_search_filters: list[str] | dict[str, Any] | None = None
+    gtwy_browser_settings: dict[str, Any] | None = None
     orchestrator_flag: bool | None = None
     environment: str | None = None
     wrapper_id: str | None = None
