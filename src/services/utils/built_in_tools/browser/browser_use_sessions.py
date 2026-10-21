@@ -8,7 +8,8 @@
   org can hold at most MAX_BROWSERS_PER_ORG browsers and cannot use up the account's limit.
 * The browser's default context is used, never a new one: that is where the conversation's
   profile (its saved logins) is loaded. The profile is written back when the browser stops.
-* No proxy unless the agent's browser settings name a country (``gtwy_browser_settings``).
+* Every browser goes through the residential proxy (India by default); the agent's browser
+  settings (``gtwy_browser_settings.proxy_country``) pick another country or "none".
 * Disconnecting does not stop a Browser Use browser and it bills while it runs, so the
   reaper stops browsers whose conversation went quiet, and any browser this environment
   started that no record points at.
