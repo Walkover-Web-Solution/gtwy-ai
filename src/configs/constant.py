@@ -128,9 +128,12 @@ redis_keys = {
     "billing_no_wallet_": "nd_billing_no_wallet_",
     "org_billing_plan_": "nd_org_billing_plan_",
     "blocked_orgs_": "nd_blocked_orgs_",
-    # Gtwy_Browser: which tab belongs to which conversation, and that tab's page refs
-    "gtwy_browser_registry": "nd_gtwy_browser_registry",
+    # Gtwy_Browser: a conversation's page refs and handoff flags
     "gtwy_browser_thread_": "nd_gtwy_browser_thread_",
+    # Gtwy_Browser: one hosted browser per conversation, the set the reaper walks, and each org's browsers
+    "gtwy_browser_bu_": "nd_gtwy_browser_bu_",
+    "gtwy_browser_bu_index": "nd_gtwy_browser_bu_index",
+    "gtwy_browser_bu_org_": "nd_gtwy_browser_bu_org_",
 }
 
 tag_keys = {

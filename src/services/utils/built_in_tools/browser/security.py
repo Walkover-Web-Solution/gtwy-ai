@@ -5,8 +5,6 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
-from . import steel_client
-
 BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal", "169.254.169.254"}
 BLOCKED_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home", ".arpa")
 DNS_TIMEOUT_SECONDS = 5
@@ -46,8 +44,6 @@ async def ensure_url_allowed(url: str) -> None:
         raise UrlBlocked("url has no hostname")
     if hostname in BLOCKED_HOSTNAMES or hostname.endswith(BLOCKED_SUFFIXES):
         raise UrlBlocked("url points to an internal host, which is not allowed")
-    if hostname in steel_client.steel_hostnames():
-        raise UrlBlocked("url points to the browser backend, which is not allowed")
 
     try:
         literal = ipaddress.ip_address(hostname)
