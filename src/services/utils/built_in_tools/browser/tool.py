@@ -50,12 +50,19 @@ SETUP_TIMEOUT_SECONDS = 25
 TAB_OPENING_ACTIONS = {"click", "type", "press"}
 NEW_TAB_LOAD_TIMEOUT_MS = 10_000
 NEW_TAB_SETTLE_TIMEOUT_MS = 3_000
-HANDOFF_INSTRUCTIONS = (
-    "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
-    "complete the action there (log in, solve the CAPTCHA, enter the OTP), and reply 'done' "
-    "when finished. Do not take any other browser action in this turn. When the user replies, "
-    "call snapshot and continue the original task."
-)
+
+
+def _handoff_instructions(live_url: str | None) -> str:
+    """What the model must reply after a handoff. The link is spelled out because models given
+    both the page's own address (``url``) and ``live_url`` sometimes send the site's sign-in URL,
+    and a login in the user's own browser never reaches this one."""
+    return (
+        f"Reply to the user now with this exact link to the live browser: {live_url} . Tell them "
+        "to open it, complete the action there (log in, solve the CAPTCHA, enter the OTP), and "
+        "reply 'done' when finished. Do not give them the website's own address or sign-in URL: "
+        "a login in their own browser does not reach this browser. Do not take any other browser "
+        "action in this turn. When the user replies, call snapshot and continue the original task."
+    )
 
 
 def _reason(exc: Exception) -> str:
@@ -195,11 +202,11 @@ async def _run(args: dict, ctx: dict) -> dict:
         if await looks_like_login_page(page):
             await _begin_handoff(ctx, tkey, state, "This page requires you to log in.")
             await _emit_handoff(ctx, live_url, state["handoff_message"])
-            response.update(login_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
+            response.update(login_required=True, live_url=live_url, instructions=_handoff_instructions(live_url))
         elif looks_like_bot_check(page.url, response.get("snapshot"), len(new_ref_map)):
             await _begin_handoff(ctx, tkey, state, "This site wants to check you are human. Please solve the CAPTCHA.")
             await _emit_handoff(ctx, live_url, state["handoff_message"])
-            response.update(captcha_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
+            response.update(captcha_required=True, live_url=live_url, instructions=_handoff_instructions(live_url))
 
     # The chat UI needs a way to show this conversation's browser at any moment, not only when a
     # login blocks the agent, so every result carries its live link.
@@ -286,6 +293,6 @@ async def _handoff(args: dict, ctx: dict, tkey: str, live_url: str | None, state
     await _begin_handoff(ctx, tkey, state, message)
     await _emit_handoff(ctx, live_url, message)
     return _ok(
-        {"handoff": True, "live_url": live_url, "message": message, "instructions": HANDOFF_INSTRUCTIONS},
+        {"handoff": True, "live_url": live_url, "message": message, "instructions": _handoff_instructions(live_url)},
         action="request_user_action",
     )
