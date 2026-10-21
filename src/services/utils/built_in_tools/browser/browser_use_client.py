@@ -24,6 +24,11 @@ API_URL = "https://api.browser-use.com/api/v4"
 # browsers long before this, so it only matters for a conversation that stays busy.
 BROWSER_TIMEOUT_MINUTES = 240
 DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
+# Every browser goes through Browser Use's residential proxy in this country unless the agent's
+# browser settings pick another one, or turn it off with proxy_country "none". The proxy gets
+# past much more bot protection (Myntra only loads through it) but costs about $4.9 per GB.
+DEFAULT_PROXY_COUNTRY = "in"
+PROXY_OFF_VALUES = {"none", "off", "false", "no"}
 
 
 class BrowserUseError(Exception):
@@ -81,22 +86,26 @@ async def _request(method: str, path: str, json_body: dict | None = None, params
 
 
 def proxy_country(value) -> str | None:
-    """A valid two-letter proxy country (``in``, ``us``...), or None for no proxy."""
-    country = str(value or "").strip().lower()
-    return country if COUNTRY_CODE_RE.match(country) else None
+    """The proxy country for an agent's ``proxy_country`` setting, or None for no proxy.
+
+    Not set (or not a two-letter code) means DEFAULT_PROXY_COUNTRY; "none" turns the proxy off.
+    """
+    country = str(value if value is not None else "").strip().lower()
+    if country in PROXY_OFF_VALUES or value is False:
+        return None
+    return country if COUNTRY_CODE_RE.match(country) else DEFAULT_PROXY_COUNTRY
 
 
 async def create_browser(profile_id: str | None, metadata: dict | None = None, country: str | None = None) -> dict:
     """Start one hosted browser. Returns its view: id, status, cdpUrl, liveUrl, timeoutAt...
 
-    No proxy unless ``country`` is given: the residential proxy gets past more bot protection
-    but costs about $4.9 per GB, so agents turn it on in their browser settings.
+    ``country`` is the proxy country already chosen with ``proxy_country()``; None means no proxy.
     """
     body = {
         "timeout": BROWSER_TIMEOUT_MINUTES,
         "browserScreenWidth": DEFAULT_VIEWPORT["width"],
         "browserScreenHeight": DEFAULT_VIEWPORT["height"],
-        "proxyCountryCode": proxy_country(country),
+        "proxyCountryCode": country,
     }
     if profile_id:
         body["profileId"] = profile_id

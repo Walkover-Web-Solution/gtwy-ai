@@ -21,7 +21,7 @@ model ──tool call──▶ gtwy (Gtwy_Browser tool) ──REST──▶ api.
 
 conversation A ── its own browser (profile A: logged in as user A)
 conversation B ── its own browser (profile B: logged in as user B)
-conversation C ── its own browser (no proxy, logged out)
+conversation C ── its own browser (proxy off for its agent, logged out)
 ```
 
 - **Snapshot loop.** Every action returns the page as an accessibility tree. Interactive elements
@@ -63,10 +63,12 @@ conversation C ── its own browser (no proxy, logged out)
   conversation opens its first Browser Use browser, those cookies are loaded into it once and the
   document is deleted (`legacy_cookies.py`). The collection's TTL index removes the rest within 30
   days. Then delete `legacy_cookies.py`, `browserCookieService.py` and the collection.
-- **Proxy per agent.** No proxy by default. An agent turns on Browser Use's residential proxy with
-  `gtwy_browser_settings: {"proxy_country": "in"}` (any two-letter country) on the agent, or in the
-  request body. It gets past more bot protection but costs about $4.9 per GB. The setting applies
-  when the conversation's next browser starts. Every browser is tagged `gtwy_org`, `gtwy_env` and
+- **Proxy on by default.** Every browser goes through Browser Use's residential proxy in India
+  (`DEFAULT_PROXY_COUNTRY` in `browser_use_client.py`). It gets past much more bot protection but
+  costs about $4.9 per GB. An agent picks another country with
+  `gtwy_browser_settings: {"proxy_country": "us"}` or turns it off with `"none"`, on the agent or in
+  the request body. The setting applies when the conversation's next browser starts. To check it,
+  ask the browser to open https://ipinfo.io/json: it shows India with the default proxy. Every browser is tagged `gtwy_org`, `gtwy_env` and
   `gtwy_proxy` in Browser Use, so cost per org can be read there.
 - **Stealth.** Browser Use runs a hardened Chromium with stealth on by default and solves supported
   CAPTCHAs. In the POC, bot.sannysoft.com showed 0 failed checks (plain headless Chrome: 4), and
@@ -120,8 +122,9 @@ deployment. Everything else is a constant in the code:
 The Python dependency is `playwright` as a CDP client only; no browser download is needed.
 
 Enable the tool on an agent by adding `"Gtwy_Browser"` to its `built_in_tools`, or pass
-`"built_in_tools": ["Gtwy_Browser"]` in the request body. To turn on the proxy for an agent, set
-`gtwy_browser_settings: {"proxy_country": "in"}` on it (or in the request body).
+`"built_in_tools": ["Gtwy_Browser"]` in the request body. The proxy is on (India) by default; set
+`gtwy_browser_settings: {"proxy_country": "none"}` on an agent (or in the request body) to turn it
+off, or another two-letter country to change it.
 
 ## Tool schema seen by the model
 
@@ -211,7 +214,7 @@ was just started gets three connect attempts, one second apart.
 
 - Browser time: $0.02 per browser-hour, billed per minute. With the 5-minute idle stop, a 10-minute
   conversation costs about $0.005.
-- Residential proxy (only for agents that turn it on): about $4.9 per GB. A shopping home page is
+- Residential proxy (on by default): about $4.9 per GB. A shopping home page is
   2-3 MB. Without the proxy, traffic cost about $0.20 per GB.
 - Plan: 10 concurrent browsers free, 50 after a one-time $100 top-up.
 
