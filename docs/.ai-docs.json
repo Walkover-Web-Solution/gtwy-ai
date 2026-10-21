@@ -1,0 +1,15 @@
+{
+  "skill": "ai-docs",
+  "skill_version": "0.1.0",
+  "created": "2026-10-13",
+  "last_run": {
+    "mode": "update",
+    "commit": "6fdb8181",
+    "date": "2026-10-13"
+  },
+  "superseded": [
+    "docs/AI_INSTRUCTIONS.md",
+    "docs/CHAT_COMPLETION_FLOW.md",
+    "docs/GTWY_BROWSER.md"
+  ]
+}
