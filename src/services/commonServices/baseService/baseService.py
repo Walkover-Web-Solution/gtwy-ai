@@ -120,12 +120,14 @@ class BaseService:
         self.file_data = params.get("file_data")
         self.youtube_url = params.get("youtube_url")
         self.web_search_filters = params.get("web_search_filters")
+        self.browser_settings = params.get("browser_settings") or {}
         self.folder_id = params.get("folder_id")
         self.bridge_configurations = params.get("bridge_configurations")
         self.owner_id = params.get("owner_id")
         self.billing_attribution = params.get("billing_attribution") or {}
         self.is_embed = params.get("is_embed")
         self.user_id = params.get("user_id")
+        self.viewer_id = params.get("viewer_id")
         self.api_collection = params.get("api_collection")
         self.meta = params.get("meta")
         self.created_at = params.get("created_at")

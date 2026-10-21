@@ -4,7 +4,7 @@ from globals import logger
 from models.mongo_connection import db
 from src.configs.constant import inbuild_tools, tool_types
 from src.services.commonServices.baseService.utils import makeFunctionName
-from src.services.utils.built_in_tools.browser import steel_client
+from src.services.utils.built_in_tools.browser import browser_use_client
 from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
@@ -370,11 +370,11 @@ def _should_enable_browser_tool(built_in_tools):
 
 
 def add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools):
-    """Add the Steel-backed browser tool when requested via built-in tools."""
+    """Add the browser tool (Browser Use Cloud browsers) when requested via built-in tools."""
     if not _should_enable_browser_tool(built_in_tools):
         return
-    if not steel_client.is_configured():
-        logger.warning("Gtwy_Browser requested but no Steel host is configured (STEEL_API_URLS / STEEL_API_URL); tool not registered")
+    if not browser_use_client.is_configured():
+        logger.warning("Gtwy_Browser requested but BROWSER_USE_API_KEY is not set; tool not registered")
         return
 
     tools.append(build_browser_tool_schema())

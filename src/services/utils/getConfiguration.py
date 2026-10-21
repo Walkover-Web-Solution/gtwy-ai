@@ -131,6 +131,9 @@ async def _prepare_configuration_response(
     auto_model_select = override_fields.get("auto_model_select") or bridges.get("auto_model_select")
     chatbot_auto_answers = override_fields.get("chatbot_auto_answers") or bridges.get("chatbot_auto_answers")
     cache_on = override_fields.get("cache_on") or bridges.get("cache_on")
+    # Gtwy_Browser options of this agent, e.g. {"proxy_country": "in"}; a request may override them.
+    browser_settings = override_fields.get("gtwy_browser_settings") or bridges.get("gtwy_browser_settings")
+    browser_settings = browser_settings if isinstance(browser_settings, dict) else {}
 
     service_apikeys = {}
     merged_apikeys = {
@@ -286,6 +289,7 @@ async def _prepare_configuration_response(
         "folder_id": bridges.get("folder_id"),
         "wrapper_id": bridges.get("wrapper_id"),
         "web_search_filters": web_search_filters_value,
+        "gtwy_browser_settings": browser_settings,
         "chatbot": chatbot,
         "chatbot_auto_answers": chatbot_auto_answers,
         "cache_on": cache_on,
