@@ -133,6 +133,9 @@ async def send_usage_alert_email(mail_type: str, scope: str, parsed_data: dict, 
         }
         if getattr(Config, "ENVIRONMENT", None):
             payload["environment"] = Config.ENVIRONMENT
+        # The notification hub shows it in-app and sends the email; direct email only as fallback.
+        if await _queue_usage_alert(mail_type, scope, parsed_data, details, payload):
+            return True
         response, _ = await fetch(USAGE_ALERT_MAIL_URL, method="POST", headers={}, json_body=payload)
         logger.info(
             f"[usage-alert] EMAIL SENT type={mail_type} scope={scope} "
@@ -141,6 +144,49 @@ async def send_usage_alert_email(mail_type: str, scope: str, parsed_data: dict, 
         return True
     except Exception as e:
         logger.warning(f"Failed to send usage alert email (type={mail_type}, scope={scope}): {e}")
+        return False
+
+
+_USAGE_EVENT = {
+    usage_mail_types["threshold"]: ("usage.threshold_reached", "Usage threshold reached"),
+    usage_mail_types["limit_reached"]: ("usage.limit_reached", "Usage limit reached"),
+    usage_mail_types["spike"]: ("usage.daily_spike", "Daily usage spike"),
+}
+_SCOPE_LABEL = {"bridge": "Agent", "folder": "Folder", "apikey": "API key"}
+
+
+async def _queue_usage_alert(mail_type: str, scope: str, parsed_data: dict, details: dict, mail_body: dict) -> bool:
+    """Queue the usage alert for the notification hub. Returns False when it could not be queued."""
+    try:
+        # Lazy import: emit -> queue -> baseQueue -> send_alert sits on a long import chain.
+        from src.services.notifications.emit import emit_event
+
+        event_type, title = _USAGE_EVENT[mail_type]
+        subject = _SCOPE_LABEL.get(scope, scope)
+        if scope == "bridge" and parsed_data.get("name"):
+            subject = f'Agent "{parsed_data.get("name")}"'
+        period = details.get("reset_period") or "current"
+        if event_type == "usage.daily_spike":
+            message = (
+                f"{subject} spent {details.get('today_spend')} today, over {details.get('multiplier')}x "
+                f"its recent daily average of {details.get('avg_daily_spend')}."
+            )
+        else:
+            message = (
+                f"{subject} has used {details.get('percent_used')}% of its {period} limit "
+                f"({details.get('current_usage')} of {details.get('limit_value')})."
+            )
+        return await emit_event(
+            event_type,
+            parsed_data.get("org_id"),
+            agent_id=parsed_data.get("bridge_id") if scope == "bridge" else None,
+            title=title,
+            message=message,
+            data={"scope": scope, **details, "mail_body": mail_body},
+            dedupe_key=f"{event_type}:{scope}:{parsed_data.get('bridge_id') or parsed_data.get('folder_id')}",
+        )
+    except Exception as e:
+        logger.warning(f"[usage-alert] could not queue (type={mail_type}, scope={scope}): {e}")
         return False
 
 
