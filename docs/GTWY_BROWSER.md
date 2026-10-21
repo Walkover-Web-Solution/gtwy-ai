@@ -27,6 +27,10 @@ conversation C ── its own browser (proxy off for its agent, logged out)
 - **Snapshot loop.** Every action returns the page as an accessibility tree. Interactive elements
   carry refs like `[e5]`. The model acts on a ref, gets a fresh snapshot, repeats. Refs are only
   valid for the latest snapshot; a stale ref returns an error asking for a new snapshot.
+- **New tabs are followed.** The agent sees one page at a time. When a click, a key press or typing
+  makes the site open a new tab (Flipkart and Amazon open products this way), the agent is moved to
+  that tab, gets its snapshot and `opened_new_tab: true`. The earlier tab stays open in the
+  background; the user sees both in the live view.
 - **One browser per conversation.** The key is `<org_id>:<thread_id>:<sub_thread_id>`. Each
   conversation gets a whole Chromium of its own, so its live view can only show its own pages, and a
   heavy, frozen or crashed page touches no one else. Any gtwy pod can drive any conversation's

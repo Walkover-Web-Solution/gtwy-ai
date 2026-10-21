@@ -24,10 +24,17 @@ from .actions import (
     do_type,
     looks_like_bot_check,
     looks_like_login_page,
+    snapshot_page,
 )
 from .browser_use_client import BrowserUseError
-from .browser_use_sessions import drop_connection, mark_handoff, open_or_reuse_tab, release_tab
-from .connection import BrowserConnectionError, is_connection_lost_error, is_timeout_error
+from .browser_use_sessions import (
+    drop_connection,
+    mark_handoff,
+    open_or_reuse_tab,
+    release_tab,
+    set_conversation_page,
+)
+from .connection import BrowserConnectionError, is_connection_lost_error, is_timeout_error, target_id_of
 from .live_link import signed_live_url
 from .schema import BROWSER_ACTIONS
 from .security import UrlBlocked, ensure_url_allowed, wrap_untrusted
@@ -38,6 +45,11 @@ TOOL_TIMEOUT_SECONDS = 60
 # separately, so a slow start can never eat the time the page itself needs. A new browser takes
 # about 10 s, a running one about 1 s. Setup plus a 30 s navigate fits inside the ceiling above.
 SETUP_TIMEOUT_SECONDS = 25
+# Actions that can make a site open a new tab (a target=_blank link, window.open on a click or a
+# key press). The agent is moved to that tab, since it can only see one page at a time.
+TAB_OPENING_ACTIONS = {"click", "type", "press"}
+NEW_TAB_LOAD_TIMEOUT_MS = 10_000
+NEW_TAB_SETTLE_TIMEOUT_MS = 3_000
 HANDOFF_INSTRUCTIONS = (
     "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
     "complete the action there (log in, solve the CAPTCHA, enter the OTP), and reply 'done' "
@@ -131,8 +143,25 @@ async def _run(args: dict, ctx: dict) -> dict:
     if action == "request_user_action":
         return await _handoff(args, ctx, tkey, live_url, state)
 
+    opened_tabs: list = []
+
+    def _on_new_tab(new_page) -> None:
+        opened_tabs.append(new_page)
+
+    watched_context = page.context if action in TAB_OPENING_ACTIONS else None
+    if watched_context is not None:
+        watched_context.on("page", _on_new_tab)
     try:
         response, new_ref_map = await _dispatch(action, args, page, state)
+        new_tab = await _opened_tab(opened_tabs)
+        if new_tab is not None:
+            # The site opened a new tab (Flipkart and Amazon open products this way). Follow it,
+            # so the model sees the page it asked for; the earlier tab stays open behind it.
+            page = new_tab
+            response, new_ref_map = await snapshot_page(page)
+            response["opened_new_tab"] = True
+            await set_conversation_page(tkey, await target_id_of(page))
+            logger.info(f"Gtwy_Browser: thread {tkey} followed a new tab to {page.url[:80]}")
     except StaleRefError as exc:
         return _err(str(exc), live_url=live_url)
     except UrlBlocked as exc:
@@ -152,6 +181,9 @@ async def _run(args: dict, ctx: dict) -> dict:
             )
         logger.error(f"Gtwy_Browser: action {action} failed: {exc.__class__.__name__}: {exc}")
         return _err(f"browser action failed: {_reason(exc)}", live_url=live_url)
+    finally:
+        if watched_context is not None:
+            watched_context.remove_listener("page", _on_new_tab)
 
     if new_ref_map is not None:
         state["ref_map"] = new_ref_map
@@ -186,6 +218,24 @@ async def _run(args: dict, ctx: dict) -> dict:
         url=page.url,
         browser=(record.get("browser_id") or "")[-6:],
     )
+
+
+async def _opened_tab(opened_tabs: list):
+    """The newest tab the last action opened, loaded enough to read, or None."""
+    for new_page in reversed(opened_tabs):
+        if new_page.is_closed():
+            continue
+        try:
+            await new_page.wait_for_load_state("domcontentloaded", timeout=NEW_TAB_LOAD_TIMEOUT_MS)
+        except Exception:
+            pass
+        try:
+            await new_page.wait_for_load_state("networkidle", timeout=NEW_TAB_SETTLE_TIMEOUT_MS)
+        except Exception:
+            pass
+        if not new_page.is_closed():
+            return new_page
+    return None
 
 
 async def _dispatch(action: str, args: dict, page, state: dict):

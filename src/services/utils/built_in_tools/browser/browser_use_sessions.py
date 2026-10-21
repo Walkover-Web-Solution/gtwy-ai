@@ -309,6 +309,14 @@ async def open_or_reuse_tab(tkey: str, org_id, bridge_id, settings: dict | None 
     return await _start(tkey, org_id, bridge_id, settings)
 
 
+async def set_conversation_page(tkey: str, target_id: str | None) -> None:
+    """Point the conversation at another tab of its browser, e.g. one that a click opened."""
+    record = await get_record(tkey)
+    if record and target_id:
+        _touch(record, target_id=target_id)
+        await _save(tkey, record)
+
+
 async def mark_handoff(tkey: str, active: bool) -> None:
     """Mirror the handoff flag onto the record so the reaper waits longer for a login."""
     record = await get_record(tkey)

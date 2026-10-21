@@ -135,6 +135,11 @@ async def _page_target_id(context, page) -> str | None:
             pass
 
 
+async def target_id_of(page) -> str | None:
+    """The Chrome target id of one page, which is how the conversation remembers its tab."""
+    return await _page_target_id(page.context, page)
+
+
 async def conversation_page(browser, wanted_target_id: str | None):
     """(page, target_id) for the conversation: its last page if still open, else the first open
     page of the default context, else a new one there."""
