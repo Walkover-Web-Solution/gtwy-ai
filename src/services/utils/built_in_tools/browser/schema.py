@@ -32,6 +32,8 @@ DESCRIPTION = (
     "navigation or action, and a stale ref returns an error telling you to snapshot again. "
     "Use `snapshot` to re-read the page without acting and `back` to go to the previous page. "
     "To open a result, `click` its ref instead of guessing its URL. "
+    "If a click opens a new tab, you are moved to it and the result says `opened_new_tab`; "
+    "the earlier tab stays open in the background. "
     "LOGINS: you never type credentials, but you DO help the user log in. When a task needs the "
     "user's account (orders, cart, profile, inbox, dashboard), first navigate to the relevant page. "
     "If the page shows a sign-in form, a CAPTCHA, an OTP prompt, or asks for payment or personal "
