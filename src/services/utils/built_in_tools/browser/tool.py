@@ -2,16 +2,16 @@
 
 ``call_gtwy_browser(args, ctx)`` follows the same contract as every other gtwy tool
 coroutine: it always returns ``{"response", "metadata", "status": 0|1}`` and never
-raises. Each conversation drives its own tab, with its own cookies, inside one shared
-Chrome, so two conversations can be signed in to the same site as different people.
+raises. Each conversation drives its own hosted Browser Use browser, with its own logins
+(``browser_use_sessions.py``), so two conversations can be signed in to the same site as
+different people and neither can see the other's pages.
 """
 
 import asyncio
-import time
 
 from globals import logger
 
-from . import steel_client
+from . import browser_use_client
 from .actions import (
     BrowserActionError,
     StaleRefError,
@@ -23,20 +23,32 @@ from .actions import (
     do_snapshot,
     do_type,
     looks_like_login_page,
+    snapshot_page,
 )
-from .connection import BrowserConnectionError, is_connection_lost_error, is_timeout_error, reset_connection
+from .browser_use_client import BrowserUseError
+from .browser_use_sessions import (
+    drop_connection,
+    mark_handoff,
+    open_or_reuse_tab,
+    release_tab,
+    set_conversation_page,
+)
+from .connection import BrowserConnectionError, is_connection_lost_error, is_timeout_error, target_id_of
+from .live_link import signed_live_url
 from .schema import BROWSER_ACTIONS
 from .security import UrlBlocked, ensure_url_allowed, wrap_untrusted
 from .session_store import BrowserBusy, get_thread_state, save_thread_state, thread_key
-from .steel_client import SteelError
-from .tabs import mark_handoff, open_or_reuse_tab, release_tab
 
 TOOL_TIMEOUT_SECONDS = 60
-# Getting a tab ready (lock, Steel session lookup, CDP connect, cookie restore) is capped
-# separately, so a slow start can never eat the time the page itself needs. Setup plus a 30s
-# navigate fits inside the ceiling above. A connect that fails inside this window is reported as
-# an error to retry; it never restarts Chrome, because that would kill every other conversation's tab.
+# Getting the browser ready (locks, profile, starting a browser, CDP connect) is capped
+# separately, so a slow start can never eat the time the page itself needs. A new browser takes
+# about 10 s, a running one about 1 s. Setup plus a 30 s navigate fits inside the ceiling above.
 SETUP_TIMEOUT_SECONDS = 25
+# Actions that can make a site open a new tab (a target=_blank link, window.open on a click or a
+# key press). The agent is moved to that tab, since it can only see one page at a time.
+TAB_OPENING_ACTIONS = {"click", "type", "press"}
+NEW_TAB_LOAD_TIMEOUT_MS = 10_000
+NEW_TAB_SETTLE_TIMEOUT_MS = 3_000
 HANDOFF_INSTRUCTIONS = (
     "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
     "complete the action there (log in, solve the CAPTCHA, enter the OTP), and reply 'done' "
@@ -63,17 +75,15 @@ async def call_gtwy_browser(args: dict | None, ctx: dict | None) -> dict:
     try:
         return await asyncio.wait_for(_run(args or {}, ctx or {}), timeout=TOOL_TIMEOUT_SECONDS)
     except TimeoutError:
-        return _err(
-            f"the page did not finish within {TOOL_TIMEOUT_SECONDS}s; call snapshot to see where it got to"
-        )
+        return _err(f"the page did not finish within {TOOL_TIMEOUT_SECONDS}s; call snapshot to see where it got to")
     except Exception as exc:  # the tool loop expects a dict, never an exception
         logger.error(f"Gtwy_Browser: unexpected failure: {exc.__class__.__name__}: {exc}")
         return _err(f"browser tool failed: {_reason(exc)}")
 
 
 async def _run(args: dict, ctx: dict) -> dict:
-    if not steel_client.is_configured():
-        return _err("browser tool is not configured on this server (STEEL_API_URL missing)")
+    if not browser_use_client.is_configured():
+        return _err("browser tool is not configured on this server (BROWSER_USE_API_KEY missing)")
 
     action = (args.get("action") or "").strip()
     if action not in BROWSER_ACTIONS:
@@ -82,48 +92,42 @@ async def _run(args: dict, ctx: dict) -> dict:
     tkey = thread_key(ctx.get("org_id"), ctx.get("thread_id"), ctx.get("sub_thread_id"))
 
     if action == "navigate":
-        # Check the URL before claiming a tab so a blocked URL never opens a browser.
+        # Check the URL before starting a browser so a blocked URL never costs one.
         try:
             await ensure_url_allowed(args.get("url"))
         except UrlBlocked as exc:
             return _err(f"url not allowed: {exc}")
 
     try:
-        browser, page, registry, tab = await asyncio.wait_for(
-            open_or_reuse_tab(tkey, ctx.get("org_id"), ctx.get("bridge_id")),
+        page, record = await asyncio.wait_for(
+            open_or_reuse_tab(tkey, ctx.get("org_id"), ctx.get("bridge_id"), ctx.get("browser_settings")),
             timeout=SETUP_TIMEOUT_SECONDS,
         )
     except TimeoutError:
-        logger.warning(f"Gtwy_Browser: getting a tab took over {SETUP_TIMEOUT_SECONDS}s for thread {tkey}")
-        return _err(
-            f"the browser took more than {SETUP_TIMEOUT_SECONDS}s to start; it may be busy or "
-            "restarting. Try the same action again"
-        )
+        logger.warning(f"Gtwy_Browser: getting the browser took over {SETUP_TIMEOUT_SECONDS}s for thread {tkey}")
+        return _err(f"the browser took more than {SETUP_TIMEOUT_SECONDS}s to start. Try the same action again")
     except BrowserBusy as busy:
         return _err(str(busy), retry_in_seconds=busy.retry_in)
-    except SteelError as exc:
-        logger.error(f"Gtwy_Browser: steel error while opening a tab: {exc}")
+    except BrowserUseError as exc:
+        logger.error(f"Gtwy_Browser: browser use error while opening a browser: {exc}")
         return _err("browser backend is unavailable right now; try again later")
     except BrowserConnectionError as exc:
-        # No reset here: get_browser already dropped the failed host's driver, and resetting every
-        # host would kill the in-flight actions of other conversations on this worker.
-        logger.warning(f"Gtwy_Browser: connection error while opening a tab: {exc}")
+        logger.warning(f"Gtwy_Browser: connection error while opening the browser: {exc}")
         return _err("the browser did not answer; it may still be starting. Try the same action again in a few seconds")
 
-    # Prefer the link that survives this tab being replaced; fall back to the direct one.
-    live_url = steel_client.permanent_live_url(
-        ctx.get("org_id"), ctx.get("thread_id"), ctx.get("sub_thread_id")
-    ) or steel_client.live_view_url(registry.get("debug_url"), tab.get("target_id"))
+    # Prefer gtwy's signed, short-lived link, bound to the user of this conversation; fall back
+    # to the browser's own one (a credential for it) only when the gateway has no public address.
+    live_url = signed_live_url(
+        ctx.get("org_id"), ctx.get("thread_id"), ctx.get("sub_thread_id"), ctx.get("viewer_id")
+    ) or record.get("live_url")
     state = await get_thread_state(tkey)
-    state["target_id"] = tab.get("target_id")
-    state["host"] = tab.get("host")
 
     # While the user is acting in the live view we take no snapshots, so nothing they type can
     # land in the transcript. A new user message (new message_id) or a navigate ends the handoff.
     if state.get("handoff_active"):
         user_replied = ctx.get("message_id") and ctx.get("message_id") != state.get("handoff_message_id")
         if action == "navigate" or user_replied:
-            state.update(handoff_active=False, handoff_message=None, handoff_message_id=None, handoff_started_at=None)
+            state.update(handoff_active=False, handoff_message=None, handoff_message_id=None)
             await save_thread_state(tkey, state)
             await mark_handoff(tkey, False)
         elif action != "request_user_action":
@@ -135,8 +139,25 @@ async def _run(args: dict, ctx: dict) -> dict:
     if action == "request_user_action":
         return await _handoff(args, ctx, tkey, live_url, state)
 
+    opened_tabs: list = []
+
+    def _on_new_tab(new_page) -> None:
+        opened_tabs.append(new_page)
+
+    watched_context = page.context if action in TAB_OPENING_ACTIONS else None
+    if watched_context is not None:
+        watched_context.on("page", _on_new_tab)
     try:
         response, new_ref_map = await _dispatch(action, args, page, state)
+        new_tab = await _opened_tab(opened_tabs)
+        if new_tab is not None:
+            # The site opened a new tab (Flipkart and Amazon open products this way). Follow it,
+            # so the model sees the page it asked for; the earlier tab stays open behind it.
+            page = new_tab
+            response, new_ref_map = await snapshot_page(page)
+            response["opened_new_tab"] = True
+            await set_conversation_page(tkey, await target_id_of(page))
+            logger.info(f"Gtwy_Browser: thread {tkey} followed a new tab to {page.url[:80]}")
     except StaleRefError as exc:
         return _err(str(exc), live_url=live_url)
     except UrlBlocked as exc:
@@ -145,10 +166,10 @@ async def _run(args: dict, ctx: dict) -> dict:
         return _err(str(exc), live_url=live_url)
     except Exception as exc:
         if is_connection_lost_error(exc):
-            logger.warning(f"Gtwy_Browser: tab lost for thread {tkey}: {exc.__class__.__name__}")
-            await reset_connection(tab.get("host"))
-            await release_tab(tkey, reason="tab lost")
-            return _err("the browser tab was lost; call navigate again to start over")
+            logger.warning(f"Gtwy_Browser: browser lost for thread {tkey}: {exc.__class__.__name__}")
+            await drop_connection(record)
+            await release_tab(tkey, reason="browser lost")
+            return _err("the browser was lost; call navigate again to start over")
         if is_timeout_error(exc):
             return _err(
                 "timeout: the page did not respond in time; call snapshot to see its current state",
@@ -156,11 +177,12 @@ async def _run(args: dict, ctx: dict) -> dict:
             )
         logger.error(f"Gtwy_Browser: action {action} failed: {exc.__class__.__name__}: {exc}")
         return _err(f"browser action failed: {_reason(exc)}", live_url=live_url)
+    finally:
+        if watched_context is not None:
+            watched_context.remove_listener("page", _on_new_tab)
 
     if new_ref_map is not None:
         state["ref_map"] = new_ref_map
-        state["snapshot_seq"] = int(state.get("snapshot_seq") or 0) + 1
-    state["last_url"] = page.url
 
     # A page asking the user to sign in starts the handoff on its own, so the model never has to
     # remember to call request_user_action and never tries to type credentials.
@@ -169,8 +191,8 @@ async def _run(args: dict, ctx: dict) -> dict:
         await _emit_handoff(ctx, live_url, state["handoff_message"])
         response.update(login_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
 
-    # The chat UI needs a way to show this conversation's tab at any moment, not only when a login
-    # blocks the agent, so every result carries the live view pinned to that tab.
+    # The chat UI needs a way to show this conversation's browser at any moment, not only when a
+    # login blocks the agent, so every result carries its live link.
     response.setdefault("live_url", live_url)
 
     await save_thread_state(tkey, state)
@@ -184,9 +206,26 @@ async def _run(args: dict, ctx: dict) -> dict:
         response,
         action=action,
         url=page.url,
-        tab=(tab.get("target_id") or "")[-6:],
-        host=steel_client.short_host(tab.get("host")),
+        browser=(record.get("browser_id") or "")[-6:],
     )
+
+
+async def _opened_tab(opened_tabs: list):
+    """The newest tab the last action opened, loaded enough to read, or None."""
+    for new_page in reversed(opened_tabs):
+        if new_page.is_closed():
+            continue
+        try:
+            await new_page.wait_for_load_state("domcontentloaded", timeout=NEW_TAB_LOAD_TIMEOUT_MS)
+        except Exception:
+            pass
+        try:
+            await new_page.wait_for_load_state("networkidle", timeout=NEW_TAB_SETTLE_TIMEOUT_MS)
+        except Exception:
+            pass
+        if not new_page.is_closed():
+            return new_page
+    return None
 
 
 async def _dispatch(action: str, args: dict, page, state: dict):
@@ -213,7 +252,6 @@ async def _begin_handoff(ctx: dict, tkey: str, state: dict, message: str) -> Non
         handoff_active=True,
         handoff_message=message,
         handoff_message_id=ctx.get("message_id"),
-        handoff_started_at=time.time(),
     )
     await save_thread_state(tkey, state)
     await mark_handoff(tkey, True)
@@ -233,7 +271,7 @@ async def _emit_handoff(ctx: dict, live_url: str | None, message: str) -> None:
 
 async def _handoff(args: dict, ctx: dict, tkey: str, live_url: str | None, state: dict) -> dict:
     if not live_url:
-        return _err("live view is not available for this browser tab")
+        return _err("live view is not available for this browser")
     message = (args.get("message") or "").strip() or "Please complete the required action in the browser."
     await _begin_handoff(ctx, tkey, state, message)
     await _emit_handoff(ctx, live_url, message)

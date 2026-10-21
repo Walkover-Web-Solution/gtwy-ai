@@ -121,7 +121,11 @@ async def do_type(page, ref: str | None, text: str | None, key: str | None, ref_
         )
     await locator.fill(str(text), timeout=ACTION_TIMEOUT_MS)
     if key:
-        await locator.press(key, timeout=ACTION_TIMEOUT_MS)
+        # Press the key where the focus is now, not on the ref again: typing can replace the
+        # field (Wikipedia swaps its search input for a combobox once it is focused), so the
+        # ref no longer matches and a locator press waits until it times out. Lost whenever
+        # the browser is far away, as with a hosted browser.
+        await page.keyboard.press(key)
     await _settle(page)
     return await snapshot_page(page)
 
@@ -142,7 +146,10 @@ async def do_scroll(page, direction: str | None):
 
 
 async def do_back(page):
-    await page.go_back(wait_until="domcontentloaded", timeout=NAVIGATE_TIMEOUT_MS)
+    # Wait only for the navigation to commit: a page restored from Chrome's back-forward cache
+    # never fires DOMContentLoaded again, so waiting for it hangs until the timeout although the
+    # page is already back. _settle gives a fresh load its usual short wait.
+    await page.go_back(wait_until="commit", timeout=NAVIGATE_TIMEOUT_MS)
     await _settle(page)
     return await snapshot_page(page)
 

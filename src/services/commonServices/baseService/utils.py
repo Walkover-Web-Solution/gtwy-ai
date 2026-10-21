@@ -517,6 +517,8 @@ def _browser_ctx(self, tool_call_key):
         "thread_id": getattr(self, "thread_id", None),
         "sub_thread_id": getattr(self, "sub_thread_id", None),
         "message_id": getattr(self, "message_id", None),
+        "viewer_id": getattr(self, "viewer_id", None),
+        "browser_settings": getattr(self, "browser_settings", None) or {},
         "tool_call_id": tool_call_key,
         "streamer": getattr(self, "streamer", None) if getattr(self, "stream_mode", False) else None,
     }
@@ -525,8 +527,8 @@ def _browser_ctx(self, tool_call_key):
 async def _run_tool_tasks(tasks):
     """Run tool coroutines and return results in the order of ``tasks``.
 
-    Everything runs concurrently except Gtwy_Browser actions: they share one browser,
-    so they run one after another while the other tools proceed in parallel.
+    Everything runs concurrently except Gtwy_Browser actions: they drive this conversation's
+    one browser page, so they run one after another while the other tools proceed in parallel.
     Exceptions are returned in place of results, like ``gather(return_exceptions=True)``.
     """
     browser_type = inbuild_tools["Gtwy_Browser"]
