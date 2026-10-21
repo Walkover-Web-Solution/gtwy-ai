@@ -161,8 +161,12 @@ class CompletionRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_bridge_identifier(self) -> "CompletionRequest":
+        # Without an agent to load, the body has to carry the agent itself (a direct run).
         if not self.agent_id and not self.version_id:
-            raise ValueError("Either agent_id, bridge_id, or version_id must be provided")
+            if not self.service or not (self.configuration and self.configuration.model):
+                raise ValueError(
+                    "Provide agent_id, bridge_id or version_id, or run directly by sending service and configuration.model"
+                )
         return self
 
     @model_validator(mode="after")
