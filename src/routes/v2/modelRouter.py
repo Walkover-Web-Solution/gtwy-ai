@@ -39,12 +39,10 @@ async def chat_completion(request: Request, db_config: dict = Depends(add_config
     request.state.version = 2
     data_to_send = await make_request_data(request)
     is_playground = data_to_send.get("body", {}).get("is_playground", False)
-    if data_to_send["agent_id"] == "68d0fb22a5e4d241f923d1cf":
-        logger.info(f"data_to_send: {data_to_send}")
 
     message_id = str(uuid.uuid1())
     data_to_send["body"]["message_id"] = message_id
-    current_id = data_to_send.get('id_to_use', '')
+    current_id = data_to_send.get('id_to_use','')
     
     if data_to_send['body']['configuration'].get('response_format') is not None:
         data_to_send['body']['settings']['response_format'] = data_to_send['body']['configuration']['response_format']
