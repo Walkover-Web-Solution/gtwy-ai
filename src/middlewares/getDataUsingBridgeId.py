@@ -27,8 +27,7 @@ class add_configuration_data_to_body:
         org_id = None
         try:
             body = await request.json()
-            if body.get('agent_id', '') == "68d0fb22a5e4d241f923d1cf":
-                logger.info(f"body: {body}")
+
             if self.schema_class is not None:
                 try:
                     self.schema_class.model_validate(body)
