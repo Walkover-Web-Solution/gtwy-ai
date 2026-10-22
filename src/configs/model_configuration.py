@@ -109,7 +109,9 @@ async def background_listen_for_platform_apikey_changes():
         try:
             await _async_platform_apikey_listener()
         except (OperationFailure, PyMongoError) as e:
-            logger.error(f"MongoDB connection error in platform apikey change stream: {e}. Reconnecting in 5 seconds...")
+            logger.error(
+                f"MongoDB connection error in platform apikey change stream: {e}. Reconnecting in 5 seconds..."
+            )
             await asyncio.sleep(5)
         except Exception as e:
             logger.error(
