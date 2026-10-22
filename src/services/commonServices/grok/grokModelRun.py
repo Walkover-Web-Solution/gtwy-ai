@@ -104,10 +104,4 @@ async def grok_runmodel(
             token_calculator=token_calculator,
         )
     except Exception as error:
-        execution_time_logs.append(
-            {
-                "step": f"{service} Processing time for call :- {count + 1}",
-                "time_taken": timer.stop("API chat completion"),
-            }
-        )
         raise ApiCallError(str(error), status_code=getattr(error, "status_code", None), service=service) from error

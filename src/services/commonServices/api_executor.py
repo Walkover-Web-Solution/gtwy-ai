@@ -27,20 +27,20 @@ async def execute_api_call(
     is_playground=False,
 ):
     try:
-        # Start timer
+        # Time only the API call and stop exactly once: a second stop would pop the
+        # request's own start entry and then raise "Timer was not started".
         timer.start()
-
-        # Execute the API call (no retry/fallback)
-        config = copy.deepcopy(configuration)
-        result = await api_call(config)
-
-        # Log execution time
-        execution_time_logs.append(
-            {
-                "step": f"{service} Processing time for call :- {count + 1}",
-                "time_taken": timer.stop("API chat completion"),
-            }
-        )
+        try:
+            # Execute the API call (no retry/fallback)
+            config = copy.deepcopy(configuration)
+            result = await api_call(config)
+        finally:
+            execution_time_logs.append(
+                {
+                    "step": f"{service} Processing time for call :- {count + 1}",
+                    "time_taken": timer.stop("API chat completion"),
+                }
+            )
 
         if result["success"]:
             result["response"] = await check_space_issue(result["response"], service)
@@ -72,13 +72,12 @@ async def execute_api_call(
             return result
 
     except Exception as e:
-        execution_time_logs.append(
-            {
-                "step": f"{service} Processing time for call :- {count + 1}",
-                "time_taken": timer.stop("API chat completion"),
-            }
-        )
         raise ApiCallError(str(e), status_code=getattr(e, "status_code", None), service=service) from e
+
+
+def _enum_value(value):
+    """google-genai dumps finish/block reasons as enums; return the plain string."""
+    return getattr(value, "value", value)
 
 
 async def check_space_issue(response, service=None):
@@ -87,7 +86,17 @@ async def check_space_issue(response, service=None):
         content = response.get("choices", [{}])[0].get("message", {}).get("content", None)
 
     elif has_gemini_shape(service):
-        content = response["candidates"][0]["content"]["parts"][0]["text"]
+        candidates = response.get("candidates") or []
+        candidate = candidates[0] if candidates else {}
+        parts = (candidate.get("content") or {}).get("parts") or []
+        if not parts:
+            # Gemini answers 200 with no parts when thinking uses up the output token
+            # limit, on safety/recitation blocks, or when the prompt itself is blocked.
+            block_reason = _enum_value((response.get("prompt_feedback") or {}).get("block_reason"))
+            finish_reason = _enum_value(candidate.get("finish_reason"))
+            reason = f"prompt blocked: {block_reason}" if block_reason else f"finish_reason: {finish_reason}"
+            raise ApiCallError(f"Gemini returned no content ({reason})", service=service)
+        content = parts[0].get("text")
 
     elif has_anthropic_shape(service):
         content = response.get("content", [{}])

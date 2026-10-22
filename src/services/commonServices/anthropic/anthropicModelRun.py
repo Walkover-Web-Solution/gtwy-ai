@@ -346,10 +346,4 @@ async def anthropic_runmodel(
         )
 
     except Exception as e:
-        execution_time_logs.append(
-            {
-                "step": f"{service} Processing time for call :- {count + 1}",
-                "time_taken": timer.stop("API chat completion"),
-            }
-        )
         raise ApiCallError(str(e), status_code=getattr(e, "status_code", None), service=service) from e
