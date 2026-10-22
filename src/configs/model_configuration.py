@@ -20,7 +20,6 @@ platform_apikey_document = {}
 
 async def init_model_configuration():
     """Initializes or refreshes the model configuration document."""
-    global model_config_document
     try:
         new_document = await get_model_configurations()
         model_config_document.clear()  # Clear old config before updating
@@ -72,7 +71,7 @@ async def _async_change_listener():
                 logger.info("Model configuration change detected and sent to RTLayer successfully.")
     except OperationFailure as e:
         logger.error(f"Change stream operation failed: {e}")
-        raise  # Re-raise to be caught by the sync wrapper
+        raise  # Re-raise so background_listen_for_changes can retry
     except Exception as e:
         logger.error(f"An unexpected error occurred in the async listener: {e}")
         raise
