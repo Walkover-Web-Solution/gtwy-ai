@@ -1496,11 +1496,11 @@ def model_supports_json_schema_or_text(model_config):
          whether json_schema is among the advertised options.
     """
     if not isinstance(model_config, dict):
-        return True
+        return False, True
 
     response_type = (model_config.get("configuration") or {}).get("response_type")
     if not isinstance(response_type, dict):
-        return False
+        return False, False
 
     options = response_type.get("options")
     if not isinstance(options, list):
