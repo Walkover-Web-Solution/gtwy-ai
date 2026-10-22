@@ -1,4 +1,4 @@
-from .service_registry import get_service
+from src.configs.service_registry import get_service
 
 
 def get_service_keys(service):
