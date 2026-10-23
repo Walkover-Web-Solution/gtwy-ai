@@ -199,11 +199,13 @@ async def chat(request_body):
                 drop_unknown_mcp_servers,
                 mcp_auth_to_config,
                 merge_mcp_config,
+                resolve_mcp_headers,
                 resolve_mcp_type,
             )
             mcp_auth = mcp_auth_to_config(request_body.get("body", {}).get("mcp_auth"))
             mcp_cfg = merge_mcp_config(mcp_cfg, mcp_auth)
             mcp_cfg = drop_unknown_mcp_servers(mcp_cfg)
+            mcp_cfg = resolve_mcp_headers(mcp_cfg, parsed_data.get("variables"))
             parsed_data["configuration"]["mcp_config"] = mcp_cfg
             mcp_type = resolve_mcp_type(parsed_data.get("service"), parsed_data.get("model"))
             if mcp_type == "client":
