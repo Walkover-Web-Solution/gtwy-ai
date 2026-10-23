@@ -109,7 +109,22 @@ Code lives in `src/services/utils/built_in_tools/browser/`:
 
 ## Browser services
 
-An agent picks its service with `gtwy_browser_settings.provider`, kept on its `connected_tools` entry
+On the UI an agent picks its service by connecting one built-in tool per service:
+
+| Built-in tool | Service |
+|---|---|
+| `Gtwy_Browser` | `gtwy_browser_settings.provider`, else Browser Use |
+| `Gtwy_Browser_Browserbase` | Browserbase |
+| `Gtwy_Browser_Steel` | Steel Cloud |
+| `Gtwy_Browser_Kernel` | Kernel |
+| `Gtwy_Browser_Anchor` | Anchor Browser |
+
+The model always sees one `Gtwy_Browser` tool: `getConfiguration` folds a service tool into
+`Gtwy_Browser` and sets `provider` from it (`providers.SERVICE_TOOLS`). With several browser tools
+connected, the first service tool picks the service; a request's `gtwy_browser_settings.provider`
+still wins.
+
+Without a service tool, an agent picks its service with `gtwy_browser_settings.provider`, kept on its `connected_tools` entry
 of type `built_in_tools` (next to the web search filters; an older top-level `gtwy_browser_settings`
 field and the request body are read too, the request winning key by key):
 
@@ -121,7 +136,7 @@ field and the request body are read too, the request winning key by key):
 No `provider` means Browser Use. A service whose key is not set on the server is never replaced by
 another (logins are per service): the tool answers `the <service> browser service is not set up on
 this server yet...`, and an unknown name lists the valid ones. `GET /browser/providers` (gtwy login)
-returns `{"providers": [{id, label, configured, default}]}` for the agent settings picker.
+returns `{"providers": [{id, label, tool, configured, default}]}` for the agent settings picker.
 
 A running browser keeps its service: a changed choice applies to the conversation's next browser,
 after the current one stops (5 idle minutes). Switching on the spot would make two agents sharing a
@@ -344,9 +359,9 @@ Other services' prices are in the services table (from their pricing pages, not 
 
 - The UIs (gtwy-ui, chatbot) still open the plain link; they should call `/browser/live-session` and
   then `REQUIRE_VIEWER_LOGIN` can be set to True.
-- The per-agent browser settings (`provider`, `proxy_country`) have no UI yet: Node must accept
-  `gtwy_browser_settings` on the `built_in_tools` entry (its Joi item schema allows unknown keys
-  today; add `provider` as an enum) and the agent screen needs a picker fed by `GET /browser/providers`.
+- `proxy_country` has no UI yet: Node must accept `gtwy_browser_settings` on the `built_in_tools`
+  entry (its Joi item schema allows unknown keys today). The service is picked on the UI through the
+  per-service built-in tools listed by Node's `getAllInBuiltToolsController`.
 - Browserbase, Steel, Kernel and Anchor are built from their docs and tested offline and against a
   local Chrome; each still needs the live checks in Manual verification step 7 with a real key.
 - Profiles stay on Browser Use until deleted; nothing removes those of old conversations yet.

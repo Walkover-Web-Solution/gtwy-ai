@@ -404,6 +404,14 @@ def add_web_crawling_tool(tools, tool_id_and_name_mapping, built_in_tools, gtwy_
 
 
 
+def fold_browser_service_tools(built_in_tools):
+    """(built_in_tools with each per-service browser tool folded into Gtwy_Browser, the service
+    that tool picks or None). Everything after this only checks for Gtwy_Browser."""
+    if isinstance(built_in_tools, str):
+        built_in_tools = [built_in_tools]
+    return browser_providers.fold_service_tools(built_in_tools, inbuild_tools["Gtwy_Browser"])
+
+
 def _should_enable_browser_tool(built_in_tools):
     if not built_in_tools:
         return False

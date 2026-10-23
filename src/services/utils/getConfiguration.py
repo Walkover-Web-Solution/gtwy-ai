@@ -12,6 +12,7 @@ from .getConfiguration_utils import (
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
+    fold_browser_service_tools,
     get_bridge_data,
     setup_api_key,
     setup_configuration,
@@ -295,6 +296,8 @@ async def _prepare_configuration_response(
     if isinstance(built_in_from_connected, str):
         built_in_from_connected = [built_in_from_connected]
     effective_built_in_tools = built_in_tools or built_in_from_connected
+    # A per-service browser tool connected on the UI becomes Gtwy_Browser on that service
+    effective_built_in_tools, browser_tool_provider = fold_browser_service_tools(effective_built_in_tools)
 
     gtwy_web_search_filters = web_search_filters or built_in_entry.get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
@@ -305,11 +308,13 @@ async def _prepare_configuration_response(
     )
     # Gtwy_Browser options of this agent, e.g. {"provider": "browserbase", "proxy_country": "in"}.
     # Kept on the built-in tools entry (like the web search filters); an older top-level field is
-    # still read, and a request may override single keys.
+    # still read, a connected per-service browser tool picks the provider, and a request may
+    # override single keys.
     browser_settings = {}
     for source in (
         bridges.get("gtwy_browser_settings"),
         built_in_entry.get("gtwy_browser_settings"),
+        {"provider": browser_tool_provider},
         override_fields.get("gtwy_browser_settings"),
     ):
         if isinstance(source, dict):
