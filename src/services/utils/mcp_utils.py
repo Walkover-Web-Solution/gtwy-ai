@@ -1,6 +1,4 @@
-import copy
 import json
-import re
 
 from globals import logger
 from src.configs.constant import service_name
@@ -8,8 +6,6 @@ from src.configs.constant import service_name
 
 MCP_NAME_SUFFIX = "__mcp"
 _MCP_TOOL_MAP_KEY = "__mcp_tool_map__"
-_HEADER_VARIABLE_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
-_MISSING = object()
 
 
 def merge_mcp_config(saved: dict | None, runtime: dict | None) -> dict | None:
@@ -46,8 +42,9 @@ def merge_mcp_config(saved: dict | None, runtime: dict | None) -> dict | None:
 def mcp_auth_to_config(mcp_auth: dict | None) -> dict | None:
     """Turn the request-level ``mcp_auth`` field into a runtime ``mcp_config``.
 
-    ``mcp_auth`` maps a saved MCP server name to either a token string or a
-    headers dict::
+    ``mcp_auth`` maps each saved MCP server's name to its auth, so one request
+    can authenticate several servers. The value is a token string or a single
+    header::
 
         {"my_mcp": "abc123"}                     -> Authorization: Bearer abc123
         {"my_mcp": "Basic dXNlcjpwYXNz"}         -> Authorization: Basic dXNlcjpwYXNz
@@ -71,64 +68,18 @@ def mcp_auth_to_config(mcp_auth: dict | None) -> dict | None:
     return {"servers": servers} if servers else None
 
 
-def _lookup_variable(variables: dict, path: str):
-    if path in variables:
-        return variables[path]
-    current = variables
-    for part in path.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return _MISSING
-        current = current[part]
-    return current
-
-
-def _fill_header_value(value: str, variables: dict) -> tuple[str, list[str]]:
-    missing = []
-
-    def _substitute(match):
-        found = _lookup_variable(variables, match.group(1))
-        if found is _MISSING or found is None:
-            missing.append(match.group(1))
-            return ""
-        return found if isinstance(found, str) else json.dumps(found)
-
-    return _HEADER_VARIABLE_PATTERN.sub(_substitute, value).strip(), missing
-
-
-def resolve_mcp_headers(mcp_config: dict | None, variables: dict | None) -> dict | None:
-    """Return a copy of ``mcp_config`` with ``{{variable}}`` placeholders in
-    server header values filled from the request ``variables``.
-
-    Lets an agent store ``Authorization: Bearer {{mcp_token}}`` and have each
-    caller pass its own token at runtime. A header whose placeholders cannot
-    all be resolved (or that ends up empty) is dropped rather than sent with a
-    literal ``{{...}}`` in it.
-    """
+def drop_unknown_mcp_servers(mcp_config: dict | None) -> dict | None:
+    """Drop servers that have no URL, i.e. ``mcp_auth`` entries naming a server
+    the agent does not have, and log them so the caller can spot the typo."""
     if not isinstance(mcp_config, dict) or not mcp_config.get("servers"):
         return mcp_config
-
-    variables = variables if isinstance(variables, dict) else {}
-    resolved = copy.deepcopy(mcp_config)
-
-    for server in resolved.get("servers") or []:
-        if not isinstance(server, dict) or not isinstance(server.get("headers"), dict):
-            continue
-        headers = {}
-        for key, value in server["headers"].items():
-            if not isinstance(key, str) or not key.strip() or value is None:
-                continue
-            value, missing = _fill_header_value(str(value), variables)
-            if missing:
-                logger.warning(
-                    f"resolve_mcp_headers: dropping header {key!r} for MCP server "
-                    f"{server.get('name')!r}; missing variables {missing}"
-                )
-                continue
-            if value:
-                headers[key.strip()] = value
-        server["headers"] = headers
-
-    return resolved
+    known = []
+    for server in mcp_config["servers"]:
+        if isinstance(server, dict) and server.get("url"):
+            known.append(server)
+        elif isinstance(server, dict):
+            logger.warning(f"mcp_auth: no MCP server named {server.get('name')!r} on this agent; ignoring it")
+    return {**mcp_config, "servers": known}
 
 
 def _parse_arguments(raw):
