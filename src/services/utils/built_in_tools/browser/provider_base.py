@@ -26,6 +26,7 @@ DEFAULT_PROXY_COUNTRY = "in"
 PROXY_OFF_VALUES = {"none", "off", "false", "no"}
 # Query parameters that carry a credential in a service URL.
 SECRET_PARAMS = ("apiKey", "api_key", "apikey", "signingKey", "token", "jwt", "key")
+_PLAN_RE = re.compile(r"(?i)\b(plan|upgrade|credits?|billing|subscription)\b")
 _SECRET_RE = re.compile(r"(?i)\b(" + "|".join(SECRET_PARAMS) + r")=([^&\s\"'<>]+)")
 
 
@@ -42,8 +43,9 @@ class TooManyBrowsers(BrowserServiceError):
     """The service account is at its limit of browsers running (or starting) at once."""
 
 
-class NoCredits(BrowserServiceError):
-    """The service account has run out of credits."""
+class PlanRefused(BrowserServiceError):
+    """The service account's plan or credits do not allow this (out of credits, or a feature such
+    as the proxy that the plan does not include)."""
 
 
 class ProfileNotFound(BrowserServiceError):
@@ -121,7 +123,8 @@ async def request(
 ):
     """One REST call to a browser service. Returns the parsed JSON body (or None), plus the
     response headers when ``with_headers``. Raises BrowserServiceError (429 and 529 as
-    TooManyBrowsers, 402 as NoCredits) with the status and the service's own error text."""
+    TooManyBrowsers, 402 and a plan-related 403 as PlanRefused) with the status and the service's
+    own error text."""
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             response = await client.request(method, url, json=json_body, params=params, headers=headers)
@@ -133,8 +136,8 @@ async def request(
         message = f"{service} {method} {path} returned {response.status_code}: {detail}"
         if response.status_code in (429, 529):
             raise TooManyBrowsers(message, response.status_code, detail)
-        if response.status_code == 402:
-            raise NoCredits(message, response.status_code, detail)
+        if response.status_code == 402 or (response.status_code == 403 and _PLAN_RE.search(detail)):
+            raise PlanRefused(message, response.status_code, detail)
         raise BrowserServiceError(message, response.status_code, detail)
     data = None
     if response.content:

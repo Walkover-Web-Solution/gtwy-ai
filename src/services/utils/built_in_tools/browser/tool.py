@@ -28,7 +28,7 @@ from .actions import (
 )
 from .connection import BrowserConnectionError, is_connection_lost_error, is_timeout_error, target_id_of
 from .live_link import signed_live_url
-from .provider_base import BrowserServiceError, NoCredits, scrub
+from .provider_base import BrowserServiceError, PlanRefused, scrub
 from .schema import BROWSER_ACTIONS
 from .security import UrlBlocked, ensure_url_allowed, wrap_untrusted
 from .session_store import BrowserBusy, get_thread_state, save_thread_state, thread_key
@@ -119,11 +119,14 @@ async def _run(args: dict, ctx: dict) -> dict:
         return _err(f"the browser took more than {SETUP_TIMEOUT_SECONDS}s to start. Try the same action again")
     except BrowserBusy as busy:
         return _err(str(busy), retry_in_seconds=busy.retry_in)
-    except NoCredits as exc:
-        logger.error(f"Gtwy_Browser: {client.LABEL} has no credits: {exc}")
+    except PlanRefused as exc:
+        # Out of credits, or a feature the account's plan does not include (the free plans of
+        # Browserbase and Kernel have no proxy). The service's own words say which.
+        logger.error(f"Gtwy_Browser: {client.LABEL} refused for its plan or credits: {exc}")
         return _err(
-            f"the {client.LABEL} browser service has run out of credits. Tell the user to top it up "
-            "or pick another browser service for this agent",
+            f"the {client.LABEL} browser service refused to start a browser on its current plan: "
+            f"{exc.detail or 'payment required'}. Tell the user to upgrade or top up that account, turn "
+            "the proxy off for this agent if the plan has no proxy, or pick another browser service",
             detail=scrub(exc)[:300],
         )
     except BrowserServiceError as exc:

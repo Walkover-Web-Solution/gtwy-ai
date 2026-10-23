@@ -137,12 +137,14 @@ thread (a transfer) stop each other's browsers on every call.
 | Live view | `liveUrl` | `GET /sessions/{id}/debug`, the conversation's tab | `debugUrl?interactive=true` | `browser_live_view_url` | `live_view_url` |
 | Lifetime | 240 min | 240 min (`keepAlive`) | 60 min, 15 on the lowest plan | until 15 min with no connection | 240 min, idle 15 min |
 | Stray sweep | `gtwy_env` metadata | `userMetadata` | none (no tags) | `tags` | `tags` |
-| Needs | | a paid plan (keep-alive, proxy, CAPTCHA) | | | |
+| Proxy needs | | a paid plan (free plan: 402) | a funded account | a paid plan (free plan: 403) | credits |
+| Start (measured) | ~10 s | ~9 s | not measured | ~10 s | not measured |
 
 Notes per service:
 
-- **Browserbase** ends a session when its CDP client disconnects unless `keepAlive` is set, which
-  only paid plans allow; a free-plan key gets a clear error rather than a weaker browser. Session
+- **Browserbase** ends a session when its CDP client disconnects unless `keepAlive` is set (the free
+  plan accepts it). Its free plan refuses the proxy (402), so an agent on it needs
+  `"proxy_country": "none"` or a paid plan; the model gets the service's own reason. Session
   recording and logging are off. Its live view is per tab; the conversation's current tab is shown.
 - **Steel** sessions have no tags, so the stray sweep skips Steel: use one Steel key per environment.
   Its lowest plan caps a session at 15 minutes; a longer conversation gets a new browser that opens
@@ -150,7 +152,8 @@ Notes per service:
 - **Kernel** browsers go into zero-cost standby only when nothing is connected. gtwy pods keep their
   CDP connection open, so a Kernel browser bills headful time until the reaper stops it. Its timeout
   (`INACTIVITY_TIMEOUT_SECONDS`, 900) only cleans up after a crash. The residential proxy is a Kernel
-  object, created once per country and found again by name.
+  object, created once per country and found again by name (`gtwy-residential-in` is accepted); its
+  free plan refuses proxies (403), so a free-plan agent needs `"proxy_country": "none"`.
 - **Anchor** names profiles instead of numbering them; each conversation gets `gtwy-<hash of its
   key>`. Recording is off. Its connect URL authenticates with the account key, so a key in any URL it
   returns is stripped before Redis and added back only when connecting; a live view URL that carries
@@ -313,7 +316,19 @@ Other services' prices are in the services table (from their pricing pages, not 
 5. After 5 idle minutes the reaper stops the browser and the old live link says "No browser is open".
    A new message on the thread starts a browser that is still logged in.
 6. With `MAX_BROWSERS_PER_ORG = 2`, a third conversation in one org gets the org-limit error.
-7. For each new service, before offering it: set its key, pick it on an agent
+7. Live results (October 23 2026, through the real tool code with Redis and Mongo faked; the scripts
+   `test_live_services.py` and `hold_live.py` live in that session's scratchpad):
+   - **Browserbase** (free plan, proxy off): 14/14. Start, click, back, reuse, the live view (no key
+     in it, opens without login, no frame-blocking headers, typing an address there moves the
+     browser the tool sees), the `userMetadata` stray filter, and both a session and a persistent
+     cookie surviving a stop and a new browser.
+   - **Kernel** (free plan, proxy off): 14/14, the same checks; its live view shows the whole
+     browser and takes clicks and keys.
+   - **Anchor**: not run: the account had no credits ("Insufficient credits balance" even without a
+     proxy). **Steel**: not run: no key.
+   - Not checked anywhere yet: the India proxy on a paid Browserbase or Kernel plan, the account
+     limit (429), and a session left idle for 10 minutes on Browserbase.
+8. For each new service, before offering it: set its key, pick it on an agent
    (`gtwy_browser_settings.provider`) and repeat steps 2-5, plus https://ipinfo.io/json shows India
    (and not with `"proxy_country": "none"`), the live view works inside an iframe and its URL has no
    account key, and picking an unset service gives the "not set up" error. Then check what the docs
