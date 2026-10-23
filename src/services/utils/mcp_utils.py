@@ -16,9 +16,9 @@ def merge_mcp_config(saved: dict | None, runtime: dict | None) -> dict | None:
     """Layer a request-time ``mcp_config`` on top of the agent's saved one.
 
     Servers are matched by ``name``: a runtime entry overrides the saved
-    server's fields and its ``headers`` are merged key by key, so a caller can
-    send only ``{"name": "x", "headers": {...}}`` to authenticate a saved
-    server. Runtime servers with a new name are appended.
+    server's fields, and runtime ``headers`` replace the saved auth header, so
+    a caller can send only ``{"name": "x", "headers": {...}}`` to authenticate
+    a saved server. Runtime servers with a new name are appended.
     """
     if not isinstance(runtime, dict):
         return saved
@@ -37,9 +37,7 @@ def merge_mcp_config(saved: dict | None, runtime: dict | None) -> dict | None:
             index_by_name[runtime_server.get("name")] = len(servers)
             servers.append(dict(runtime_server))
             continue
-        base = servers[idx]
-        headers = {**(base.get("headers") or {}), **(runtime_server.get("headers") or {})}
-        servers[idx] = {**base, **runtime_server, "headers": headers}
+        servers[idx] = {**servers[idx], **runtime_server}
 
     merged["servers"] = servers
     return merged
