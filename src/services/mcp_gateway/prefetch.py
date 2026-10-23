@@ -5,7 +5,7 @@ import json
 from globals import logger
 from src.services.cache_service import find_in_cache, store_in_cache
 
-from .transport import open_mcp_session
+from .transport import describe_mcp_error, open_mcp_session, outer_task_cancelled
 
 
 _TOOL_LIST_TTL = 600  # 10 minutes
@@ -57,9 +57,11 @@ async def _populate(server: dict) -> None:
         return
     try:
         server["tools"] = await _fetch_server_tools(url, server.get("headers") or {})
-    except Exception as err:
+    except BaseException as err:
+        if outer_task_cancelled() or isinstance(err, KeyboardInterrupt | SystemExit):
+            raise
         logger.error(
-            f"prefetch_mcp_tools: list_tools failed for {server.get('name')!r} ({url}): {err}"
+            f"prefetch_mcp_tools: list_tools failed for {server.get('name')!r} ({url}): {describe_mcp_error(err)}"
         )
         server["tools"] = []
 
