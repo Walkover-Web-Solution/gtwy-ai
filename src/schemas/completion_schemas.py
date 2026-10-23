@@ -140,6 +140,8 @@ class CompletionRequest(BaseModel):
     guardrails: dict[str, Any] | None = None
     web_search_filters: list[str] | dict[str, Any] | None = None
     gtwy_browser_settings: dict[str, Any] | None = None
+    # MCP server name -> token string (sent as "Authorization: Bearer <token>") or a headers dict
+    mcp_auth: dict[str, str | dict[str, str]] | None = None
     orchestrator_flag: bool | None = None
     environment: str | None = None
     wrapper_id: str | None = None

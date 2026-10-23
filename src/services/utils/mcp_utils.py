@@ -45,6 +45,34 @@ def merge_mcp_config(saved: dict | None, runtime: dict | None) -> dict | None:
     return merged
 
 
+def mcp_auth_to_config(mcp_auth: dict | None) -> dict | None:
+    """Turn the request-level ``mcp_auth`` field into a runtime ``mcp_config``.
+
+    ``mcp_auth`` maps a saved MCP server name to either a token string or a
+    headers dict::
+
+        {"my_mcp": "abc123"}                     -> Authorization: Bearer abc123
+        {"my_mcp": "Basic dXNlcjpwYXNz"}         -> Authorization: Basic dXNlcjpwYXNz
+        {"other": {"X-Api-Key": "k"}}            -> X-Api-Key: k
+    """
+    if not isinstance(mcp_auth, dict) or not mcp_auth:
+        return None
+
+    servers = []
+    for name, auth in mcp_auth.items():
+        if not isinstance(name, str) or not name:
+            continue
+        if isinstance(auth, str) and auth.strip():
+            token = auth.strip()
+            headers = {"Authorization": token if " " in token else f"Bearer {token}"}
+        elif isinstance(auth, dict):
+            headers = {k: str(v) for k, v in auth.items() if isinstance(k, str) and v is not None}
+        else:
+            continue
+        servers.append({"name": name, "headers": headers})
+    return {"servers": servers} if servers else None
+
+
 def _lookup_variable(variables: dict, path: str):
     if path in variables:
         return variables[path]

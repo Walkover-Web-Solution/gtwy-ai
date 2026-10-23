@@ -195,7 +195,14 @@ async def chat(request_body):
         
         mcp_cfg = (parsed_data.get("configuration") or {}).get("mcp_config")
         if isinstance(mcp_cfg, dict):
-            from src.services.utils.mcp_utils import resolve_mcp_headers, resolve_mcp_type
+            from src.services.utils.mcp_utils import (
+                mcp_auth_to_config,
+                merge_mcp_config,
+                resolve_mcp_headers,
+                resolve_mcp_type,
+            )
+            mcp_auth = mcp_auth_to_config(request_body.get("body", {}).get("mcp_auth"))
+            mcp_cfg = merge_mcp_config(mcp_cfg, mcp_auth)
             mcp_cfg = resolve_mcp_headers(mcp_cfg, parsed_data.get("variables"))
             parsed_data["configuration"]["mcp_config"] = mcp_cfg
             mcp_type = resolve_mcp_type(parsed_data.get("service"), parsed_data.get("model"))
