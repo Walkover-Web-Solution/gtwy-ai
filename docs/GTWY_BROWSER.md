@@ -1,12 +1,13 @@
 # Gtwy_Browser: giving an agent a real browser
 
 `Gtwy_Browser` is a built-in tool. When it is in an agent's `built_in_tools` list, the model drives
-a real Chromium hosted by [Browser Use Cloud](https://docs.browser-use.com/cloud/browser/quickstart):
-navigate, read an accessibility snapshot with element refs, click, type, press keys, scroll, go
-back, and hand the browser to the user when a login or CAPTCHA is needed.
+a real hosted Chromium: navigate, read an accessibility snapshot with element refs, click, type,
+press keys, scroll, go back, and hand the browser to the user when a login or CAPTCHA is needed.
 
-Only Browser Use's browser infrastructure is used (`POST /api/v4/browsers` returns a CDP URL). Their
-Agent API is not: the gtwy agent's own model decides every click. Until October 2026 the tool ran on
+Each agent picks the service that hosts its browsers (`gtwy_browser_settings.provider`, see
+[Browser services](#browser-services)): Browser Use (the default), Browserbase, Steel Cloud, Kernel or
+Anchor Browser. Only their browser infrastructure is used (each returns a CDP URL); no agent API is:
+the gtwy agent's own model decides every click. Until October 2026 the tool ran on
 self-hosted Steel. That backend was removed because one shared Chrome per host made every
 conversation's tabs hang, crash and get blocked together, and its live view could show other
 conversations' tabs.
@@ -14,10 +15,10 @@ conversations' tabs.
 ## How it works
 
 ```
-model ──tool call──▶ gtwy (Gtwy_Browser tool) ──REST──▶ api.browser-use.com/api/v4/browsers   (start / stop)
+model ──tool call──▶ gtwy (Gtwy_Browser tool) ──REST──▶ the agent's browser service   (start / stop)
                           │                     ──CDP (Playwright)──▶ that conversation's browser
-                          └── Redis: which browser belongs to which conversation + ref maps
-                          └── Mongo: which Browser Use profile holds which conversation's logins
+                          └── Redis: which browser (and service) belongs to which conversation + ref maps
+                          └── Mongo: which profile on which service holds which conversation's logins
 
 conversation A ── its own browser (profile A: logged in as user A)
 conversation B ── its own browser (profile B: logged in as user B)
@@ -37,46 +38,49 @@ conversation C ── its own browser (proxy off for its agent, logged out)
   browser: each pod keeps one CDP connection per browser it has touched, and two pods on one browser
   work side by side. Coming back to a conversation reuses its running browser (about 1 s). A new one
   takes about 10 s (profile, start, connect).
-- **Stopping is gtwy's job.** A browser bills while it runs and does not stop when CDP disconnects
-  or when it sits idle; only `PATCH /browsers/{id} {"action":"stop"}` or its timeout
-  (`BROWSER_TIMEOUT_MINUTES`, 240, the most Browser Use allows) ends it. The reaper on every pod (one acts per tick,
-  under a Redis lock) stops browsers idle past 300 s (900 s while a user is in the handoff). It also
-  stops any running browser tagged `gtwy_env=<ENVIRONMENT>` that no conversation points at and that is
-  older than 5 minutes (a record lost to a crash mid-start). Give every deployment that uses one
-  Browser Use account its own `ENVIRONMENT`, or their reapers stop each other's browsers.
+- **Stopping is gtwy's job.** A hosted browser bills while it runs and does not stop when CDP
+  disconnects or when it sits idle; only gtwy's stop call or the service's own timeout ends it. The
+  reaper on every pod (one acts per tick, under a Redis lock) stops browsers idle past 300 s (900 s
+  while a user is in the handoff), each through its own service. It also stops any running browser
+  tagged `gtwy_env=<ENVIRONMENT>` that no conversation points at and that is older than 5 minutes (a
+  record lost to a crash mid-start), on every service that can filter by tag (all but Steel). Give
+  every deployment its own `ENVIRONMENT` and its own keys, or their reapers stop each other's browsers.
 - **A browser stopped from outside** (dashboard, timeout) is noticed on the next call: the connect
-  fails, Browser Use reports it stopped, and a new browser starts with the same profile.
-- **Per-org limit.** An org may have at most `MAX_BROWSERS_PER_ORG` (20) browsers open at once, so one
-  busy org cannot use up the account's concurrent browsers (10 free, 50 after a $100 top-up). At its
+  fails, the service reports it stopped, and a new browser starts with the same profile.
+- **Per-org limit.** An org may have at most `MAX_BROWSERS_PER_ORG` (20) browsers open at once, across
+  every service, so one busy org cannot use up an account's concurrent browsers. At its
   limit, the org's quietest browser idle past its limit is stopped to make room. If none is idle, the
-  model gets `your organization already has N browsers open...; retry in S seconds`. The account's
-  own limit answers `the browser service is running as many browsers as its plan allows; retry in 30
-  seconds`.
+  model gets `your organization already has N browsers open...; retry in S seconds`. An account's
+  own limit answers `the <service> browser service is running as many browsers as its plan allows;
+  retry in 30 seconds`.
 - **Default context, never `new_context()`.** The browser's default context is where the
   conversation's profile is loaded; a fresh context would start logged out. `browser.close()` on a
   CDP connection also closes what Playwright opened in it, so it is only called for a browser that
   is stopped or lost.
-- **Remembered logins: Browser Use profiles.** Each conversation gets a profile on first use. gtwy
-  stores only its id in Mongo (`gtwy_browser_profiles`, unique on `scope_key` + `provider`). The
-  browser's cookies (session cookies too) and local storage are saved into the profile when it
-  stops and are there in the next browser at once. A profile deleted on Browser Use's side is
-  replaced on the next start. Two browsers on one profile at the same time are allowed, but
-  whichever stops last overwrites the other's logins, which is one reason profiles are per
-  conversation.
+- **Remembered logins: profiles, per service.** Each conversation gets a profile on each service it
+  uses (a Browser Use profile, a Browserbase context, a Steel, Kernel or Anchor profile). gtwy stores
+  only its id in Mongo (`gtwy_browser_profiles`, unique on `scope_key` + `provider`), so logins made
+  on one service are not on another. The browser's cookies (session cookies too) and local storage
+  are saved into the profile when it stops and are there in the next browser. Some services need a
+  few seconds to save it (`PROFILE_SAVE_SECONDS`); a new browser waits for that, and a profile still
+  saving after a retry answers `saving your logins from the last browser; retry in 5 seconds`. A
+  profile deleted on the service's side is replaced on the next start. Whichever browser stops last
+  overwrites a profile, which is one reason profiles are per conversation.
 - **Logins from the Steel days.** Steel kept encrypted cookies in `gtwy_browser_cookies`. When a
   conversation opens its first Browser Use browser, those cookies are loaded into it once and the
   document is deleted (`legacy_cookies.py`). The collection's TTL index removes the rest within 30
   days. Then delete `legacy_cookies.py`, `browserCookieService.py` and the collection.
-- **Proxy on by default.** Every browser goes through Browser Use's residential proxy in India
-  (`DEFAULT_PROXY_COUNTRY` in `browser_use_client.py`). It gets past much more bot protection but
-  costs about $4.9 per GB. An agent picks another country with
+- **Proxy on by default.** Every browser goes through its service's residential proxy in India
+  (`DEFAULT_PROXY_COUNTRY` in `provider_base.py`). It gets past much more bot protection but is
+  billed per GB (see the services table). An agent picks another country with
   `gtwy_browser_settings: {"proxy_country": "us"}` or turns it off with `"none"`, on the agent or in
   the request body. The setting applies when the conversation's next browser starts. To check it,
   ask the browser to open https://ipinfo.io/json: it shows India with the default proxy. Every browser is tagged `gtwy_org`, `gtwy_env` and
-  `gtwy_proxy` in Browser Use, so cost per org can be read there.
+  `gtwy_proxy` on services that take tags, so cost per org can be read there.
 - **Stealth.** Browser Use runs a hardened Chromium with stealth on by default and solves supported
   CAPTCHAs. In the POC, bot.sannysoft.com showed 0 failed checks (plain headless Chrome: 4), and
   g2.com, indeed.com, zillow.com and nike.com loaded with the proxy where plain Chrome was blocked.
+  The other services' stealth and CAPTCHA solving are listed in the services table.
 - **Login handoff.** When a navigation lands on a page that looks like a sign-in page (login-style
   URL, known identity-provider host, or a visible password field) the tool starts the handoff on its
   own and adds `login_required`, `live_url` and instructions to the result. The model can also start
@@ -91,9 +95,11 @@ Code lives in `src/services/utils/built_in_tools/browser/`:
 
 | File | Role |
 |---|---|
-| `tool.py` | entry point `call_gtwy_browser(args, ctx)`, handoff, live link in every result |
-| `browser_use_sessions.py` | one browser per conversation: start, reuse, stop, per-org limit, reaper logic, live target |
-| `browser_use_client.py` | REST client for Browser Use (browsers, profiles) |
+| `tool.py` | entry point `call_gtwy_browser(args, ctx)`, picks the service, handoff, live link in every result |
+| `sessions.py` | one browser per conversation on its service: start, reuse, stop, per-org limit, reaper logic, live target |
+| `providers.py` | the services an agent can pick, which one it picked, which are set up |
+| `provider_base.py` | what every service client shares: errors, REST call, proxy country, keeping keys out of URLs |
+| `browser_use_client.py`, `browserbase_client.py`, `steel_cloud_client.py`, `kernel_client.py`, `anchor_client.py` | one REST client per service, same functions and same browser view |
 | `connection.py` | per-pod Playwright driver and CDP connections, the conversation's page |
 | `profiles.py`, `legacy_cookies.py` | logins: profile per conversation, one-time import of Steel cookies |
 | `session_store.py` | per-conversation ref map and handoff state, idle limits |
@@ -101,24 +107,89 @@ Code lives in `src/services/utils/built_in_tools/browser/`:
 | `actions.py`, `snapshot.py`, `schema.py`, `security.py` | actions, aria snapshot to refs, tool schema, URL guard |
 | `reaper.py` | the background loop |
 
+## Browser services
+
+An agent picks its service with `gtwy_browser_settings.provider`, kept on its `connected_tools` entry
+of type `built_in_tools` (next to the web search filters; an older top-level `gtwy_browser_settings`
+field and the request body are read too, the request winning key by key):
+
+```json
+{"type": "built_in_tools", "built_in_tools": ["Gtwy_Browser"],
+ "gtwy_browser_settings": {"provider": "browserbase", "proxy_country": "in"}}
+```
+
+No `provider` means Browser Use. A service whose key is not set on the server is never replaced by
+another (logins are per service): the tool answers `the <service> browser service is not set up on
+this server yet...`, and an unknown name lists the valid ones. `GET /browser/providers` (gtwy login)
+returns `{"providers": [{id, label, configured, default}]}` for the agent settings picker.
+
+A running browser keeps its service: a changed choice applies to the conversation's next browser,
+after the current one stops (5 idle minutes). Switching on the spot would make two agents sharing a
+thread (a transfer) stop each other's browsers on every call.
+
+| | Browser Use | Browserbase | Steel Cloud | Kernel | Anchor Browser |
+|---|---|---|---|---|---|
+| `provider` | `browser_use` | `browserbase` | `steel` | `kernel` | `anchor` |
+| Keys | `BROWSER_USE_API_KEY` | `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` | `STEEL_API_KEY` | `KERNEL_API_KEY` | `ANCHOR_API_KEY` |
+| Browser time | ~$0.02/h | $0.10-0.12/h | $0.08-0.10/h | ~$0.48/h headful (see below) | ~$0.05/h + $0.01 per browser |
+| Proxy traffic | ~$4.9/GB | $10-12/GB | $6-10/GB | included | $8/GB |
+| Logins kept in | profile | context (`persist`) | profile, created by the first session | profile (`save_changes`) | profile, by name |
+| Live view | `liveUrl` | `GET /sessions/{id}/debug`, the conversation's tab | `debugUrl?interactive=true` | `browser_live_view_url` | `live_view_url` |
+| Lifetime | 240 min | 240 min (`keepAlive`) | 60 min, 15 on the lowest plan | until 15 min with no connection | 240 min, idle 15 min |
+| Stray sweep | `gtwy_env` metadata | `userMetadata` | none (no tags) | `tags` | `tags` |
+| Needs | | a paid plan (keep-alive, proxy, CAPTCHA) | | | |
+
+Notes per service:
+
+- **Browserbase** ends a session when its CDP client disconnects unless `keepAlive` is set, which
+  only paid plans allow; a free-plan key gets a clear error rather than a weaker browser. Session
+  recording and logging are off. Its live view is per tab; the conversation's current tab is shown.
+- **Steel** sessions have no tags, so the stray sweep skips Steel: use one Steel key per environment.
+  Its lowest plan caps a session at 15 minutes; a longer conversation gets a new browser that opens
+  with the same saved logins. Its CDP URL needs the account key, added only when connecting.
+- **Kernel** browsers go into zero-cost standby only when nothing is connected. gtwy pods keep their
+  CDP connection open, so a Kernel browser bills headful time until the reaper stops it. Its timeout
+  (`INACTIVITY_TIMEOUT_SECONDS`, 900) only cleans up after a crash. The residential proxy is a Kernel
+  object, created once per country and found again by name.
+- **Anchor** names profiles instead of numbering them; each conversation gets `gtwy-<hash of its
+  key>`. Recording is off. Its connect URL authenticates with the account key, so a key in any URL it
+  returns is stripped before Redis and added back only when connecting; a live view URL that carries
+  a key is never handed out.
+
+No account key is stored in Redis or shown to the model: CDP URLs are stored without keys, every
+error text is passed through `scrub()`, and only Browser Use's own live URL (scoped to one browser)
+may stand in for the signed gtwy link when `GTWY_PUBLIC_URL` is missing.
+
+Rollout: deploy the code first and set a new service's keys only once every pod runs it, so an older
+pod never meets a record of a service it does not know. Check each service live before offering it
+in the UI (see Manual verification).
+
 ## Configure gtwy
 
-Only two settings come from the environment:
+These settings come from the environment:
 
 ```
-BROWSER_USE_API_KEY=bu_...              # empty: the tool is not offered
+BROWSER_USE_API_KEY=bu_...              # each key turns its service on; empty: that service is off
+BROWSERBASE_API_KEY=bb_live_...
+BROWSERBASE_PROJECT_ID=...
+STEEL_API_KEY=ste-...
+KERNEL_API_KEY=sk_...
+ANCHOR_API_KEY=sk-...
 GTWY_PUBLIC_URL=https://dev-api.gtwy.ai # for the signed live link
 ```
 
-Use a separate Browser Use project (key) per environment, and a unique `ENVIRONMENT` value per
-deployment. Everything else is a constant in the code:
+The tool is offered when at least one service is set up (or the agent named one, so the model can
+say it is not set up). Use separate keys (and a separate Browserbase project) per environment, and a
+unique `ENVIRONMENT` value per deployment. Everything else is a constant in the code:
 
 | Constant | Where | Value |
 |---|---|---|
 | `IDLE_TIMEOUT_SECONDS` | `session_store.py` | 300, stop a browser after 5 minutes of silence |
 | `HANDOFF_TIMEOUT_SECONDS` | `session_store.py` | 900, longer while a user is signing in |
-| `MAX_BROWSERS_PER_ORG` | `browser_use_sessions.py` | 20 browsers open at once per org; 0 = no org limit |
-| `BROWSER_TIMEOUT_MINUTES` | `browser_use_client.py` | 240, hard lifetime of one browser (Browser Use's maximum) |
+| `MAX_BROWSERS_PER_ORG` | `sessions.py` | 20 browsers open at once per org, all services together; 0 = no org limit |
+| `BROWSER_TIMEOUT_*`, `SESSION_TIMEOUT_MS`, `MAX_DURATION_MINUTES` | each `*_client.py` | hard lifetime of one browser per service |
+| `PROFILE_SAVE_SECONDS` | each `*_client.py` | how long a stopped browser's profile takes to save |
+| `DEFAULT_PROXY_COUNTRY` | `provider_base.py` | `in` |
 | `LIVE_LINK_TTL_MINUTES` | `live_link.py` | 15, how long a live link can be opened |
 | `REQUIRE_VIEWER_LOGIN` | `live_link.py` | False; True makes only `/browser/live-session` hand out the view |
 | `SNAPSHOT_MAX_CHARS` | `actions.py` | 15,000, cuts huge pages |
@@ -198,9 +269,14 @@ nothing. Do not log the returned URL or put it in the chat.
 
 ## Redis keys
 
+Records written before services existed have no `provider` and are Browser Use; key names did not
+change with the services.
+
 ```
-nd_gtwy_browser_bu_<org>:<thread>:<sub_thread>      the conversation's browser: id, CDP and live URL,
-                                                    profile id, proxy, page target, last use, handoff flag
+nd_gtwy_browser_bu_<org>:<thread>:<sub_thread>      the conversation's browser: service, id, CDP and live URL
+                                                    (no account key), profile id, proxy, page target, last
+                                                    use, handoff flag
+nd_gtwy_browser_saving_<service>_<key>              a stopped browser's profile is still being saved
 nd_gtwy_browser_bu_index                            every conversation with a browser (the reaper walks it)
 nd_gtwy_browser_bu_org_<org>                        the org's conversations with a browser (per-org limit)
 nd_gtwy_browser_thread_<org>:<thread>:<sub_thread>  ref map of the last snapshot and handoff flags
@@ -214,7 +290,9 @@ connect) is capped at 25 s on its own, so a slow start never eats the page's tim
 its 30 s. A connect that fails is reported as "the browser did not answer; try again". A browser that
 was just started gets three connect attempts, one second apart.
 
-## Costs (measured October 2026)
+## Costs (Browser Use, measured October 2026)
+
+Other services' prices are in the services table (from their pricing pages, not measured yet).
 
 - Browser time: $0.02 per browser-hour, billed per minute. With the 5-minute idle stop, a 10-minute
   conversation costs about $0.005.
@@ -235,11 +313,26 @@ was just started gets three connect attempts, one second apart.
 5. After 5 idle minutes the reaper stops the browser and the old live link says "No browser is open".
    A new message on the thread starts a browser that is still logged in.
 6. With `MAX_BROWSERS_PER_ORG = 2`, a third conversation in one org gets the org-limit error.
+7. For each new service, before offering it: set its key, pick it on an agent
+   (`gtwy_browser_settings.provider`) and repeat steps 2-5, plus https://ipinfo.io/json shows India
+   (and not with `"proxy_country": "none"`), the live view works inside an iframe and its URL has no
+   account key, and picking an unset service gives the "not set up" error. Then check what the docs
+   left open:
+   - Browserbase: keep-alive works on the plan, and a session survives 10 idle CDP minutes.
+   - Steel: the plan's longest timeout, how long a profile stays uploading (409), and that a timed-out
+     session still saves its profile.
+   - Kernel: an India residential proxy exists, and deleting a browser saves its profile.
+   - Anchor: an unknown profile name with `persist` creates the profile, its `cdp_url` and
+     `live_view_url` carry no `apiKey`, and its status values.
 
 ## Not done yet
 
 - The UIs (gtwy-ui, chatbot) still open the plain link; they should call `/browser/live-session` and
   then `REQUIRE_VIEWER_LOGIN` can be set to True.
-- The per-agent proxy setting has no UI yet; it is set on the agent document or in the request body.
+- The per-agent browser settings (`provider`, `proxy_country`) have no UI yet: Node must accept
+  `gtwy_browser_settings` on the `built_in_tools` entry (its Joi item schema allows unknown keys
+  today; add `provider` as an enum) and the agent screen needs a picker fed by `GET /browser/providers`.
+- Browserbase, Steel, Kernel and Anchor are built from their docs and tested offline and against a
+  local Chrome; each still needs the live checks in Manual verification step 7 with a real key.
 - Profiles stay on Browser Use until deleted; nothing removes those of old conversations yet.
 - Screenshot results are returned as base64 JPEG text; vision-model image attachment is not wired.

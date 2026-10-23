@@ -13,6 +13,8 @@ the backend's own URL:
   sends its usual Authorization header (a gtwy login, or a chatbot end user's token); the view is
   returned only when the caller's org is the conversation's org and, when the token names the
   conversation's user, the caller is that user.
+* ``GET /browser/providers`` lists the browser services an agent can pick, and which of them are
+  set up on this server, for the agent settings screen.
 """
 
 import jwt
@@ -23,7 +25,7 @@ from config import Config
 from globals import logger
 from src.middlewares.interfaceMiddlewares import chat_bot_auth
 from src.middlewares.middleware import jwt_middleware
-from src.services.utils.built_in_tools.browser import browser_use_sessions
+from src.services.utils.built_in_tools.browser import providers, sessions
 from src.services.utils.built_in_tools.browser.live_link import REQUIRE_VIEWER_LOGIN, TOKEN_ALGORITHM
 from src.services.utils.built_in_tools.browser.session_store import thread_key
 
@@ -67,7 +69,7 @@ async def _resolve_target(scope: str) -> tuple[str | None, tuple | None]:
     """(live view URL, None) for the conversation's running browser, or (None, problem).
     Each conversation has its own browser, so the view can only ever show its own pages."""
     try:
-        target = await browser_use_sessions.live_target(scope)
+        target = await sessions.live_target(scope)
     except Exception as exc:
         logger.warning(f"Gtwy_Browser: live view lookup failed for {scope}: {exc.__class__.__name__}: {exc}")
         return None, UNAVAILABLE
@@ -133,3 +135,10 @@ async def live_session(token: str, request: Request):
     if problem:
         raise HTTPException(status_code=problem[2], detail=problem[0])
     return JSONResponse({"live_url": target}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/providers", dependencies=[Depends(jwt_middleware)])
+async def browser_providers():
+    """The browser services an agent can pick in ``gtwy_browser_settings.provider``: id, label,
+    whether it is set up on this server (only those work), and which one is the default."""
+    return JSONResponse({"providers": providers.catalog()})

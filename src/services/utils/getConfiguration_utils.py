@@ -4,7 +4,7 @@ from globals import logger
 from models.mongo_connection import db
 from src.configs.constant import inbuild_tools, tool_types
 from src.services.commonServices.baseService.utils import makeFunctionName
-from src.services.utils.built_in_tools.browser import browser_use_client
+from src.services.utils.built_in_tools.browser import providers as browser_providers
 from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
@@ -410,12 +410,17 @@ def _should_enable_browser_tool(built_in_tools):
     return inbuild_tools["Gtwy_Browser"] in built_in_tools
 
 
-def add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools):
-    """Add the browser tool (Browser Use Cloud browsers) when requested via built-in tools."""
+def add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools, browser_settings=None):
+    """Add the browser tool (hosted browsers) when requested via built-in tools.
+
+    It is offered when any browser service is set up on this server, and also when the agent
+    picked a service by name: if that one is not set up, the tool's first call tells the model
+    so, instead of the tool silently vanishing.
+    """
     if not _should_enable_browser_tool(built_in_tools):
         return
-    if not browser_use_client.is_configured():
-        logger.warning("Gtwy_Browser requested but BROWSER_USE_API_KEY is not set; tool not registered")
+    if not browser_providers.any_configured() and not (browser_settings or {}).get("provider"):
+        logger.warning("Gtwy_Browser requested but no browser service key is set; tool not registered")
         return
 
     tools.append(build_browser_tool_schema())
