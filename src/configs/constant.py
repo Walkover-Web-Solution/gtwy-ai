@@ -128,6 +128,7 @@ redis_keys = {
     "billing_no_wallet_": "nd_billing_no_wallet_",
     "org_billing_plan_": "nd_org_billing_plan_",
     "blocked_orgs_": "nd_blocked_orgs_",
+    "blocked_users_": "nd_blocked_users_",
     # Gtwy_Browser: a conversation's page refs and handoff flags
     "gtwy_browser_thread_": "nd_gtwy_browser_thread_",
     # Gtwy_Browser: one hosted browser per conversation, the set the reaper walks, and each org's browsers

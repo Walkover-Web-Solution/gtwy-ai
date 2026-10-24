@@ -19,6 +19,7 @@ from .getConfiguration_utils import (
     setup_tool_choice,
     setup_tools,
     validate_bridge,
+    validate_embed_model,
 )
 from .helper import Helper
 from .update_and_check_cost import check_bridge_api_folder_limits
@@ -102,6 +103,10 @@ async def _prepare_configuration_response(
         service = "openai_completion"
 
     service = service.lower() if service else ""
+
+    embed_model_error = validate_embed_model(bridges, service, configuration.get("model"))
+    if embed_model_error:
+        return embed_model_error, None, None, resolved_bridge_id
 
     configuration = transform_agent_config_to_frontend(configuration)
 
