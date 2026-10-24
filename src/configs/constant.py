@@ -38,7 +38,7 @@ api_key_status = {
     "invalid": "invalid",
     "unauthorized": "unauthorized",
     "limited": "exhausted",
-    "service_down": "service_down"
+    "service_down": "service_down",
 }
 
 service_name = {
@@ -74,7 +74,7 @@ bridge_ids = {
     "generate_description": "6800d48f7dfc8ddcc495f918",
     "improve_prompt_optimizer": "68e4ac02739a8b89ba27b22a",
     "generate_test_cases": "68e8d1fbf8c9ba2043cf7afd",
-    "canonicalizer": "6973200cf60dd5bf64eeb325", 
+    "canonicalizer": "6973200cf60dd5bf64eeb325",
     "query_refiner": "69ae598263c3cc88af31170b",
 }
 
@@ -159,10 +159,7 @@ VALID_RESPONSE_TYPES = {"text", "json_object", "json_schema"}
 
 GPT_MEMORY_TURNS_PER_CYCLE = 3
 
-agent_config_update_keys = {
-    "_response_type": "_response_type",
-    "_user_message": "_user_message"
-}
+agent_config_update_keys = {"_response_type": "_response_type", "_user_message": "_user_message"}
 
 alert_types = {
     "error": "Error",
@@ -187,16 +184,16 @@ USAGE_ALERT_MAIL_URL = "https://flow.sokt.io/func/scrikY1L98L6"
 
 # Tunable defaults for the usage-alert checks.
 usage_alert_config = {
-    "threshold_percent": 0.8,       # fire the threshold email at 80% of the limit
-    "spike_multiplier": 3.0,        # a day is a "spike" when it exceeds N x the trailing average
-    "spike_window_days": 7,         # trailing window used to compute the average daily spend
-    "spike_min_history_days": 3,    # require this many past days of data before spike can fire
-    "daily_bucket_ttl_days": 8,     # how long each per-day bucket lives (window + buffer)
+    "threshold_percent": 0.8,  # fire the threshold email at 80% of the limit
+    "spike_multiplier": 3.0,  # a day is a "spike" when it exceeds N x the trailing average
+    "spike_window_days": 7,  # trailing window used to compute the average daily spend
+    "spike_min_history_days": 3,  # require this many past days of data before spike can fire
+    "daily_bucket_ttl_days": 8,  # how long each per-day bucket lives (window + buffer)
 }
 
 alert_webhook = {
-    "default_webhook_url" : "https://flow.sokt.io/func/scriYP8m551q",
-    "rabbit_mq_failure_url" : "https://flow.sokt.io/func/scrimCFAKPWg"
+    "default_webhook_url": "https://flow.sokt.io/func/scriYP8m551q",
+    "rabbit_mq_failure_url": "https://flow.sokt.io/func/scrimCFAKPWg",
 }
 
 
@@ -205,8 +202,4 @@ billing_config = {
     "reserve_overdraft_floor": -100,
 }
 
-auto_model_tradeoff = {
-    "quality": None,
-    "cost": "cost",
-    "speed": "latency"
-}
+auto_model_tradeoff = {"quality": None, "cost": "cost", "speed": "latency"}

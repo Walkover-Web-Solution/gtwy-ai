@@ -167,7 +167,6 @@ def web_search_tool_config(name):
 # ---------------------------------------------------------------------------
 async def init_service_registry():
     """Initialize or refresh the in-memory service registry from Mongo."""
-    global service_registry_document
     try:
         new_document = await get_service_configs()
         service_registry_document.clear()
