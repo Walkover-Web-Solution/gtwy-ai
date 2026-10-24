@@ -23,6 +23,17 @@ LOGIN_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 LOGIN_HOSTS = ("accounts.google.com", "login.microsoftonline.com", "login.live.com", "appleid.apple.com")
+# Phrases of the "prove you are human" pages Google, Cloudflare, DataDome and PerimeterX show.
+BOT_CHECK_PHRASES = (
+    "unusual traffic",
+    "are you a robot",
+    "not a robot",
+    "verify you are human",
+    "verify you're human",
+    "checking your browser",
+    "checking if the site connection is secure",
+    "press & hold",
+)
 
 
 class BrowserActionError(Exception):
@@ -171,3 +182,19 @@ async def looks_like_login_page(page) -> bool:
         return await page.locator("input[type='password']:visible").count() > 0
     except Exception:
         return False
+
+
+def looks_like_bot_check(url: str | None, snapshot: str | None, ref_count: int) -> bool:
+    """Heuristic: the site is showing a CAPTCHA or robot check instead of the page.
+
+    The challenge itself usually sits in an iframe, which the aria snapshot does not enter, so
+    a page that is nothing but an iframe with no refs is treated as a challenge too.
+    """
+    parsed = urlparse(url or "")
+    if "google." in (parsed.hostname or "") and (parsed.path or "").startswith("/sorry/"):
+        return True
+    text = (snapshot or "").lower()
+    if any(phrase in text for phrase in BOT_CHECK_PHRASES):
+        return True
+    lines = [line for line in text.splitlines() if line.strip()]
+    return ref_count == 0 and "iframe" in text and len(lines) <= 5

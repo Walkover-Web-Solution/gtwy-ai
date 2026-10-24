@@ -134,6 +134,8 @@ redis_keys = {
     "gtwy_browser_bu_": "nd_gtwy_browser_bu_",
     "gtwy_browser_bu_index": "nd_gtwy_browser_bu_index",
     "gtwy_browser_bu_org_": "nd_gtwy_browser_bu_org_",
+    # Gtwy_Browser: a stopped browser's profile is still being saved by its service
+    "gtwy_browser_saving_": "nd_gtwy_browser_saving_",
 }
 
 tag_keys = {

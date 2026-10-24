@@ -1,22 +1,30 @@
-"""One Browser Use browser per conversation: start it, find it again, stop it when idle.
+"""One hosted browser per conversation, on the agent's browser service: start it, find it
+again, stop it when idle.
 
-* A conversation gets a whole Chromium of its own. Its live view can only ever show its own
-  pages, and one browser's crash or heavy page touches only that conversation.
-* Redis keeps one record per conversation (``nd_gtwy_browser_bu_<key>``) with the browser id,
-  its CDP and live URLs and the page in use, a set of every conversation key for the reaper
-  (``nd_gtwy_browser_bu_index``), and one set per org (``nd_gtwy_browser_bu_org_<org>``) so an
-  org can hold at most MAX_BROWSERS_PER_ORG browsers and cannot use up the account's limit.
+* A conversation gets a whole Chromium of its own on the service its agent picked
+  (``providers.py``). Its live view can only ever show its own pages, and one browser's crash
+  or heavy page touches only that conversation.
+* Redis keeps one record per conversation (``nd_gtwy_browser_bu_<key>``) with the service, the
+  browser id, its CDP and live URLs and the page in use, a set of every conversation key for the
+  reaper (``nd_gtwy_browser_bu_index``), and one set per org (``nd_gtwy_browser_bu_org_<org>``)
+  so an org can hold at most MAX_BROWSERS_PER_ORG browsers across all services and cannot use
+  up an account's limit. A record without a service predates the choice and is Browser Use.
+* A running browser keeps its service until it stops; a changed choice applies to the next
+  browser. Switching on the spot would make two agents sharing a thread (a transfer) stop each
+  other's browsers on every call.
 * The browser's default context is used, never a new one: that is where the conversation's
-  profile (its saved logins) is loaded. The profile is written back when the browser stops.
-* Every browser goes through the residential proxy (India by default); the agent's browser
+  profile (its saved logins on that service) is loaded. The profile is written back when the
+  browser stops, and some services need a few seconds before the next browser may load it.
+* Every browser goes through a residential proxy (India by default); the agent's browser
   settings (``gtwy_browser_settings.proxy_country``) pick another country or "none".
-* Disconnecting does not stop a Browser Use browser and it bills while it runs, so the
-  reaper stops browsers whose conversation went quiet, and any browser this environment
-  started that no record points at.
+* Disconnecting does not stop a hosted browser and it bills while it runs, so the reaper stops
+  browsers whose conversation went quiet, and any browser this environment started that no
+  record points at.
 """
 
 import asyncio
 import json
+import math
 import time
 from datetime import UTC, datetime
 
@@ -34,9 +42,9 @@ from src.services.cache_service import (
     store_in_cache,
 )
 
-from . import browser_use_client, legacy_cookies, profiles
-from .browser_use_client import BrowserUseError, ProfileNotFound, TooManyBrowsers, redact
+from . import legacy_cookies, profiles, providers
 from .connection import BrowserConnectionError, connect, conversation_page, deny_downloads, disconnect
+from .provider_base import BrowserServiceError, ProfileBusy, ProfileNotFound, TooManyBrowsers, proxy_country, redact
 from .session_store import (
     IDLE_TIMEOUT_SECONDS,
     RECORD_TTL_SECONDS,
@@ -49,14 +57,18 @@ from .session_store import (
 RECORD_PREFIX = redis_keys["gtwy_browser_bu_"]
 INDEX_KEY = redis_keys["gtwy_browser_bu_index"]
 ORG_PREFIX = redis_keys["gtwy_browser_bu_org_"]
+SAVING_PREFIX = redis_keys["gtwy_browser_saving_"]
 LOCK_PREFIX = "gtwy_browser_bu"
 ORG_LOCK_PREFIX = "gtwy_browser_bu_org"
 LOCK_TTL = 30
 LOCK_WAIT_SECONDS = 5.0
-# Waiting on the account's browser limit: roughly how long until the reaper frees one.
+# Waiting on a service account's browser limit: roughly how long until the reaper frees one.
 LIMIT_RETRY_SECONDS = 30
-# Browsers one org may have open at once, so one busy org cannot use up the account's limit
-# (10 at once on the free plan, 50 after a $100 top-up). 0 turns the org limit off.
+# A profile the last browser is still saving: wait this long once before telling the user.
+PROFILE_BUSY_RETRY_SECONDS = 1.5
+PROFILE_BUSY_RETRY_IN = 5
+# Browsers one org may have open at once, across every service, so one busy org cannot use up
+# an account's limit. 0 turns the org limit off.
 MAX_BROWSERS_PER_ORG = 20
 
 
@@ -75,8 +87,22 @@ def _org_key(org_id) -> str:
     return f"{ORG_PREFIX}{org_id}"
 
 
+def _saving_key(provider: str, tkey: str) -> str:
+    return f"{SAVING_PREFIX}{provider}_{tkey}"
+
+
 def _org_of(tkey: str, record: dict | None = None) -> str:
     return str((record or {}).get("org_id") or tkey.split(":", 1)[0])
+
+
+def _provider_of(record: dict) -> str:
+    return record.get("provider") or providers.DEFAULT_PROVIDER
+
+
+def _client_of(record: dict):
+    """The client of the record's service, or None when that service is not set up any more."""
+    client = providers.get(_provider_of(record))
+    return client if client is not None and client.is_configured() else None
 
 
 async def get_record(tkey: str) -> dict | None:
@@ -115,7 +141,8 @@ def _parse_time(value) -> float | None:
 
 
 def is_expired(record: dict, now: float | None = None) -> bool:
-    """Browser Use stops a browser at its ``timeoutAt`` on its own; such a record is dead."""
+    """A service stops a browser at its ``timeout_at`` on its own; such a record is dead.
+    A service without an absolute lifetime (Kernel) has no ``timeout_at``."""
     deadline = _parse_time(record.get("timeout_at"))
     return deadline is not None and (now or time.time()) >= deadline
 
@@ -138,15 +165,48 @@ async def _forget(tkey: str, record: dict | None) -> None:
     await disconnect((record or {}).get("browser_id"))
 
 
+async def _mark_saving(tkey: str, record: dict, client) -> None:
+    """Remember that the stopped browser's profile is being saved, for the next start."""
+    seconds = getattr(client, "PROFILE_SAVE_SECONDS", 0)
+    if seconds > 0 and record.get("profile_id"):
+        await store_in_cache(_saving_key(client.NAME, tkey), {"until": time.time() + seconds}, ttl=math.ceil(seconds))
+
+
+async def _wait_for_profile_save(tkey: str, provider: str) -> None:
+    """Let a profile the last browser is saving finish before the next browser loads it."""
+    raw = await find_in_cache(_saving_key(provider, tkey))
+    if not raw:
+        return
+    try:
+        remaining = float(json.loads(raw).get("until") or 0) - time.time()
+    except (TypeError, ValueError, AttributeError):
+        return
+    if remaining > 0:
+        await asyncio.sleep(min(remaining, PROFILE_BUSY_RETRY_IN))
+
+
 async def _stop_and_forget(tkey: str, record: dict, reason: str) -> bool:
     """Stop a conversation's browser (its profile is saved as it stops) and forget it."""
+    client = _client_of(record)
+    if client is None:
+        # Its service's key was removed from this server: the browser cannot be stopped from here
+        # any more and ends at its own timeout.
+        logger.warning(
+            f"Gtwy_Browser: {_provider_of(record)} is not set up any more; forgetting browser "
+            f"{redact(record['browser_id'])} of {tkey}"
+        )
+        await _forget(tkey, record)
+        return True
     try:
-        await browser_use_client.stop_browser(record["browser_id"])
-    except BrowserUseError as exc:
+        await client.stop_browser(record["browser_id"])
+    except BrowserServiceError as exc:
         logger.warning(f"Gtwy_Browser: could not stop browser {redact(record['browser_id'])} of {tkey}: {exc}")
         return False
+    await _mark_saving(tkey, record, client)
     await _forget(tkey, record)
-    logger.info(f"Gtwy_Browser: stopped browser {redact(record['browser_id'])} of thread {tkey} ({reason})")
+    logger.info(
+        f"Gtwy_Browser: stopped {client.LABEL} browser {redact(record['browser_id'])} of thread {tkey} ({reason})"
+    )
     return True
 
 
@@ -199,41 +259,64 @@ async def _make_room_in_org(org_id: str, tkey: str) -> None:
 
 
 async def _reuse(tkey: str, record: dict):
-    browser = await connect(record["browser_id"], record["cdp_url"])
+    client = _client_of(record)
+    browser = await connect(record["browser_id"], client.connect_url(record))
     page, target_id = await conversation_page(browser, record.get("target_id"))
     _touch(record, target_id=target_id)
     await _save(tkey, record)
     return page, record
 
 
-async def _create(tkey: str, org_id, bridge_id, settings: dict | None) -> tuple[dict, bool]:
-    """Start the hosted browser for this conversation. Returns (record, profile just created).
-    The caller holds the conversation's lock and the org's lock."""
-    profile_id, new_profile = await profiles.profile_for(tkey, org_id, bridge_id)
-    country = browser_use_client.proxy_country((settings or {}).get("proxy_country"))
+async def _start_browser(client, tkey: str, provider: str, profile_id, metadata: dict, country, org_id, bridge_id):
+    """The service's new browser, with this conversation's profile when it has one."""
+    try:
+        return await client.create_browser(profile_id, metadata, country)
+    except ProfileNotFound:
+        logger.warning(
+            f"Gtwy_Browser: {client.LABEL} profile {redact(profile_id)} of {tkey} is gone; starting with a new one"
+        )
+        profile_id = await profiles.new_profile(tkey, provider, client, org_id, bridge_id)
+        return await client.create_browser(profile_id, metadata, country)
+    except ProfileBusy:
+        # The last browser is still saving this profile; it usually takes a second or two.
+        await asyncio.sleep(PROFILE_BUSY_RETRY_SECONDS)
+        try:
+            return await client.create_browser(profile_id, metadata, country)
+        except ProfileBusy as exc:
+            raise BrowserBusy(
+                f"saving your logins from the last browser; retry in {PROFILE_BUSY_RETRY_IN} seconds",
+                PROFILE_BUSY_RETRY_IN,
+            ) from exc
+
+
+async def _create(tkey: str, provider: str, org_id, bridge_id, settings: dict | None) -> tuple[dict, bool]:
+    """Start the hosted browser for this conversation. Returns (record, first browser of this
+    conversation on this service). The caller holds the conversation's lock and the org's lock."""
+    client = providers.get(provider)
+    profile_id, first = await profiles.profile_for(tkey, provider, client, org_id, bridge_id)
+    country = proxy_country((settings or {}).get("proxy_country"))
     metadata = {"gtwy_env": Config.ENVIRONMENT or "unknown", "gtwy_org": org_id, "gtwy_proxy": country or "none"}
     try:
-        try:
-            view = await browser_use_client.create_browser(profile_id, metadata, country)
-        except ProfileNotFound:
-            logger.warning(f"Gtwy_Browser: profile {redact(profile_id)} of {tkey} is gone; starting with a new one")
-            profile_id = await profiles.new_profile(tkey, org_id, bridge_id)
-            new_profile = profile_id is not None
-            view = await browser_use_client.create_browser(profile_id, metadata, country)
+        view = await _start_browser(client, tkey, provider, profile_id, metadata, country, org_id, bridge_id)
     except TooManyBrowsers as exc:
-        logger.warning(f"Gtwy_Browser: browser use account is at its browser limit ({exc})")
+        logger.warning(f"Gtwy_Browser: {client.LABEL} account is at its browser limit ({exc})")
         raise BrowserLimitReached(
-            f"the browser service is running as many browsers as its plan allows; retry in {LIMIT_RETRY_SECONDS} seconds",
+            f"the {client.LABEL} browser service is running as many browsers as its plan allows; "
+            f"retry in {LIMIT_RETRY_SECONDS} seconds",
             LIMIT_RETRY_SECONDS,
         ) from exc
 
+    if view.get("profile_id") and view["profile_id"] != profile_id:
+        # The service created the profile with this browser (Steel), or replaced a lost one.
+        await profiles.remember(tkey, provider, view["profile_id"], org_id, bridge_id)
     record = _touch(
         {
+            "provider": provider,
             "browser_id": view["id"],
-            "cdp_url": view["cdpUrl"],
-            "live_url": view.get("liveUrl"),
-            "timeout_at": view.get("timeoutAt"),
-            "profile_id": profile_id,
+            "cdp_url": view["cdp_url"],
+            "live_url": view.get("live_url"),
+            "timeout_at": view.get("timeout_at"),
+            "profile_id": view.get("profile_id") or profile_id,
             "proxy_country": country,
             "target_id": None,
             "handoff_active": False,
@@ -247,31 +330,33 @@ async def _create(tkey: str, org_id, bridge_id, settings: dict | None) -> tuple[
     await _save(tkey, record)
     await sadd_in_cache(INDEX_KEY, tkey)
     await sadd_in_cache(_org_key(_org_of(tkey, record)), tkey)
-    return record, new_profile
+    return record, first
 
 
-async def _start(tkey: str, org_id, bridge_id, settings: dict | None):
+async def _start(tkey: str, provider: str, org_id, bridge_id, settings: dict | None):
     """Start this conversation's browser. Holds the conversation's lock so two calls of the same
     conversation never start two browsers, and the org's lock so the org stays within its limit."""
     if not await _acquire(f"{LOCK_PREFIX}_{tkey}"):
         raise BrowserStarting(5)
     try:
         record = await get_record(tkey)
-        if record and not is_expired(record):
+        if record and not is_expired(record) and _client_of(record) is not None:
             return await _reuse(tkey, record)
 
+        await _wait_for_profile_save(tkey, provider)
         org = _org_of(tkey, {"org_id": org_id})
         if not await _acquire(f"{ORG_LOCK_PREFIX}_{org}"):
             raise BrowserLimitReached("another browser of your organization is starting; retry in 5 seconds", 5)
         try:
             await _make_room_in_org(org, tkey)
-            record, new_profile = await _create(tkey, org_id, bridge_id, settings)
+            record, first = await _create(tkey, provider, org_id, bridge_id, settings)
         finally:
             await release_lock(f"{ORG_LOCK_PREFIX}_{org}")
 
-        browser = await connect(record["browser_id"], record["cdp_url"], fresh=True)
+        client = providers.get(provider)
+        browser = await connect(record["browser_id"], client.connect_url(record), fresh=True)
         await deny_downloads(browser)
-        if new_profile:
+        if first:
             await legacy_cookies.import_once(browser, tkey)
         page, target_id = await conversation_page(browser, None)
         _touch(record, target_id=target_id)
@@ -281,21 +366,30 @@ async def _start(tkey: str, org_id, bridge_id, settings: dict | None):
         await release_lock(f"{LOCK_PREFIX}_{tkey}")
 
 
-async def open_or_reuse_tab(tkey: str, org_id, bridge_id, settings: dict | None = None):
+async def open_or_reuse_tab(tkey: str, org_id, bridge_id, settings: dict | None = None, provider: str | None = None):
     """Return (page, record) for this conversation, starting its browser if needed.
 
-    ``settings`` are the agent's browser settings (``proxy_country``); they apply when a browser
-    starts. The record carries the browser id, its live URL and the page in use.
+    ``provider`` is the service the agent picked (already checked to be set up); it and
+    ``settings`` (``proxy_country``) apply when a browser starts. A running browser is reused
+    whatever its service. The record carries the service, the browser id and the page in use.
     """
+    provider = provider or providers.DEFAULT_PROVIDER
     record = await get_record(tkey)
+    if record and _client_of(record) is None:
+        logger.warning(
+            f"Gtwy_Browser: {_provider_of(record)} is not set up any more; forgetting browser "
+            f"{redact(record['browser_id'])} of {tkey}"
+        )
+        await _forget(tkey, record)
+        record = None
     if record and not is_expired(record):
         try:
             return await _reuse(tkey, record)
         except BrowserConnectionError:
             # A browser that stopped (timeout, reaper, stopped from the dashboard) is replaced. One
             # that still runs but did not answer is left alone: the model is told to retry.
-            view = await browser_use_client.get_browser(record["browser_id"])
-            if view and view.get("status") == "active":
+            view = await _client_of(record).get_browser(record["browser_id"])
+            if view and view.get("active"):
                 raise
             logger.info(
                 f"Gtwy_Browser: browser {redact(record['browser_id'])} of {tkey} has stopped; starting a new one"
@@ -306,7 +400,7 @@ async def open_or_reuse_tab(tkey: str, org_id, bridge_id, settings: dict | None 
             f"Gtwy_Browser: browser {redact(record['browser_id'])} of {tkey} reached its timeout; starting a new one"
         )
         await _forget(tkey, record)
-    return await _start(tkey, org_id, bridge_id, settings)
+    return await _start(tkey, provider, org_id, bridge_id, settings)
 
 
 async def set_conversation_page(tkey: str, target_id: str | None) -> None:
@@ -342,17 +436,21 @@ async def drop_connection(tab: dict | None) -> None:
 async def live_target(tkey: str) -> str | None:
     """The live view URL of this conversation's running browser, or None when it has none."""
     record = await get_record(tkey)
-    if not record or is_expired(record) or not record.get("live_url"):
+    if not record or is_expired(record):
+        return None
+    client = _client_of(record)
+    if client is None:
         return None
     try:
-        view = await browser_use_client.get_browser(record["browser_id"])
-    except BrowserUseError as exc:
+        view = await client.get_browser(record["browser_id"])
+    except BrowserServiceError as exc:
         logger.warning(f"Gtwy_Browser: live view could not check browser {redact(record['browser_id'])} ({exc})")
-        return record["live_url"]
-    if not view or view.get("status") != "active":
-        await _forget(tkey, record)
-        return None
-    return view.get("liveUrl") or record["live_url"]
+        view = None
+    else:
+        if not view or not view.get("active"):
+            await _forget(tkey, record)
+            return None
+    return await client.live_view_url(record, view)
 
 
 async def reap_idle_browsers() -> None:
@@ -360,7 +458,7 @@ async def reap_idle_browsers() -> None:
     that no conversation points at (a record lost to a Redis expiry or a crash mid-start).
     The caller holds the reaper lock."""
     now = time.time()
-    known: set[str] = set()
+    known: set[tuple[str, str]] = set()
     for tkey in await smembers_in_cache(INDEX_KEY):
         record = await get_record(tkey)
         if not record:
@@ -372,26 +470,30 @@ async def reap_idle_browsers() -> None:
             logger.info(f"Gtwy_Browser: reaper forgot browser {redact(record['browser_id'])} of {tkey}: timed out")
             continue
         if _idle_for(record, now) <= tab_idle_limit(record):
-            known.add(record["browser_id"])
+            known.add((_provider_of(record), record["browser_id"]))
             continue
         if not await _stop_and_forget(tkey, record, reason="idle"):
-            known.add(record["browser_id"])
+            known.add((_provider_of(record), record["browser_id"]))
 
-    try:
-        running = await browser_use_client.list_active_browsers([f"gtwy_env={Config.ENVIRONMENT or 'unknown'}"])
-    except BrowserUseError as exc:
-        logger.warning(f"Gtwy_Browser: reaper could not list browser use browsers ({exc})")
-        return
-    for view in running:
-        started = _parse_time(view.get("startedAt")) or now
-        # A browser started in the last few minutes may belong to a call that has not saved its
-        # record yet, so only older strays are stopped.
-        if view.get("id") in known or now - started < IDLE_TIMEOUT_SECONDS:
-            continue
+    env = Config.ENVIRONMENT or "unknown"
+    for client in providers.configured():
         try:
-            await browser_use_client.stop_browser(view["id"])
-            logger.warning(
-                f"Gtwy_Browser: reaper stopped stray browser {redact(view['id'])} that no conversation owned"
-            )
-        except BrowserUseError as exc:
-            logger.warning(f"Gtwy_Browser: reaper could not stop stray browser {redact(view.get('id'))}: {exc}")
+            running = await client.list_active_browsers(env)
+        except BrowserServiceError as exc:
+            logger.warning(f"Gtwy_Browser: reaper could not list {client.LABEL} browsers ({exc})")
+            continue
+        # None: the service cannot tell this environment's browsers apart, so none are touched.
+        for view in running or []:
+            started = _parse_time(view.get("started_at")) or now
+            # A browser started in the last few minutes may belong to a call that has not saved its
+            # record yet, so only older strays are stopped.
+            if not view.get("id") or (client.NAME, view["id"]) in known or now - started < IDLE_TIMEOUT_SECONDS:
+                continue
+            try:
+                await client.stop_browser(view["id"])
+                logger.warning(
+                    f"Gtwy_Browser: reaper stopped stray {client.LABEL} browser {redact(view['id'])} "
+                    "that no conversation owned"
+                )
+            except BrowserServiceError as exc:
+                logger.warning(f"Gtwy_Browser: reaper could not stop stray browser {redact(view.get('id'))}: {exc}")

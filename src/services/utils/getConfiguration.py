@@ -12,6 +12,7 @@ from .getConfiguration_utils import (
     add_connected_agents,
     add_rag_tool,
     add_web_crawling_tool,
+    fold_browser_service_tools,
     get_bridge_data,
     setup_api_key,
     setup_configuration,
@@ -131,9 +132,6 @@ async def _prepare_configuration_response(
     auto_model_select = override_fields.get("auto_model_select") or bridges.get("auto_model_select")
     chatbot_auto_answers = override_fields.get("chatbot_auto_answers") or bridges.get("chatbot_auto_answers")
     cache_on = override_fields.get("cache_on") or bridges.get("cache_on")
-    # Gtwy_Browser options of this agent, e.g. {"proxy_country": "in"}; a request may override them.
-    browser_settings = override_fields.get("gtwy_browser_settings") or bridges.get("gtwy_browser_settings")
-    browser_settings = browser_settings if isinstance(browser_settings, dict) else {}
 
     service_apikeys = {}
     merged_apikeys = {
@@ -225,14 +223,29 @@ async def _prepare_configuration_response(
 
     add_rag_tool(tools, tool_id_and_name_mapping, rag_data)
 
+    # A per-service browser tool connected on the UI becomes Gtwy_Browser on that service
+    effective_built_in_tools, browser_tool_provider = fold_browser_service_tools(
+        built_in_tools or bridges.get("built_in_tools")
+    )
+
     gtwy_web_search_filters = web_search_filters or bridges.get("gtwy_web_search_filters") or {}
     add_web_crawling_tool(
         tools,
         tool_id_and_name_mapping,
-        built_in_tools or bridges.get("built_in_tools"),
+        effective_built_in_tools,
         gtwy_web_search_filters,
     )
-    add_browser_tool(tools, tool_id_and_name_mapping, built_in_tools or bridges.get("built_in_tools"))
+    # Gtwy_Browser options of this agent, e.g. {"provider": "browserbase", "proxy_country": "in"}.
+    # A connected per-service browser tool picks the provider, and a request may override single keys.
+    browser_settings = {}
+    for source in (
+        bridges.get("gtwy_browser_settings"),
+        {"provider": browser_tool_provider},
+        override_fields.get("gtwy_browser_settings"),
+    ):
+        if isinstance(source, dict):
+            browser_settings.update({key: value for key, value in source.items() if value is not None})
+    add_browser_tool(tools, tool_id_and_name_mapping, effective_built_in_tools, browser_settings)
     if rag_data:
         configuration["prompt"] = Helper.add_doc_description_to_prompt(configuration["prompt"], rag_data)
 
@@ -283,7 +296,7 @@ async def _prepare_configuration_response(
         "bridge_id": bridges.get("parent_id", bridges.get("_id")),
         "agent_info": bridges.get("agent_info", {}),
         "ai_matching_custom_prompt": bridges.get("agent_info", {}).get("ai_matching_custom_prompt", ""),
-        "built_in_tools": built_in_tools or bridges.get("built_in_tools"),
+        "built_in_tools": effective_built_in_tools,
         "is_embed": bridges.get("folder_type") == "embed",
         "user_id": bridges.get("user_id"),
         "folder_id": bridges.get("folder_id"),

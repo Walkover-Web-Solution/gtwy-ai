@@ -1,10 +1,10 @@
-"""This pod's Playwright connections to the conversations' Browser Use browsers.
+"""This pod's Playwright connections to the conversations' hosted browsers.
 
 Every pod keeps one Playwright driver and one CDP connection per browser it has touched. Any
 pod can drive any conversation's browser: two clients on one browser work side by side. When
-Browser Use stops a browser its CDP socket closes and the connection forgets itself.
+the service stops a browser its CDP socket closes and the connection forgets itself.
 
-Design notes learned from probing Browser Use browsers:
+Design notes learned from probing hosted browsers:
 
 * The browser's default context is used, never ``new_context()``: the default context is
   where the conversation's profile (its saved logins) is loaded, and a fresh context starts
@@ -17,9 +17,9 @@ import asyncio
 
 from globals import logger
 
-from .browser_use_client import redact
+from .provider_base import redact, scrub
 
-# Browser Use is on the public internet, so a connect takes 2-5 s; anything near this is a hang.
+# Hosted browsers are on the public internet, so a connect takes 2-5 s; anything near this is a hang.
 CONNECT_TIMEOUT_MS = 12_000
 # A browser that was just started may refuse its first connect while Chrome comes up.
 FRESH_CONNECT_ATTEMPTS = 3
@@ -71,7 +71,8 @@ async def connect(browser_id: str, cdp_url: str, fresh: bool = False):
                 if attempt + 1 < attempts:
                     await asyncio.sleep(FRESH_CONNECT_RETRY_SECONDS)
         if browser is None:
-            detail = str(last_error).strip().splitlines()[0][:160] if last_error else "unknown error"
+            # The CDP URL may carry an account key, and Playwright puts it in its error text.
+            detail = scrub(str(last_error).strip().splitlines()[0])[:160] if last_error else "unknown error"
             raise BrowserConnectionError(f"could not connect to browser {redact(browser_id)}: {detail}") from last_error
 
         def _forget_connection(closed, browser_id=browser_id):
