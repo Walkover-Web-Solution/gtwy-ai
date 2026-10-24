@@ -299,6 +299,9 @@ def parse_request_body(request_body):
         # The signed-in caller (gtwy user, or the chatbot's end user), not the agent's owner.
         # The browser tool binds its live-view link to this id.
         "viewer_id": (state.get("profile", {}).get("user") or {}).get("id"),
+        # The caller's user id as jwt_middleware set it; routes that skip it
+        # (chatbot) fall back to the profile's user.
+        "request_user_id": state.get("user_id") or (state.get("profile", {}).get("user") or {}).get("id"),
         "richui_templates": body.get("richui_templates", {}),
         "meta": body.get("meta"),
         "limit": body.get("limit"),
