@@ -2,7 +2,7 @@ import json
 
 from globals import logger
 
-from .transport import open_mcp_session
+from .transport import describe_mcp_error, open_mcp_session, outer_task_cancelled
 
 
 def _extract_content(result) -> str:
@@ -55,10 +55,15 @@ async def call_mcp_tool(args: dict, tool_info: dict) -> dict:
             "metadata": {"type": "mcp", "server": server_name, "tool": real_name},
             "status": 1,
         }
-    except Exception as error:
-        logger.error(f"call_mcp_tool: {server_name}/{real_name} failed: {error!s}")
+    except BaseException as error:
+        # Transport failures (e.g. a 401 on tools/call) arrive as BaseExceptionGroups;
+        # turn them into a tool error instead of letting them escape the tool run.
+        if outer_task_cancelled() or isinstance(error, KeyboardInterrupt | SystemExit):
+            raise
+        message = describe_mcp_error(error)
+        logger.error(f"call_mcp_tool: {server_name}/{real_name} failed: {message}")
         return {
-            "response": str(error),
+            "response": message,
             "metadata": {"type": "mcp", "server": server_name, "tool": real_name},
             "status": 0,
         }

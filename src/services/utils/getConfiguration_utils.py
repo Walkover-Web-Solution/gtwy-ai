@@ -8,6 +8,7 @@ from src.services.utils.built_in_tools.browser import providers as browser_provi
 from src.services.utils.built_in_tools.browser.schema import build_browser_tool_schema
 from src.services.utils.common_utils import convert_prompt_to_string
 from src.services.utils.helper import Helper
+from src.services.utils.mcp_utils import merge_mcp_config
 from src.services.utils.service_config_utils import tool_choice_function_name_formatter
 
 apiCallModel = db["apicalls"]
@@ -62,7 +63,10 @@ def setup_configuration(configuration, bridges, service):
     service = service or (bridges.get("service", "").lower())
 
     if configuration:
+        mcp_config = merge_mcp_config(db_configuration.get("mcp_config"), configuration.get("mcp_config"))
         db_configuration.update(configuration)
+        if mcp_config is not None:
+            db_configuration["mcp_config"] = mcp_config
 
     # Convert prompt dict (role/goal/instruction) to a proper string prompt
     prompt = db_configuration.get("prompt")

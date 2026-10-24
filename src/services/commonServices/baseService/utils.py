@@ -670,8 +670,8 @@ async def process_data_and_run_tools(codes_mapping, self):
             for i, (tool_call_key, tool_data, _) in enumerate(tasks):
                 result = task_results[i]
 
-                # Handle any exceptions or errors
-                if isinstance(result, Exception):
+                # Handle any exceptions or errors (BaseException: MCP transport errors arrive as BaseExceptionGroups)
+                if isinstance(result, BaseException):
                     response = {"error": "Error during async task execution", "details": str(result)}
                 elif tool_data.get("error"):
                     response = {"error": "Args / Input is not proper JSON"}
@@ -696,7 +696,7 @@ async def process_data_and_run_tools(codes_mapping, self):
                 tool_call_logs[tool_call_key] = {
                     **tool_data,
                     "name": tool_data.get("display_tool_name"),
-                    "data": result or response,
+                    "data": response if isinstance(result, BaseException) else (result or response),
                     "id": self.tool_id_and_name_mapping[tool_data["name"]].get("mcp_tool") or self.tool_id_and_name_mapping[tool_data["name"]].get("name"),
                 }
         # Create mapping by tool_call_id (now tool_call_key) for return
