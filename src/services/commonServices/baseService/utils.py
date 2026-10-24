@@ -788,7 +788,7 @@ async def make_request_data(request: Request):
     state_data = {}
     path_params = {}
 
-    attributes = ["version", "profile"]
+    attributes = ["version", "profile", "user_id"]
     for attr in attributes:
         if hasattr(request.state, attr):
             state_data[attr] = getattr(request.state, attr)
@@ -969,8 +969,8 @@ async def make_request_data_and_publish_sub_queue(parsed_data, result, params, t
             "error_type": "broadcast_response",
             "bridge_name": parsed_data.get("name"),
             "is_embed": parsed_data.get("is_embed"),
-            # The caller who sent the message (parsed_data has no "userId" key)
-            "user_id": parsed_data.get("viewer_id"),
+            # The caller who sent the message, from the auth middleware
+            "user_id": str(parsed_data["request_user_id"]) if parsed_data.get("request_user_id") is not None else None,
             "folder_id": parsed_data.get("folder_id"),
             "thread_id": parsed_data.get("thread_id"),
             "service": parsed_data.get("service"),
