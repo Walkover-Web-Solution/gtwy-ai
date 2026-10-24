@@ -1,6 +1,6 @@
 """Background loop that stops the browsers of conversations that have gone quiet.
 
-A Browser Use browser keeps running, and billing, until it is stopped or reaches its timeout;
+A hosted browser keeps running, and billing, until it is stopped or reaches its timeout;
 disconnecting does not stop it. Every gtwy pod runs this loop; a short Redis lock makes sure
 only one of them acts per tick.
 """
@@ -11,7 +11,7 @@ import globals as _globals
 from globals import logger
 from src.services.cache_service import acquire_lock, release_lock
 
-from . import browser_use_client, browser_use_sessions
+from . import providers, sessions
 
 REAPER_LOCK = "gtwy_browser_reaper"
 REAPER_LOCK_TTL = 55
@@ -30,11 +30,11 @@ async def run_browser_reaper_loop() -> None:
 
 
 async def reap_idle_tabs() -> None:
-    if not browser_use_client.is_configured():
+    if not providers.any_configured():
         return
     if not await acquire_lock(REAPER_LOCK, ttl=REAPER_LOCK_TTL):
         return
     try:
-        await browser_use_sessions.reap_idle_browsers()
+        await sessions.reap_idle_browsers()
     finally:
         await release_lock(REAPER_LOCK)

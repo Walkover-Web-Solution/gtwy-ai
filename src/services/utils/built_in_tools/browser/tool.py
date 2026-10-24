@@ -2,16 +2,16 @@
 
 ``call_gtwy_browser(args, ctx)`` follows the same contract as every other gtwy tool
 coroutine: it always returns ``{"response", "metadata", "status": 0|1}`` and never
-raises. Each conversation drives its own hosted Browser Use browser, with its own logins
-(``browser_use_sessions.py``), so two conversations can be signed in to the same site as
-different people and neither can see the other's pages.
+raises. Each conversation drives its own hosted browser, on the browser service its agent
+picked (``providers.py``), with its own logins (``sessions.py``), so two conversations can be
+signed in to the same site as different people and neither can see the other's pages.
 """
 
 import asyncio
 
 from globals import logger
 
-from . import browser_use_client
+from . import providers
 from .actions import (
     BrowserActionError,
     StaleRefError,
@@ -26,19 +26,19 @@ from .actions import (
     looks_like_login_page,
     snapshot_page,
 )
-from .browser_use_client import BrowserUseError
-from .browser_use_sessions import (
+from .connection import BrowserConnectionError, is_connection_lost_error, is_timeout_error, target_id_of
+from .live_link import signed_live_url
+from .provider_base import BrowserServiceError, PlanRefused, scrub
+from .schema import BROWSER_ACTIONS
+from .security import UrlBlocked, ensure_url_allowed, wrap_untrusted
+from .session_store import BrowserBusy, get_thread_state, save_thread_state, thread_key
+from .sessions import (
     drop_connection,
     mark_handoff,
     open_or_reuse_tab,
     release_tab,
     set_conversation_page,
 )
-from .connection import BrowserConnectionError, is_connection_lost_error, is_timeout_error, target_id_of
-from .live_link import signed_live_url
-from .schema import BROWSER_ACTIONS
-from .security import UrlBlocked, ensure_url_allowed, wrap_untrusted
-from .session_store import BrowserBusy, get_thread_state, save_thread_state, thread_key
 
 TOOL_TIMEOUT_SECONDS = 60
 # Getting the browser ready (locks, profile, starting a browser, CDP connect) is capped
@@ -50,18 +50,26 @@ SETUP_TIMEOUT_SECONDS = 25
 TAB_OPENING_ACTIONS = {"click", "type", "press"}
 NEW_TAB_LOAD_TIMEOUT_MS = 10_000
 NEW_TAB_SETTLE_TIMEOUT_MS = 3_000
-HANDOFF_INSTRUCTIONS = (
-    "Reply to the user now: include the live_url as a clickable link, tell them to open it, "
-    "complete the action there (log in, solve the CAPTCHA, enter the OTP), and reply 'done' "
-    "when finished. Do not take any other browser action in this turn. When the user replies, "
-    "call snapshot and continue the original task."
-)
+
+
+def _handoff_instructions(live_url: str | None) -> str:
+    """What the model must reply after a handoff. The link is spelled out because models given
+    both the page's own address (``url``) and ``live_url`` sometimes send the site's sign-in URL,
+    and a login in the user's own browser never reaches this one."""
+    return (
+        f"Reply to the user now with this exact link to the live browser: {live_url} . Tell them "
+        "to open it, complete the action there (log in, solve the CAPTCHA, enter the OTP), and "
+        "reply 'done' when finished. Do not give them the website's own address or sign-in URL: "
+        "a login in their own browser does not reach this browser. Do not take any other browser "
+        "action in this turn. When the user replies, call snapshot and continue the original task."
+    )
 
 
 def _reason(exc: Exception) -> str:
-    """A short, readable cause. Playwright calls every error "Error", so use its message."""
+    """A short, readable cause. Playwright calls every error "Error", so use its message. Any
+    credential in it (a CDP URL with an account key) is masked before the model sees it."""
     text = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
-    return text[:200]
+    return scrub(text)[:200]
 
 
 def _err(message: str, **extra) -> dict:
@@ -83,8 +91,10 @@ async def call_gtwy_browser(args: dict | None, ctx: dict | None) -> dict:
 
 
 async def _run(args: dict, ctx: dict) -> dict:
-    if not browser_use_client.is_configured():
-        return _err("browser tool is not configured on this server (BROWSER_USE_API_KEY missing)")
+    try:
+        provider, client = providers.resolve(ctx.get("browser_settings"))
+    except providers.ProviderUnavailable as exc:
+        return _err(str(exc))
 
     action = (args.get("action") or "").strip()
     if action not in BROWSER_ACTIONS:
@@ -101,7 +111,7 @@ async def _run(args: dict, ctx: dict) -> dict:
 
     try:
         page, record = await asyncio.wait_for(
-            open_or_reuse_tab(tkey, ctx.get("org_id"), ctx.get("bridge_id"), ctx.get("browser_settings")),
+            open_or_reuse_tab(tkey, ctx.get("org_id"), ctx.get("bridge_id"), ctx.get("browser_settings"), provider),
             timeout=SETUP_TIMEOUT_SECONDS,
         )
     except TimeoutError:
@@ -109,21 +119,36 @@ async def _run(args: dict, ctx: dict) -> dict:
         return _err(f"the browser took more than {SETUP_TIMEOUT_SECONDS}s to start. Try the same action again")
     except BrowserBusy as busy:
         return _err(str(busy), retry_in_seconds=busy.retry_in)
-    except BrowserUseError as exc:
-        logger.error(f"Gtwy_Browser: browser use error while opening a browser: {exc}")
-        return _err("browser backend is unavailable right now; try again later", detail=str(exc)[:300])
+    except PlanRefused as exc:
+        # Out of credits, or a feature the account's plan does not include (the free plans of
+        # Browserbase and Kernel have no proxy). The service's own words say which.
+        logger.error(f"Gtwy_Browser: {client.LABEL} refused for its plan or credits: {exc}")
+        return _err(
+            f"the {client.LABEL} browser service refused to start a browser on its current plan: "
+            f"{exc.detail or 'payment required'}. Tell the user to upgrade or top up that account, turn "
+            "the proxy off for this agent if the plan has no proxy, or pick another browser service",
+            detail=scrub(exc)[:300],
+        )
+    except BrowserServiceError as exc:
+        logger.error(f"Gtwy_Browser: {client.LABEL} error while opening a browser: {exc}")
+        return _err(
+            f"the {client.LABEL} browser service is unavailable right now; try again later",
+            detail=scrub(exc)[:300],
+        )
     except BrowserConnectionError as exc:
         logger.warning(f"Gtwy_Browser: connection error while opening the browser: {exc}")
         return _err(
             "the browser did not answer; it may still be starting. Try the same action again in a few seconds",
-            detail=str(exc)[:300],
+            detail=scrub(exc)[:300],
         )
 
     # Prefer gtwy's signed, short-lived link, bound to the user of this conversation; fall back
-    # to the browser's own one (a credential for it) only when the gateway has no public address.
+    # to the browser's own one (a credential for it) only when the gateway has no public address
+    # and the browser's service gives a URL that is safe to hand out.
+    record_client = providers.get(record.get("provider")) or client
     live_url = signed_live_url(
         ctx.get("org_id"), ctx.get("thread_id"), ctx.get("sub_thread_id"), ctx.get("viewer_id")
-    ) or record.get("live_url")
+    ) or (record.get("live_url") if record_client.RAW_LIVE_URL_SHAREABLE else None)
     state = await get_thread_state(tkey)
 
     # While the user is acting in the live view we take no snapshots, so nothing they type can
@@ -195,11 +220,11 @@ async def _run(args: dict, ctx: dict) -> dict:
         if await looks_like_login_page(page):
             await _begin_handoff(ctx, tkey, state, "This page requires you to log in.")
             await _emit_handoff(ctx, live_url, state["handoff_message"])
-            response.update(login_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
+            response.update(login_required=True, live_url=live_url, instructions=_handoff_instructions(live_url))
         elif looks_like_bot_check(page.url, response.get("snapshot"), len(new_ref_map)):
             await _begin_handoff(ctx, tkey, state, "This site wants to check you are human. Please solve the CAPTCHA.")
             await _emit_handoff(ctx, live_url, state["handoff_message"])
-            response.update(captcha_required=True, live_url=live_url, instructions=HANDOFF_INSTRUCTIONS)
+            response.update(captcha_required=True, live_url=live_url, instructions=_handoff_instructions(live_url))
 
     # The chat UI needs a way to show this conversation's browser at any moment, not only when a
     # login blocks the agent, so every result carries its live link.
@@ -216,6 +241,7 @@ async def _run(args: dict, ctx: dict) -> dict:
         response,
         action=action,
         url=page.url,
+        provider=record.get("provider") or providers.DEFAULT_PROVIDER,
         browser=(record.get("browser_id") or "")[-6:],
     )
 
@@ -286,6 +312,6 @@ async def _handoff(args: dict, ctx: dict, tkey: str, live_url: str | None, state
     await _begin_handoff(ctx, tkey, state, message)
     await _emit_handoff(ctx, live_url, message)
     return _ok(
-        {"handoff": True, "live_url": live_url, "message": message, "instructions": HANDOFF_INSTRUCTIONS},
+        {"handoff": True, "live_url": live_url, "message": message, "instructions": _handoff_instructions(live_url)},
         action="request_user_action",
     )
