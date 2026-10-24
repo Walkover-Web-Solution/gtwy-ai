@@ -996,6 +996,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
                         "variables_path": {"$ifNull": ["$config.variables_path", {}]},
                         "folder_prompt": "$config.prompt",
                         "folder_response_type": "$config.response_type",
+                        "folder_models": {"$ifNull": ["$config.models", {}]},
                     }
                 },
             ]
@@ -1110,6 +1111,10 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             else:
                 bridge_data["folder_type"] = None
 
+            # Per-service model display config of the embed folder; a model with
+            # `hide: true` is not allowed for this folder's agents.
+            bridge_data["folder_models"] = (folder_result[0].get("folder_models") if folder_result else None) or {}
+
             if folder_result and folder_result[0].get("folder_limit"):
                 bridge_data["folder_limit"] = folder_result[0]["folder_limit"]
             else:
@@ -1142,6 +1147,7 @@ async def get_bridges_with_tools_and_apikeys(bridge_id, org_id, version_id=None,
             bridge_data["folder_limit"] = 0
             bridge_data["folder_usage"] = 0
             bridge_data["folder_type"] = None
+            bridge_data["folder_models"] = {}
 
 
         # Structure the final response

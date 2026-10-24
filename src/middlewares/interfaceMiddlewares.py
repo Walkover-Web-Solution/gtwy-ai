@@ -11,7 +11,7 @@ from ..routes.v2.modelRouter import chat_completion
 from ..schemas.chatbot_schemas import ChatbotSendMessageRequest
 from ..services.commonServices.baseService.utils import sendResponse
 from ..services.utils.time import Timer
-from src.configs.blocked_orgs import is_org_blocked
+from src.configs.blocked_orgs import is_org_blocked, is_user_blocked
 from .getDataUsingBridgeId import add_configuration_data_to_body
 
 
@@ -34,6 +34,8 @@ async def send_data_middleware(request: Request, botId: str, body: ChatbotSendMe
 
         if await is_org_blocked(org_id):
             raise HTTPException(status_code=403, detail="Organization is disabled")
+        if await is_user_blocked(org_id, request.state.profile.get("user", {}).get("id")):
+            raise HTTPException(status_code=403, detail="User is disabled")
 
         if isPublic and "user" in request.state.profile:
             threadId = str(request.state.profile["user"]["id"])

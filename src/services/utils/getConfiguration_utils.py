@@ -45,6 +45,38 @@ async def validate_bridge(agent_data):
     return None
 
 
+def _is_model_hidden(folder_models, service, model):
+    model_config = ((folder_models or {}).get(service) or {}).get(model)
+    return isinstance(model_config, dict) and model_config.get("hide") is True
+
+
+def validate_embed_model(bridges, service, model):
+    """Reject a model the embed folder hides from its users.
+
+    The folder's config.models[service][model].hide only filtered the UI
+    dropdown, so an agent could still be saved or called with that model.
+    Checks the agent's model and its enabled fallback model.
+    """
+    if bridges.get("folder_type") != "embed":
+        return None
+    folder_models = bridges.get("folder_models") or {}
+    if not folder_models:
+        return None
+
+    # The agent's stored service can differ from the runtime one (openai_response -> openai)
+    services = {service, (bridges.get("service") or "").lower()}
+    if any(_is_model_hidden(folder_models, s, model) for s in services):
+        return {"success": False, "error": f"Model '{model}' is not allowed for this embed"}
+
+    fall_back = (bridges.get("settings") or {}).get("fall_back") or {}
+    if fall_back.get("is_enable") and _is_model_hidden(
+        folder_models, (fall_back.get("service") or "").lower(), fall_back.get("model")
+    ):
+        return {"success": False, "error": f"Fallback model '{fall_back.get('model')}' is not allowed for this embed"}
+
+    return None
+
+
 async def get_bridge_data(bridge_id, org_id, version_id, environment=None):
     """Fetch bridge data from database"""
     agent_data = await ConfigurationService.get_bridges_with_tools_and_apikeys(
