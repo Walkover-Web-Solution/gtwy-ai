@@ -61,10 +61,15 @@ class Config:
     HIPPOCAMPUS_API_KEY = os.getenv("HIPPOCAMPUS_API_KEY")
     HIPPOCAMPUS_COLLECTION_ID = os.getenv("HIPPOCAMPUS_COLLECTION_ID")
     FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
-    # Gtwy_Browser runs on Browser Use Cloud: one hosted browser per conversation. Without
-    # BROWSER_USE_API_KEY the tool is not offered. Its limits and timeouts are constants in
-    # src/services/utils/built_in_tools/browser/.
+    # Gtwy_Browser runs one hosted browser per conversation on the service its agent picks
+    # (gtwy_browser_settings.provider, Browser Use by default). A service is offered only when its
+    # key is set. Limits and timeouts are constants in src/services/utils/built_in_tools/browser/.
     BROWSER_USE_API_KEY = os.getenv("BROWSER_USE_API_KEY")
+    BROWSERBASE_API_KEY = os.getenv("BROWSERBASE_API_KEY")
+    BROWSERBASE_PROJECT_ID = os.getenv("BROWSERBASE_PROJECT_ID")
+    STEEL_API_KEY = os.getenv("STEEL_API_KEY")
+    KERNEL_API_KEY = os.getenv("KERNEL_API_KEY")
+    ANCHOR_API_KEY = os.getenv("ANCHOR_API_KEY")
     # Public address of this gateway, used to build the signed browser live-view link.
     GTWY_PUBLIC_URL = os.getenv("GTWY_PUBLIC_URL")
     OTEL_SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME")

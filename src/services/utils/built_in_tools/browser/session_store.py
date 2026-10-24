@@ -2,7 +2,7 @@
 
 ``nd_gtwy_browser_thread_<org>:<thread>:<sub_thread>`` keeps what the model's next call needs:
 the ref map of the last snapshot and the handoff flags. The conversation's
-browser itself is recorded by ``browser_use_sessions.py``.
+browser itself is recorded by ``sessions.py``.
 """
 
 import json
