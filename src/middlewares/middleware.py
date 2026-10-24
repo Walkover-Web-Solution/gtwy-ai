@@ -5,7 +5,7 @@ from fastapi import HTTPException, Request
 
 from config import Config
 from globals import logger
-from src.configs.blocked_orgs import is_org_blocked
+from src.configs.blocked_orgs import is_org_blocked, is_user_blocked
 from src.services.proxy.Proxyservice import (
     get_proxy_details_by_token,
     validate_proxy_pauthkey,
@@ -98,7 +98,9 @@ async def jwt_middleware(request: Request):
                 request.state.embed = False
             request.state.folder_id = check_token.get('extraDetails', {}).get('folder_id', None)
             request.state.user_id = str(check_token['user'].get('id'))
-            return 
+            if await is_user_blocked(request.state.org_id, request.state.user_id):
+                raise HTTPException(status_code=403, detail="User is disabled")
+            return
         
         raise HTTPException(status_code=404, detail="unauthorized user")        
     except HTTPException:
